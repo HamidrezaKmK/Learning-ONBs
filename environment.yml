@@ -1,0 +1,27 @@
+name: projections
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - numpy
+  - scipy
+  - pytorch
+  - psutil
+  - tqdm
+  - hydra-core
+  - wandb
+  - pip:
+      - matplotlib
+      - python-dotenv
+      - matplotlib
+      - torchvision
+      - einops
+      - omegaconf
+      - random_word
+      # formatting
+      - black
+      - isort
+      - nflows
