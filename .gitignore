@@ -1,0 +1,16 @@
+.ipynb_checkpoints
+.cache
+__pycache__
+output/
+wandb/
+!conf/wandb/
+slurm/*
+slurm/run-*
+**/.temp**
+notebook_output*
+**/temp/**
+venv/
+.coverage*
+.env
+*.RData
+*.Rhistory

@@ -1,0 +1,4 @@
+[] Optimize a dataset representation using a fully Lagrangian POV
+[] Optimize a dataset with a normalizing flow map which is fast and does not require computing integrals
+[] Think about applications where there is a time-evolving PDE
+[] Think about applications where there is a dataset we want to represent
