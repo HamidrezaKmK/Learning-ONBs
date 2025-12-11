@@ -1,4 +1,14 @@
-[] Optimize a dataset representation using a fully Lagrangian POV
-[] Optimize a dataset with a normalizing flow map which is fast and does not require computing integrals
-[] Think about applications where there is a time-evolving PDE
+[] Get a working version of the continuous time diffeomophism code (use the radial thing all throughout for now)
+    [] first with just one basis element
+    [] then deform the basis using a forward problem and then solve its inverse problem
+
+[] Use a fourth order integration rule for better accuracy (RK-4)
+[] Use the identity transform for sanity check
+
+[] Ablate the stratified sampling for the grid integrals
+[] The rejection sampling idea
+[] Regression
+
+[] (Maybe) Do the adjoint method
+[] (Maybe) Use the Helmholtz decomposition to parameterize the velocity field
 [] Think about applications where there is a dataset we want to represent

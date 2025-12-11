@@ -84,3 +84,19 @@ def build_unitcube_diffeo(d, hidden_features=64, num_layers=5, num_blocks=2, eps
         flow_Rd,                
         sigmoid                 
     ])
+
+def build_identity_diffeo(d, eps=1e-7):
+    """
+    Identity diffeomporphism from the (0, 1)^d cube to itself constructed as
+    logit (inverse sigmoid) composed with identity on R^d composed with sigmoid.
+    """
+    identity_Rd = IdentityTransform()
+
+    logit = LogitTransform(eps=eps)
+    sigmoid = Sigmoid(learn_temperature=True)
+
+    return CompositeTransform([
+        logit,                  
+        identity_Rd,                
+        sigmoid                 
+    ])

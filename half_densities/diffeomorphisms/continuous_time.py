@@ -52,7 +52,6 @@ class CTCubeFlow(nn.Module):
         # register a module called pre_velocity_field that takes in
         # time and a d-dimensional space and outputs a d-dimensional velocity field
         
-
         self.time_embedding = SinusoidalTimeEmbedding(num_frequencies=num_frequencies)
         layers = [
             nn.Linear(dimensions + self.time_embedding.out_dim, hidden_features),
@@ -87,6 +86,9 @@ class CTCubeFlow(nn.Module):
             velocity = velocity / (torch.norm(velocity, dim=1, keepdim=True) + 1e-10)  # normalize to unit norm
         return velocity
 
+    def project_to_domain(self, xy_t, eps: float = 1e-2):
+        return torch.clamp(xy_t, eps, 1 - eps)
+    
     def evaluate(
         self,
         xy: torch.Tensor,
@@ -110,17 +112,15 @@ class CTCubeFlow(nn.Module):
             grad_xy = torch.autograd.grad(
                 v.sum(),
                 xy_t,
-                create_graph=False, 
-                retain_graph=False,
-            )[0] 
-            div = grad_xy.sum(dim=1) 
+                create_graph=True,      # <-- build graph for divergence
+                retain_graph=True,      # <-- safer since we keep using the graph
+            )[0]
+            div = grad_xy.sum(dim=1)
 
             divs_cumsum = divs_cumsum + div * dt
-            # Euler update for positions; detach so next step starts fresh
-            with torch.no_grad():
-                xy_t = xy_t + v * dt
-            xy_t.requires_grad_(True)
-        
+            xy_t = xy_t + v * dt
+            xy_t = self.project_to_domain(xy_t)   # must itself be differentiable
+            
         return initial_basis_fn(xy_t) * torch.exp(0.5 * divs_cumsum)
 
         
@@ -130,7 +130,6 @@ class CTRadialFlow(CTCubeFlow):
         # t: (B,)
         # Compute the velocity field using the pre_velocity_field network
         embedded = self.time_embedding(t.unsqueeze(-1))  # (B, 16)
-        # perform logit transform on xy
         xy_transformed = torch.logit(xy.clamp(1e-6, 1 - 1e-6))
         
         input = torch.cat([xy_transformed, embedded], dim=-1)
@@ -138,31 +137,10 @@ class CTRadialFlow(CTCubeFlow):
         v = v - (xy * (v * xy).sum(dim=1, keepdim=True))  # make tangential to circle
         return v
     
-    # NOTE: this is a bit of a weird one:
-    # def velocity_field(self, t, xy):
-    #     # xy: (B, d)
-    #     # t: (B,)
-    #     # Compute the velocity field using the pre_velocity_field network
-    #     embedded = self.time_embedding(t.unsqueeze(-1))  # (B, 16)
-    #     # pass through inverse 
-    #     # pass xy through inverse sigmoid to map to R^d
-    #     transformed_r = torch.sqrt(xy[:, 0]**2 + xy[:, 1]**2).unsqueeze(-1) + 1e-10
-    #     transformed_theta = torch.atan2(xy[:, 1], xy[:, 0]).unsqueeze(-1)
-        
-    #     xy_transformed = torch.logit(xy.clamp(1e-6, 1 - 1e-6))
-
-    #     input = torch.cat([xy_transformed, embedded], dim=-1)
-    #     radial_v = self.pre_velocity_field(input)
-    #     v_r = radial_v[:, 0:1] * (1 - transformed_r)  # (B, 1)
-    #     v_theta = radial_v[:, 1:2] * transformed_r # (B, 1)
-    #     # convert to Cartesian coordinates
-    #     v_x = v_r * torch.sin(v_theta)
-    #     v_y = v_r * torch.cos(v_theta)
-    #     v = torch.cat([v_x, v_y], dim=1)
-        
-    #     v = v - (xy * (v * xy).sum(dim=1, keepdim=True))  # make tangential to circle
-
-    #     if self.normalize_velocity:
-    #         v = v / (torch.norm(v, dim=1, keepdim=True) + 1e-10)  # normalize to unit norm
-    #     return v
-    
+    def project_to_domain(self, xy_t, eps: float = 1e-2):
+        norms = torch.norm(xy_t, dim=1, keepdim=True)
+        return torch.where(
+            norms > (1 - eps),
+            xy_t / norms * (1 - eps),  # project back to unit cube
+            xy_t
+        )
