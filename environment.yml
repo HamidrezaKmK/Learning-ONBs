@@ -1,4 +1,4 @@
-name: projections
+name: basis_learning
 channels:
   - pytorch
   - nvidia
@@ -25,3 +25,4 @@ dependencies:
       - black
       - isort
       - nflows
+      # TODO: add Jupyter to the environment from the get-go
