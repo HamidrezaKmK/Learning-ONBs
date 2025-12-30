@@ -3,6 +3,7 @@ import math
 
 import numpy as np
 import torch
+from basis_learning.diffeomorphisms.base import Diffeomorphism
 
 def sample_from_disk(N: int):
     u = torch.rand(N, 2)
@@ -28,3 +29,9 @@ def sample_stratified(stratified_gridsize, device):
     # Combine base + jitter, normalize to [0,1]
     xy = (base + jitter) / g
     return xy
+
+def deform_vals(xy, diffeomorphism: Diffeomorphism, basis_fn: callable, **kwargs):
+    """The functionality that takes a diffeomorphism and applies the isometric operator"""
+    transformed_xy, logabsdet = diffeomorphism.forward(xy)
+    basis_fn_vals = basis_fn(transformed_xy, **kwargs)
+    return basis_fn_vals * torch.exp(0.5 * logabsdet)

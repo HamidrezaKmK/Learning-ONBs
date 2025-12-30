@@ -1,5 +1,6 @@
 # import abstractmethod and abstract class
 from abc import ABC, abstractmethod
+from basis_learning.diffeomorphisms.base import Diffeomorphism
 
 import torch
 
@@ -12,4 +13,3 @@ class BaseFunction(ABC):
     @abstractmethod
     def sample_from_domain(self, N: int):
         raise NotImplementedError("Subclasses must implement this method")
-    
