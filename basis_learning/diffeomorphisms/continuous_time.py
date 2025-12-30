@@ -1,52 +1,171 @@
-import math
+
 import torch
-import torch.nn.functional as F
 from torch import nn
-from nflows.transforms import Transform, CompositeTransform, Sigmoid, IdentityTransform, PiecewiseRationalQuadraticCouplingTransform, ActNorm
-from nflows.transforms.autoregressive import MaskedAffineAutoregressiveTransform as MAF
-from nflows.transforms.permutations import RandomPermutation
-from nflows.nn.nets import ResidualNet
+from abc import abstractmethod
 
-class SinusoidalTimeEmbedding(nn.Module):
-    """
-    Scalar t  ->  [sin(w_k t), cos(w_k t)]_k  (Fourier features)
-    Similar in spirit to what diffusion models use.
-    """
-    def __init__(self, num_frequencies: int = 8, max_log_freq: float = 3.0):
+from torchdiffeq import odeint, odeint_adjoint
+from basis_learning.diffeomorphisms.base import Diffeomorphism
+from .utils import SinusoidalTimeEmbedding
+
+class CTDiffeomorphism(Diffeomorphism):
+
+    def __init__(
+        self,
+        start_time: float,
+        end_time: float,
+        use_adjoint: bool = True,
+        method: str = 'dopri5',
+        rtol: float = 1e-6,
+        atol: float = 1e-6,
+    ):
         super().__init__()
-        self.num_frequencies = num_frequencies
+        self.start_time = start_time
+        self.end_time = end_time
+        self.use_adjoint = use_adjoint
+        self.method = method
+        self.rtol = rtol
+        self.atol = atol
 
-        # Frequencies: 2^0, 2^{max_log_freq} on a log scale
-        freqs = torch.exp(torch.linspace(0.0, max_log_freq, num_frequencies) * math.log(2.0))
-        self.register_buffer("freqs", freqs, persistent=False)
+    @abstractmethod
+    def velocity_field(self, t: torch.Tensor, xy: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the velocity field at time t and position xy.
 
-    @property
-    def out_dim(self) -> int:
-        return 2 * self.num_frequencies
+        Args:
+            t: Tensor of shape (B,) representing time.
+            xy: Tensor of shape (B, d) representing positions in d-dimensional space.
 
-    def forward(self, t: torch.Tensor) -> torch.Tensor:
-        # t: (B,) or (B, 1)
-        if t.dim() == 1:
-            t = t.unsqueeze(-1)              # (B, 1)
+        Returns:
+            Tensor of shape (B, d) representing the velocity field at the given time and positions.
+        """
+        pass
+    
+    @abstractmethod
+    def project_to_domain(self, xy_t: torch.Tensor) -> torch.Tensor:
+        """
+        Project the points xy_t back to the valid domain if they go out of bounds.
 
-        # (B, 1, num_freqs)
-        angles = t[..., None] * self.freqs[None, None, :] * 2 * math.pi
-        emb = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)  # (B, 1, 2*num_freqs)
+        Args:
+            xy_t: Tensor of shape (B, d) representing positions in d-dimensional space.
 
-        return emb.view(t.size(0), -1)       # (B, 2 * num_freqs)
+        Returns:
+            Tensor of shape (B, d) representing the projected positions.
+        """
+        pass
 
+    def _run_ode(
+        self, 
+        xy: torch.Tensor, 
+        forward: bool,
+    ):
+        # initial augmented state
+        s0 = torch.zeros((xy.shape[0], 1), device=xy.device, dtype=xy.dtype)
+        y0 = torch.cat([xy, s0], dim=-1)
 
-class CTCubeFlow(nn.Module):
+        tspan = torch.tensor([self.start_time, self.end_time], device=xy.device, dtype=xy.dtype)
+
+        func = CTDynamics(self, forward=forward)
+
+        if self.use_adjoint:
+            yt = odeint_adjoint(func, y0, tspan, method=self.method, rtol=self.rtol, atol=self.atol, adjoint_params=tuple(self.parameters()))
+        else:
+            yt = odeint(func, y0, tspan, method=self.method, rtol=self.rtol, atol=self.atol)
+
+        yT = yt[-1]                 # (B, d+1)
+        xT = yT[:, :-1]
+        sT = yT[:, -1]              # (B,)
+
+        xT = self.project_to_domain(xT) 
+        # TODO: hacky! the ODE solver should respect the domain
+
+        return xT, sT
+
+    def forward(
+        self,
+        xy: torch.Tensor, 
+    ):
+        return self._run_ode(
+            xy,
+            forward=True,
+        ) 
+    
+    def inverse(
+        self,
+        xy: torch.Tensor, 
+    ):
+        return self._run_ode(
+            xy,
+            forward=False,
+        ) 
+
+class CTDynamics(torch.nn.Module):
+    def __init__(self, flow: CTDiffeomorphism, forward: bool):
+        super().__init__()
+        self.flow = flow
+        self._forward = forward
+
+    def divergence(self, v, x, create_graph):
+        div = 0.0
+        for i in range(x.shape[1]):
+            div_i = torch.autograd.grad(
+                v[:, i].sum(), x,
+                create_graph=create_graph, 
+                retain_graph=True,
+                allow_unused=False,
+            )[0][:, i]
+            div = div + div_i
+        return div
+
+    def forward(self, t, y: torch.Tensor):
+        # y: (B, d+1) where last dim is s
+        x = y[:, :-1]
+
+        # torchdiffeq passes scalar t; make batch
+        t_batch = torch.ones(x.shape[0], device=x.device, dtype=x.dtype) * t
+
+        # TODO: this is a bit hacky, but we need x to be in the domain
+        def _inner_forward(x: torch.Tensor, create_graph: bool):
+            x_proj = self.flow.project_to_domain(x)
+            x_proj.requires_grad_(True)
+            v = self.flow.velocity_field(t_batch, x_proj)
+            if not self._forward:
+                v = -v
+            div = self.divergence(v, x_proj, create_graph=create_graph)
+            ds = div.unsqueeze(-1)
+            return v, ds
+
+        if torch.is_grad_enabled():
+            v, ds = _inner_forward(x, create_graph=True)
+        else:
+            with torch.enable_grad():
+                v, ds = _inner_forward(x, create_graph=False)
+
+        return torch.cat([v, ds], dim=-1)         # (B, d+1)
+
+class CTCubeFlow(CTDiffeomorphism):
     def __init__(
         self,
         dimensions: int,
+        start_time: float,
+        end_time: float,
+        use_adjoint: bool = True,
+        method: str = 'dopri5',
+        rtol: float = 1e-6,
+        atol: float = 1e-6,
         hidden_features: int = 64,
         num_layers: int = 5,
         num_frequencies: int = 8,   
         gamma: float = 1.0,
-        normalize_velocity: bool = False,
     ):
-        super().__init__()
+        super().__init__(
+            start_time=start_time, 
+            end_time=end_time,
+            use_adjoint=use_adjoint,
+            method=method,
+            rtol=rtol,
+            atol=atol,
+        )
+
         self.d = dimensions
     
         # register a module called pre_velocity_field that takes in
@@ -65,7 +184,6 @@ class CTCubeFlow(nn.Module):
         layers.append(nn.Linear(hidden_features, dimensions))
         self.pre_velocity_field = nn.Sequential(*layers)
         self.gamma = gamma 
-        self.normalize_velocity = normalize_velocity
         
     def velocity_field(self, t, xy):
         # xy: (B, d)
@@ -74,65 +192,24 @@ class CTCubeFlow(nn.Module):
         embedded = self.time_embedding(t.unsqueeze(-1))  # (B, 16)
         # pass through inverse 
         # pass xy through inverse sigmoid to map to R^d
-        xy_transformed = torch.logit(xy.clamp(1e-6, 1 - 1e-6))  
-        # xy_transformed = xy
-        input = torch.cat([xy_transformed, embedded], dim=-1)
+        input = torch.cat([xy, embedded], dim=-1)
         v = self.pre_velocity_field(input)
 
         # make the velocity tangential to the cube boundaries
         velocity = (xy) ** self.gamma * (1 - xy) ** self.gamma * v
 
-        if self.normalize_velocity:
-            velocity = velocity / (torch.norm(velocity, dim=1, keepdim=True) + 1e-10)  # normalize to unit norm
         return velocity
 
     def project_to_domain(self, xy_t, eps: float = 1e-2):
         return torch.clamp(xy_t, eps, 1 - eps)
-    
-    def evaluate(
-        self,
-        xy: torch.Tensor,
-        start_time: float,
-        end_time: float,
-        initial_basis_fn: callable,
-        n_steps: int = 10,
-    ):
-        timesteps = torch.linspace(start_time, end_time, n_steps + 1).to(xy.device)
-        dt = (end_time - start_time) / n_steps
-
-        xy_t = xy.clone().detach().requires_grad_(True)
-        divs_cumsum = torch.zeros(xy_t.size(0), device=xy_t.device)
-
-        for i in range(n_steps):
-            t = timesteps[i]
-            t_batch = t * torch.ones(xy_t.size(0), device=xy_t.device)
-
-            v = self.velocity_field(t_batch, xy_t)
-
-            grad_xy = torch.autograd.grad(
-                v.sum(),
-                xy_t,
-                create_graph=True,      # <-- build graph for divergence
-                retain_graph=True,      # <-- safer since we keep using the graph
-            )[0]
-            div = grad_xy.sum(dim=1)
-
-            divs_cumsum = divs_cumsum + div * dt
-            xy_t = xy_t + v * dt
-            xy_t = self.project_to_domain(xy_t)   # must itself be differentiable
             
-        return initial_basis_fn(xy_t) * torch.exp(0.5 * divs_cumsum)
-
-        
 class CTRadialFlow(CTCubeFlow):
 
     def velocity_field(self, t, xy):
         # t: (B,)
         # Compute the velocity field using the pre_velocity_field network
         embedded = self.time_embedding(t.unsqueeze(-1))  # (B, 16)
-        xy_transformed = torch.logit(xy.clamp(1e-6, 1 - 1e-6))
-        
-        input = torch.cat([xy_transformed, embedded], dim=-1)
+        input = torch.cat([xy, embedded], dim=-1)
         v = self.pre_velocity_field(input)
         v = v - (xy * (v * xy).sum(dim=1, keepdim=True))  # make tangential to circle
         return v
