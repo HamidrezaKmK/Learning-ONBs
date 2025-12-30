@@ -4,6 +4,7 @@ import math
 from typing import Literal
 
 from .base import BaseFunction
+from basis_learning.utils import sample_from_disk
 
 def cos1d(k, t):
     return math.sqrt(2.0) * torch.cos(2.0 * math.pi * k * t) if k > 0 else torch.ones_like(t)
@@ -55,24 +56,13 @@ class FourierBasis(BaseFunction):
         return vals.to(self.device)  # shape (N,)
 
 
-class RadialFourierBasis(BaseFunction):
-
-    def __init__(
-        self,
-        device: torch.device,
-    ):
-        self.device = device
+class RadialFourierBasis(FourierBasis):
     
     def sample_from_domain(
         self,
         N: int,
     ):
-        u = torch.rand(N, 2)
-        r = torch.sqrt(u[:, 0])  # radius
-        theta = 2 * math.pi * u[:, 1]  # angle
-        x = r * torch.cos(theta)
-        y = r * torch.sin(theta)
-        return torch.stack([x, y], dim=1)  # shape (N, 2)
+        return sample_from_disk(N).to(self.device)
     
     def __call__(
         self, 
@@ -81,29 +71,9 @@ class RadialFourierBasis(BaseFunction):
         ky: int,
         kind: Literal["cc", "cs", "sc", "ss"] = "cc",
     ):
-        if kx < 0 or ky < 0:
-            raise ValueError("kx, ky must be >= 0")
-        if kind not in ("cc", "cs", "sc", "ss"):
-            raise ValueError("kind must be one of {'cc','cs','sc','ss'}")
-
         r = xy[:, 0]**2 + xy[:, 1]**2
-        theta = torch.atan2(xy[:, 1], xy[:, 0])  # normalize to [0,1]
-        theta = torch.where(theta < 0, theta + 2 * math.pi, theta)  # ensure theta is in [0,1]
-        theta = theta / (2 * math.pi)
-
-        if theta.min() < 0:
-            raise ValueError("Theta values must be in [0, 1]")
-
-        fr_c = cos1d(kx, r); fr_s = sin1d(kx, r)
-        ftheta_c = cos1d(ky, theta); ftheta_s = sin1d(ky, theta)
+        theta = torch.atan2(xy[:, 1], xy[:, 0]) + math.pi
+        theta = theta / (2 * math.pi)  # normalize to [-1,1]
         
-        if kind == "cc":
-            vals = fr_c * ftheta_c
-        elif kind == "cs":
-            vals = fr_c * ftheta_s
-        elif kind == "sc":
-            vals = fr_s * ftheta_c
-        else:
-            vals = fr_s * ftheta_s
-
-        return vals
+        rtheta = torch.stack([r, theta], dim=1)
+        return super().__call__(rtheta, kx, ky, kind)

@@ -1,3 +1,2 @@
-from .tent import TentBasis
-from .fourier import FourierBasis
-from .fourier import RadialFourierBasis
+from .tent import TentBasis, RadialTentBasis
+from .fourier import FourierBasis, RadialFourierBasis

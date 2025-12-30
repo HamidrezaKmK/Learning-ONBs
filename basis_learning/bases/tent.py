@@ -3,6 +3,7 @@ import torch
 import math
 
 from .base import BaseFunction
+from basis_learning.utils import sample_from_disk
 
 class TentBasis(BaseFunction):
 
@@ -35,3 +36,19 @@ class TentBasis(BaseFunction):
         scale = math.sqrt(6.0 / (w * h)) 
 
         return (tent * scale).to(self.device)
+
+class RadialTentBasis(TentBasis):
+
+    def sample_from_domain(
+        self,
+        N: int,
+    ):
+        return sample_from_disk(N).to(self.device)
+
+    def __call__(self, xy, row, col):
+        r = xy[:, 0]**2 + xy[:, 1]**2
+        theta = torch.atan2(xy[:, 1], xy[:, 0]) + math.pi
+        theta = theta / (2 * math.pi)
+        
+        rtheta = torch.stack([r, theta], dim=1)
+        return super().__call__(rtheta, row, col)
