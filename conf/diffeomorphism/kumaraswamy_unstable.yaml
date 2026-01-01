@@ -1,4 +1,0 @@
-_target_: basis_learning.diffeomorphisms.UnitSquareKumaraswamy
-eps: 0.000001
-a_min: 0.001 # 1
-b_min: 0.001 # 0.5
