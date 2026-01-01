@@ -14,7 +14,7 @@ initial_basis_indices: [0, 1]
 n_epochs: 5000_00
 domain_sample_size: 1000
 n_functions: 5
-loss_smoothing_alpha: 0.99
+loss_smoothing_alpha: 0.0
 
 callbacks:
   reconstruction_visualization:

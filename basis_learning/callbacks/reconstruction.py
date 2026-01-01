@@ -63,7 +63,7 @@ class VisualizeReconstruction(Callback):
                     deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
 
                     inner_product = torch.mean(deformed_vals * vals)
-                    proj += inner_product.item() * deformed_vals.detach()
+                    proj += inner_product * deformed_vals
 
                 error = torch.abs(vals - proj)
                 norm2 = torch.mean(error * error).item()

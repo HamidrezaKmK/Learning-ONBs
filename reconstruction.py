@@ -38,10 +38,10 @@ def train(
 
     smoothed_loss = None
     loss_history = []
-    coords = initial_basis.sample_from_domain(domain_sample_size).to(device) # shape (N, d)
-
+    
     pbar = tqdm(range(n_epochs))
 
+    # TODO: add a batch size or sth
     for epoch_i in pbar:
         if n_functions is None:
             seed = epoch_i
@@ -49,18 +49,25 @@ def train(
             seed = epoch_i % n_functions
             # TODO: bring back
             # seed = torch.randint(0, n_functions, (1,)).item()
-        vals = f_gen(coords, seed=seed)  # shape (N,)
 
-        optimizer.zero_grad()
+        if epoch_i % n_functions == 0:
+            coords = initial_basis.sample_from_domain(domain_sample_size).to(device) # shape (N, d)
+            
+        if epoch_i % n_functions == (n_functions - 1):
+            optimizer.zero_grad()
+
+        vals = f_gen(coords, seed=seed)  # shape (N,)
         loss = 0
-        proj = 0
+        proj = torch.zeros_like(vals, device=device)
         for idx_ in range(len(initial_basis_idx)):
             idx = initial_basis_idx[idx_]
             deformed_coords, logabsdet = diffeomorphism.forward(coords)
             deformed_vals = initial_basis.get(deformed_coords, idx).to(device)
             deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
-            proj += (deformed_vals * vals).mean() * deformed_vals
-        loss = torch.mean((vals - proj) ** 2)
+            inner_product = (deformed_vals * vals).mean()
+            proj += inner_product * deformed_vals
+        error = (vals - proj)
+        loss = torch.mean(error * error)
         loss.backward()
         if epoch_i % n_functions == (n_functions - 1):
             if smoothed_loss is None:
