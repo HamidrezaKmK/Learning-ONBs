@@ -46,42 +46,47 @@ def train(
         if n_functions is None:
             seed = epoch_i
         else:
-            seed = torch.randint(0, n_functions, (1,)).item()
+            seed = epoch_i % n_functions
+            # TODO: bring back
+            # seed = torch.randint(0, n_functions, (1,)).item()
         vals = f_gen(coords, seed=seed)  # shape (N,)
 
         optimizer.zero_grad()
-        random_idx = initial_basis_idx[torch.randint(0, len(initial_basis_idx), (1,)).item()]
-        deformed_coords, logabsdet = diffeomorphism.forward(coords)
-        deformed_vals = initial_basis.get(deformed_coords, random_idx).to(device)
-        deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
-
-        loss = -(deformed_vals * vals).mean() ** 2 / ((vals * vals).mean() + 1e-5)
-
+        loss = 0
+        proj = 0
+        for idx_ in range(len(initial_basis_idx)):
+            idx = initial_basis_idx[idx_]
+            deformed_coords, logabsdet = diffeomorphism.forward(coords)
+            deformed_vals = initial_basis.get(deformed_coords, idx).to(device)
+            deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
+            proj += (deformed_vals * vals).mean() * deformed_vals
+        loss = torch.mean((vals - proj) ** 2)
         loss.backward()
-        if smoothed_loss is None:
-            smoothed_loss = loss.item()
-        else:
-            smoothed_loss = loss_smoothing_alpha * smoothed_loss + (1 - loss_smoothing_alpha) * loss.item()
-        if wandb_enabled:
-            wandb.log({"train/loss": smoothed_loss})
-        pbar.set_postfix({'loss': smoothed_loss})
-        optimizer.step()
-        # check if it is reduce on plateau scheduler
-        if scheduler is not None:
-            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                scheduler.step(smoothed_loss)
+        if epoch_i % n_functions == (n_functions - 1):
+            if smoothed_loss is None:
+                smoothed_loss = loss.item()
             else:
-                scheduler.step()
-        loss_history.append(smoothed_loss)
+                smoothed_loss = loss_smoothing_alpha * smoothed_loss + (1 - loss_smoothing_alpha) * loss.item()
+            if wandb_enabled:
+                wandb.log({"train/loss": smoothed_loss})
+            pbar.set_postfix({'loss': smoothed_loss})
+            optimizer.step()
+            # check if it is reduce on plateau scheduler
+            if scheduler is not None:
+                if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    scheduler.step(smoothed_loss)
+                else:
+                    scheduler.step()
+            loss_history.append(smoothed_loss)
 
-        for callback in callbacks:
-            callback(
-                epoch=epoch_i,
-                diffeomorphism=diffeomorphism,
-                loss=smoothed_loss,
-                wandb_enabled=wandb_enabled,
-                device=device,
-            )
+            for callback in callbacks:
+                callback(
+                    epoch=epoch_i,
+                    diffeomorphism=diffeomorphism,
+                    loss=smoothed_loss,
+                    wandb_enabled=wandb_enabled,
+                    device=device,
+                )
 
 @hydra.main(version_base=None, config_path="conf", config_name="reconstruction")
 def main(conf: DictConfig):
