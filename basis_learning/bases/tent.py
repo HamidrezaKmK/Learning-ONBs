@@ -11,17 +11,15 @@ class TentBasis(BaseFunction):
         self,
         total_rows: int,
         total_cols: int,
-        device: torch.device,
     ):
         self.total_rows = total_rows
         self.total_cols = total_cols 
-        self.device = device
     
     def sample_from_domain(
         self,
         N: int,
     ):
-        return torch.rand((N, 2)).to(self.device)
+        return torch.rand((N, 2))
     
     def __call__(self, xy: torch.Tensor, row: int, col: int):
 
@@ -35,7 +33,12 @@ class TentBasis(BaseFunction):
         tent = torch.clamp(1.0 - torch.maximum(u, v), min=0.0)
         scale = math.sqrt(6.0 / (w * h)) 
 
-        return (tent * scale).to(self.device)
+        return (tent * scale)
+
+    def get(self, xy: torch.Tensor, idx: int):
+        row = idx // self.total_cols
+        col = idx % self.total_cols
+        return self.__call__(xy, row=row, col=col)
 
 class RadialTentBasis(TentBasis):
 
@@ -43,7 +46,7 @@ class RadialTentBasis(TentBasis):
         self,
         N: int,
     ):
-        return sample_from_disk(N).to(self.device)
+        return sample_from_disk(N)
 
     def __call__(self, xy, row, col):
         r = xy[:, 0]**2 + xy[:, 1]**2

@@ -13,9 +13,5 @@
 
 [] Look up Taylor Green vortex fields
 
-[] Do the adjoint method for better memory efficiency
-
-[] (Maybe) Use a fourth order integration rule for better accuracy (RK-4)
-[] (Maybe) Use the Helmholtz decomposition to parameterize the velocity field
 [] (Maybe) Think about turning my orthonormal basis into a Wavelet and read about wavelets more in general
 [] Think about applications where there is a dataset we want to represent

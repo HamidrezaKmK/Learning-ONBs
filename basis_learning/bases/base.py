@@ -13,3 +13,7 @@ class BaseFunction(ABC):
     @abstractmethod
     def sample_from_domain(self, N: int):
         raise NotImplementedError("Subclasses must implement this method")
+
+    @abstractmethod
+    def get(self, coords: torch.Tensor, idx: int):
+        raise NotImplementedError("Subclasses must implement this method if needed")

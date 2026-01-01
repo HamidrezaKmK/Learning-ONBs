@@ -1,1 +1,1 @@
-from .synthetic import random_bandpass
+from .synthetic import FunctionClassGenerator, RandomBandpassGenerator, BasisRandomGenerator

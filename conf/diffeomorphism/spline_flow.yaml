@@ -1,0 +1,6 @@
+_target_: basis_learning.diffeomorphisms.UnitCubeNeuralSplineFlow
+d: 2
+hidden_features: 64
+num_layers: 5
+num_blocks: 2
+alpha: 0.00005
