@@ -2,7 +2,6 @@
 import torch
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-import math
 import wandb
 from .base import Callback
 from basis_learning.bases.base import BaseFunction
@@ -10,6 +9,11 @@ from basis_learning.datasets import FunctionClassGenerator
 from basis_learning.diffeomorphisms.base import Diffeomorphism
 
 class VisualizeReconstruction(Callback):
+    """
+    Visualize len(seeds) reconstruction of functions generated
+    from the given FunctionClassGenerator using the provided basis functions
+    and diffeomorphism.
+    """
     def __init__(
         self,
         basis: BaseFunction,
@@ -37,7 +41,6 @@ class VisualizeReconstruction(Callback):
     ): 
         if (epoch + 1) % self.frequency != 0 or wandb_enabled is False:
             return
-        
         
         with torch.no_grad():
             n_cols = 3
@@ -100,7 +103,7 @@ class VisualizeReconstruction(Callback):
                 sm_01.set_array([])
                 fig.colorbar(sm_01, ax=[ax0, ax1], fraction=0.03, pad=0.02)
 
-                # ---- separate color scale for (Error) ----
+                # ---- color scale for (Error) ----
                 row_C_2 = error.flatten()
                 vmin_2 = torch.quantile(row_C_2, 0.01).item()
                 vmax_2 = torch.quantile(row_C_2, 0.99).item()
@@ -122,68 +125,3 @@ class VisualizeReconstruction(Callback):
 
             wandb.log({f"reconstruction/visualization": wandb.Image(fig)})
             plt.close(fig)
-            
-        # with torch.no_grad():
-        #     # create a figure with seeds rows and indices columns
-        #     n_cols = 3 
-        #     n_rows = len(self.seeds)
-
-        #     fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
-
-        #     for i, seed in enumerate(self.seeds):
-        #         # generate coordinates
-        #         coords = self.basis.sample_from_domain(self.density).to(device)
-        #         if coords.shape[1] != 2:
-        #             raise ValueError("VisualizeReconstruction only supports 2D bases.")
-        #         vals = self.f_gen(coords, seed=seed)
-
-
-        #         proj = 0
-        #         for idx in self.indices:
-        #             deformed_coords, logabsdet = diffeomorphism.forward(coords)
-        #             deformed_vals = self.basis.get(deformed_coords, idx).to(device)
-        #             deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
-        #             # compute the inner product between deformed_vals and vals
-        #             inner_product = torch.mean(deformed_vals * vals.to(device))
-        #             proj += inner_product.item() * deformed_vals.detach()
-                
-        #         error = vals.to(device) - proj
-        #         norm2 = torch.mean(error * error).item()
-        #         wandb.log({f"reconstruction/err_{seed}": norm2})
-
-        #         # visualize the original function
-        #         ax = axes[i, 0] if n_rows > 1 else axes[0]
-        #         ax.hexbin(
-        #             coords[:, 0].cpu().numpy(),
-        #             coords[:, 1].cpu().numpy(),
-        #             C=vals.cpu().numpy(),
-        #             gridsize=50,
-        #             cmap='viridis'
-        #         )
-        #         ax.set_title(f"Original")
-        #         ax.set_ylabel(f"(seed={seed})")
-        #         fig.colorbar(ax.collections[0], ax=ax)
-
-        #         ax = axes[i, 1] if n_rows > 1 else axes[1]
-        #         ax.hexbin(
-        #             coords[:, 0].cpu().numpy(),
-        #             coords[:, 1].cpu().numpy(),
-        #             C=proj.cpu().numpy(),
-        #             gridsize=50,
-        #             cmap='viridis'
-        #         )
-        #         ax.set_title(f"Projected")
-        #         fig.colorbar(ax.collections[0], ax=ax)
-        #         ax = axes[i, 2] if n_rows > 1 else axes[2]
-        #         ax.hexbin(
-        #             coords[:, 0].cpu().numpy(),
-        #             coords[:, 1].cpu().numpy(),
-        #             C=error.cpu().numpy(),
-        #             gridsize=50,
-        #             cmap='viridis'
-        #         )
-        #         ax.set_title(f"Error")
-        #         fig.colorbar(ax.collections[0], ax=ax)
-        #     # paste the figure to wandb as an image
-        #     wandb.log({f"reconstruction/visualization": wandb.Image(fig)})
-        #     plt.close(fig)
