@@ -13,6 +13,7 @@ initial_basis_indices: [0, 1, 3, 4, 5]
 # training hyperparameters
 n_epochs: 5000_00
 domain_sample_size: 100
+resample_grid_frequency: 1000
 
 optimizer:
   _target_: torch.optim.Adam

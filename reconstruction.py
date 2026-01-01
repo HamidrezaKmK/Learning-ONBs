@@ -29,6 +29,7 @@ def train(
     initial_basis: BaseFunction,
     initial_basis_idx: list,
     wandb_enabled: bool,
+    resample_grid_frequency: int,
     loss_smoothing_alpha: float = 0.99,
 ):
     diffeomorphism = diffeomorphism.to(device)
@@ -40,6 +41,8 @@ def train(
     loss_history = []
     
     pbar = tqdm(range(n_epochs))
+    coords = initial_basis.sample_from_domain(domain_sample_size).to(device)  # shape (N, d)
+    optimizer.zero_grad()
 
     # TODO: add a batch size or sth
     for epoch_i in pbar:
@@ -48,26 +51,21 @@ def train(
         else:
             seed = epoch_i % n_functions
             # TODO: bring back
-            # seed = torch.randint(0, n_functions, (1,)).item()
+            # seed = torch.randint(0, n_dfunctions, (1,)).item()
 
-        if epoch_i % n_functions == 0:
+        if (epoch_i + 1) % resample_grid_frequency == 0:
             coords = initial_basis.sample_from_domain(domain_sample_size).to(device) # shape (N, d)
-            
-        if epoch_i % n_functions == (n_functions - 1):
-            optimizer.zero_grad()
 
         vals = f_gen(coords, seed=seed)  # shape (N,)
         loss = 0
-        proj = torch.zeros_like(vals, device=device)
         for idx_ in range(len(initial_basis_idx)):
             idx = initial_basis_idx[idx_]
             deformed_coords, logabsdet = diffeomorphism.forward(coords)
             deformed_vals = initial_basis.get(deformed_coords, idx).to(device)
             deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
-            inner_product = (deformed_vals * vals).mean()
-            proj += inner_product * deformed_vals
-        error = (vals - proj)
-        loss = torch.mean(error * error)
+            # TODO: try the unbiased estimator:
+            loss -= (deformed_vals * vals).mean() ** 2 # estimator for the maximization problem
+            
         loss.backward()
         if epoch_i % n_functions == (n_functions - 1):
             if smoothed_loss is None:
@@ -78,6 +76,7 @@ def train(
                 wandb.log({"train/loss": smoothed_loss})
             pbar.set_postfix({'loss': smoothed_loss})
             optimizer.step()
+            optimizer.zero_grad()
             # check if it is reduce on plateau scheduler
             if scheduler is not None:
                 if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -135,6 +134,7 @@ def main(conf: DictConfig):
         n_functions=conf.get("n_functions", None),
         initial_basis=initial_basis,
         initial_basis_idx=conf.initial_basis_indices,
+        resample_grid_frequency=conf.resample_grid_frequency,
         loss_smoothing_alpha=conf.get("loss_smoothing_alpha", 0.99),
         wandb_enabled=conf.wandb.enabled,
     )
