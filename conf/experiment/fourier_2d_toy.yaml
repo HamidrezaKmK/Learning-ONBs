@@ -11,9 +11,9 @@ function_generator:
 initial_basis_indices: [0, 1]
 
 # training hyperparameters
-n_epochs: 5000_00
-domain_sample_size: 100
-n_functions: 1000
+n_epochs: 50_000_000
+domain_sample_size: 5000
+n_functions: 5
 loss_smoothing_alpha: 0.99
 
 callbacks:
@@ -22,7 +22,7 @@ callbacks:
     basis: ${initial_basis}
     indices: [0, 1]
     f_gen: ${function_generator}
-    seeds: [10, 20, 30]
+    seeds: [0, 1, 2]
     frequency: 1000
     density: 1000_00
 

@@ -17,7 +17,7 @@ resample_grid_frequency: 1000
 
 optimizer:
   _target_: torch.optim.Adam
-  lr: 0.0001
+  lr: 0.001
   _partial_: true
 
 scheduler: null
@@ -27,5 +27,6 @@ scheduler: null
   # _partial_: true
 
 n_functions: 1000
+batch_size: 100
 
 loss_smoothing_alpha: 0.99

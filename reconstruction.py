@@ -30,12 +30,12 @@ def train(
     initial_basis_idx: list,
     wandb_enabled: bool,
     resample_grid_frequency: int,
+    batch_size: int,
     loss_smoothing_alpha: float = 0.99,
 ):
     diffeomorphism = diffeomorphism.to(device)
     optimizer = optimizer_callable(diffeomorphism.parameters())
     scheduler = scheduler_callable(optimizer) if scheduler_callable is not None else None
-    
 
     smoothed_loss = None
     loss_history = []
@@ -44,30 +44,28 @@ def train(
     coords = initial_basis.sample_from_domain(domain_sample_size).to(device)  # shape (N, d)
     optimizer.zero_grad()
 
-    # TODO: add a batch size or sth
     for epoch_i in pbar:
         if n_functions is None:
             seed = epoch_i
         else:
-            seed = epoch_i % n_functions
-            # TODO: bring back
-            # seed = torch.randint(0, n_dfunctions, (1,)).item()
+            seed = torch.randint(0, n_functions, (1,)).item()
 
         if (epoch_i + 1) % resample_grid_frequency == 0:
             coords = initial_basis.sample_from_domain(domain_sample_size).to(device) # shape (N, d)
 
         vals = f_gen(coords, seed=seed)  # shape (N,)
-        loss = 0
-        for idx_ in range(len(initial_basis_idx)):
-            idx = initial_basis_idx[idx_]
-            deformed_coords, logabsdet = diffeomorphism.forward(coords)
-            deformed_vals = initial_basis.get(deformed_coords, idx).to(device)
-            deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
-            # TODO: try the unbiased estimator:
-            loss -= (deformed_vals * vals).mean() ** 2 # estimator for the maximization problem
-            
+
+        idx_ = torch.randint(0, len(initial_basis_idx), (1,)).item()
+        idx = initial_basis_idx[idx_]
+        deformed_coords, logabsdet = diffeomorphism.forward(coords)
+        deformed_vals = initial_basis.get(deformed_coords, idx).to(device)
+        deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
+
+        # TODO: try the unbiased estimator:
+        loss = (-(deformed_vals * vals).mean() ** 2) / batch_size  # estimator for the maximization problem
+
         loss.backward()
-        if epoch_i % n_functions == (n_functions - 1):
+        if (epoch_i + 1) % batch_size == 0:
             if smoothed_loss is None:
                 smoothed_loss = loss.item()
             else:
@@ -133,6 +131,7 @@ def main(conf: DictConfig):
         f_gen=function_generator,
         n_functions=conf.get("n_functions", None),
         initial_basis=initial_basis,
+        batch_size=conf.batch_size,
         initial_basis_idx=conf.initial_basis_indices,
         resample_grid_frequency=conf.resample_grid_frequency,
         loss_smoothing_alpha=conf.get("loss_smoothing_alpha", 0.99),
