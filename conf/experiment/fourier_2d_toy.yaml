@@ -7,22 +7,22 @@ defaults:
   - _self_
 
 function_generator:
-  basis_indices: [0, 1]
-initial_basis_indices: [0, 1]
+  basis_indices: [0, 1, 2, 3, 4, 5]
+initial_basis_indices: [0, 1, 2, 3, 4, 5]
 
 # training hyperparameters
 n_epochs: 50_000_000
 domain_sample_size: 5000
-n_functions: 5
+n_functions: 1000
 loss_smoothing_alpha: 0.99
 
 callbacks:
   reconstruction_visualization:
     _target_: basis_learning.callbacks.VisualizeReconstruction
     basis: ${initial_basis}
-    indices: [0, 1]
+    indices: [0, 1, 2, 3, 4, 5]
     f_gen: ${function_generator}
-    seeds: [0, 1, 2]
+    seeds: [10, 20, 30]
     frequency: 1000
     density: 1000_00
 

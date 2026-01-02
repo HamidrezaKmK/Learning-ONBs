@@ -1,5 +1,5 @@
 import math
-from typing import Any, Callable, Dict
+from typing import Any, Callable
 
 import hydra
 import torch
@@ -31,6 +31,7 @@ def train(
     wandb_enabled: bool,
     resample_grid_frequency: int,
     batch_size: int,
+    unbiased_inner_product_estimator: bool = False,
     loss_smoothing_alpha: float = 0.99,
 ):
     diffeomorphism = diffeomorphism.to(device)
@@ -61,8 +62,14 @@ def train(
         deformed_vals = initial_basis.get(deformed_coords, idx).to(device)
         deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
 
-        # TODO: try the unbiased estimator:
-        loss = (-(deformed_vals * vals).mean() ** 2) / batch_size  # estimator for the maximization problem
+        # NOTE: an estimator for <e_i, f> = E[e_i(omega) . f(omega)]
+        rv = deformed_vals * vals
+        if unbiased_inner_product_estimator:
+            sum_of_squares = torch.sum(rv * rv)
+            square_of_sum = rv.sum() * rv.sum()
+            loss = - (square_of_sum - sum_of_squares) / (rv.shape[0] * (rv.shape[0] - 1)) / batch_size
+        else:
+            loss = (-rv.mean() ** 2) / batch_size 
 
         loss.backward()
         if (epoch_i + 1) % batch_size == 0:
@@ -120,6 +127,7 @@ def main(conf: DictConfig):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     scheduler_callable = instantiate(conf.get("scheduler", None)) if conf.get("scheduler", None) else None
     optimizer_callable = instantiate(conf.optimizer)
+    
     train(
         diffeomorphism=diffeomorphism,
         n_epochs=conf.n_epochs,
@@ -134,6 +142,7 @@ def main(conf: DictConfig):
         batch_size=conf.batch_size,
         initial_basis_idx=conf.initial_basis_indices,
         resample_grid_frequency=conf.resample_grid_frequency,
+        unbiased_inner_product_estimator=conf.unbiased_inner_product_estimator,
         loss_smoothing_alpha=conf.get("loss_smoothing_alpha", 0.99),
         wandb_enabled=conf.wandb.enabled,
     )

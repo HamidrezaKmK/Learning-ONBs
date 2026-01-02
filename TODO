@@ -7,6 +7,7 @@
 
 
 [] Ablate the stratified sampling for the grid integrals
+[] Ablate the unbiased estimator of the inner product
 [] The rejection sampling idea
 
 [] Doing Regression with the current idea
