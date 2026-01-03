@@ -1,0 +1,7 @@
+_target_: basis_learning.diffeomorphisms.DiskFlow
+cubeflow:
+  _target_: basis_learning.diffeomorphisms.UnitSquareKumaraswamy
+  d: 2
+  eps: 0.000001
+  a_min: 1
+  b_min: 0.5

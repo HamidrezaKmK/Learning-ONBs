@@ -15,6 +15,7 @@ from basis_learning.datasets import FunctionClassGenerator
 
 # Add resolver for hydra
 OmegaConf.register_new_resolver("eval", eval)
+torch.set_default_dtype(torch.float64)
 
 def train(
     diffeomorphism: Diffeomorphism,
@@ -89,15 +90,14 @@ def train(
                 else:
                     scheduler.step()
             loss_history.append(smoothed_loss)
-
-            for callback in callbacks:
-                callback(
-                    epoch=epoch_i,
-                    diffeomorphism=diffeomorphism,
-                    loss=smoothed_loss,
-                    wandb_enabled=wandb_enabled,
-                    device=device,
-                )
+        
+        for callback in callbacks:
+            callback(
+                epoch=epoch_i,
+                diffeomorphism=diffeomorphism,
+                wandb_enabled=wandb_enabled,
+                device=device,
+            )
 
 @hydra.main(version_base=None, config_path="conf", config_name="reconstruction")
 def main(conf: DictConfig):

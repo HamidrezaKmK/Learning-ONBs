@@ -164,7 +164,7 @@ class UnitSquareKumaraswamy(CubeFlow):
 
         # log|det J| = sum_i log dy_i/dx_i (diagonal Jacobian)
         # dy/dx = (1-2eps) * a*b*x_eps^(a-1) * (1 - x_eps^a)^(b-1)
-        log_scale = torch.log(1.0 - 2.0*self.eps)
+        log_scale = math.log(1.0 - 2.0*self.eps)
 
         log_dy_dx = (
             log_scale

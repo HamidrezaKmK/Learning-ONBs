@@ -8,6 +8,8 @@
     [] first with just one basis element
     [] then deform the basis using a forward problem and then solve its inverse problem
 
+[] Compute the deformation outside of the for loop and 
+    just use the projection thingy instead of adding a uniform
 
 [] Ablate the stratified sampling for the grid integrals
 [] Ablate the unbiased estimator of the inner product

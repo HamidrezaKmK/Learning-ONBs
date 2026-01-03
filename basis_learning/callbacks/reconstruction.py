@@ -35,7 +35,6 @@ class VisualizeReconstruction(Callback):
         self,
         epoch: int,
         diffeomorphism: Diffeomorphism,
-        loss: float, 
         wandb_enabled: bool,
         device: torch.device,
     ): 
