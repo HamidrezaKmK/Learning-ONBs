@@ -15,7 +15,7 @@ from basis_learning.datasets import FunctionClassGenerator
 
 # Add resolver for hydra
 OmegaConf.register_new_resolver("eval", eval)
-torch.set_default_dtype(torch.float64)
+# torch.set_default_dtype(torch.float64)
 
 def train(
     diffeomorphism: Diffeomorphism,

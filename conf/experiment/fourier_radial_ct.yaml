@@ -13,7 +13,7 @@ function_generator:
 initial_basis_indices: ${_indices}
 
 # training hyperparameters
-n_epochs: 50_000
+n_epochs: 500_000
 domain_sample_size: 5000
 n_functions: 5
 loss_smoothing_alpha: 0.99
@@ -33,6 +33,13 @@ callbacks:
     indices: ${_indices}
     frequency: 1000
     density: 1000_00
+  velocity_field:
+    _target_: basis_learning.callbacks.VisualizeVelocityField
+    basis: ${initial_basis}
+    frequency: 1000
+    timesteps: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    density: 1000
+    viz_magnitude: 10.0
 
 # Add tags so that it is easier to filter the experiments in the W&B dashboard
 wandb:
