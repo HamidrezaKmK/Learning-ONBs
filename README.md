@@ -35,3 +35,5 @@ Run the following script as an example:
 ```bash
 python reconstruction.py +experiment=fourier_2d_toy
 ```
+
+**Note:** For the reconstruction code to properly work, the batch size typically needs to be set to a large value.

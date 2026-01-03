@@ -106,7 +106,7 @@ class IsometryCheck(Callback):
             # compute pairwise inner products
             inner_products = torch.zeros((len(all_vals_original), len(all_vals_original)))
             inner_products_deformed = torch.zeros((len(all_vals_original), len(all_vals_original)))
-            fig, axes = plt.subplots(figsize=(15, 6), nrows=1, ncols=2)
+            fig, axes = plt.subplots(figsize=(22, 6), nrows=1, ncols=3)
             for i in range(len(all_vals_original)):
                 for j in range(len(all_vals_original)):
                     vi = all_vals_original[i]
@@ -116,10 +116,15 @@ class IsometryCheck(Callback):
                     vj_def = all_vals_deformed[j]
                     inner_products_deformed[i, j] = (vi_def * vj_def).mean().item()
             # heatmap of inner products
+            m = axes[2].imshow(inner_products_deformed)
+            fig.colorbar(m, ax=axes[2], label='Inner Product (Deformed)')
+            axes[2].set_title('Pairwise Inner Products (Deformed)')
+            axes[2].set_xlabel('Function Index')
+            axes[2].set_ylabel('Function Index')
+
             m = axes[1].imshow(inner_products)
-            # axes[1].
             fig.colorbar(m, ax=axes[1], label='Inner Product')
-            axes[1].set_title('Pairwise Inner Products of Basis Functions')
+            axes[1].set_title('Pairwise Inner Products (Original)')
             axes[1].set_xlabel('Function Index')
             axes[1].set_ylabel('Function Index')
 
@@ -128,6 +133,6 @@ class IsometryCheck(Callback):
             axes[0].set_title('Differences in Inner Products (Original - Deformed)')
             axes[0].set_xlabel('Difference')
             axes[0].set_ylabel('Frequency')
-            plt.show()
+
             wandb.log({f"isometry_check/inner_products": wandb.Image(fig)})
             plt.close(fig)

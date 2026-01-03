@@ -1,0 +1,8 @@
+_target_: basis_learning.datasets.RandomBandpassGenerator
+omega_lo: 5
+omega_hi: 10
+r_lo: 0.5
+r_hi: 1.0
+l_sin: 2
+l_cos: 2
+seed: 1024

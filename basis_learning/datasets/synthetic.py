@@ -18,6 +18,7 @@ class RandomBandpassGenerator(FunctionClassGenerator):
         self,
         l_sin: int,
         l_cos: int,
+        radial: bool = False,
         omega_lo: float = 5.,
         omega_hi: float = 10.,
         phase_lo: float = 0.0,
@@ -29,6 +30,8 @@ class RandomBandpassGenerator(FunctionClassGenerator):
         self.l_sin = l_sin
         self.l_cos = l_cos
         omega_lo = omega_lo
+        self.radial = radial
+        self.global_seed = seed
         self.rng_dset = torch.Generator().manual_seed(seed)
 
         self.omega_sin = torch.rand(size=(self.l_sin, 2), generator=self.rng_dset) * (omega_hi - omega_lo) + omega_lo
@@ -45,8 +48,16 @@ class RandomBandpassGenerator(FunctionClassGenerator):
         if xy.ndim != 2 or xy.shape[1] != 2:
             raise ValueError("xy must have shape (N, 2)")
 
+        if self.radial:
+            # convert to polar coordinates
+            r = torch.sqrt(xy[:, 0]**2 + xy[:, 1]**2)  # (N,)
+            theta = torch.atan2(xy[:, 1], xy[:, 0])  # (N,)
+            theta = (theta + math.pi) / (2.0 * math.pi)  # scale theta to [0,1]
+            xy = torch.stack([r, theta], dim=1)  # (N, 2)
+        
+        rng_global = torch.Generator().manual_seed(self.global_seed)
         rng = torch.Generator().manual_seed(
-            seed + torch.randint(0, 10000, (1,), generator=self.rng_dset).item()
+            seed + torch.randint(0, 10000, (1,), generator=rng_global).item()
         )
     
         # evaluate basis functions

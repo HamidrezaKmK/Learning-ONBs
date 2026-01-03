@@ -72,10 +72,10 @@ class VisualizeReconstruction(Callback):
                 cmap = "viridis"
 
                 # ---- color scale for (Original, Projected) ----
-                row_C_01 = torch.cat([vals.flatten(), proj.flatten()])
-                vmin_01 = torch.quantile(row_C_01, 0.01).item()
-                vmax_01 = torch.quantile(row_C_01, 0.99).item()
-                norm_01 = mpl.colors.Normalize(vmin=vmin_01, vmax=vmax_01)
+                norm_01 = mpl.colors.Normalize(
+                    vmin=vals.flatten().min(), 
+                    vmax=vals.flatten().max(),
+                )
 
                 hb0 = ax0.hexbin(
                     coords[:, 0].cpu().numpy(),

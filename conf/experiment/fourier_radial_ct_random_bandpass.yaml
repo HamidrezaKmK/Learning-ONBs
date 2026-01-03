@@ -1,22 +1,24 @@
 # @package _global_
 defaults:
-  - override /function_generator@function_generator: fourier_radial # the forward problem
+  - override /function_generator@function_generator: random_bandpass
   - override /diffeomorphism@diffeomorphism: ct_radial
   - override /bases@initial_basis: fourier_radial
   - override /wandb@wandb: enabled
   - _self_
 
-_indices: [0, 1, 2, 3, 4]
+_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8]
 
-function_generator:
-  basis_indices: ${_indices}
+function_generatord:
+  radial: true
+  
 initial_basis_indices: ${_indices}
 
 # training hyperparameters
 n_epochs: 500_000
 domain_sample_size: 5000
-n_functions: 5
+n_functions: 1000
 loss_smoothing_alpha: 0.99
+batch_size: 500
 
 callbacks:
   reconstruction_visualization:
