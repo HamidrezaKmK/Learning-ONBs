@@ -1,6 +1,9 @@
 [] Get a sense of the variance of the gradient and the loss without running an optimization step.
 [] Use very very simple diffeomophisms to get the code working first like a radial transform with a spacific scaler value
 
+[] Add a basis deformation and sanity check callback
+[] Add a velocity field visualizer callback
+
 [] Get a working version of the continuous time diffeomophism code (use the radial thing all throughout for now)
     [] first with just one basis element
     [] then deform the basis using a forward problem and then solve its inverse problem

@@ -150,6 +150,5 @@ def main(conf: DictConfig):
     if conf.wandb.enabled:
         wandb.finish()
 
-
 if __name__ == "__main__":
     main()

@@ -1,0 +1,33 @@
+# @package _global_
+defaults:
+  - override /function_generator@function_generator: fourier_radial # the forward problem
+  - override /diffeomorphism@diffeomorphism: ct_radial
+  - override /bases@initial_basis: fourier_radial
+  - override /wandb@wandb: enabled
+  - _self_
+
+function_generator:
+  basis_indices: [0, 1]
+initial_basis_indices: [0, 1]
+
+# training hyperparameters
+n_epochs: 50_000
+domain_sample_size: 5000
+n_functions: 5
+loss_smoothing_alpha: 0.99
+
+callbacks:
+  reconstruction_visualization:
+    _target_: basis_learning.callbacks.VisualizeReconstruction
+    basis: ${initial_basis}
+    indices: [0, 1]
+    f_gen: ${function_generator}
+    seeds: [0, 1, 2]
+    frequency: 100
+    density: 1000_0
+
+# Add tags so that it is easier to filter the experiments in the W&B dashboard
+wandb:
+  tags:
+    experiment: fourier_radial
+    task: reconstruction

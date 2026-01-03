@@ -1,1 +1,2 @@
 from .normalizing_flows import UnitCubeNeuralSplineFlow, UnitSquareKumaraswamy
+from .normalizing_flows import DiskFlow

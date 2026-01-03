@@ -39,7 +39,7 @@ class LogitTransform(Transform):
         y = self._stable_logit(pre_logit)
 
         logdets = torch.sum(
-            math.log(1.0 - 2.0*self.alpha)
+            torch.log(1.0 - 2.0*self.alpha)
             - torch.log(pre_logit).to(inputs.device)
             - torch.log1p(-pre_logit).to(inputs.device),
             dim=dims
@@ -52,12 +52,17 @@ class LogitTransform(Transform):
         x = (sigm - self.alpha) / (1.0 - 2.0*self.alpha)
 
         logdets = torch.sum(
-            torch.log(sigm) + torch.log1p(-sigm) - math.log(1.0 - 2.0*self.alpha),
+            torch.log(sigm) + torch.log1p(-sigm) - torch.log(1.0 - 2.0*self.alpha),
             dim=dims
         )
         return x, logdets
 
-class UnitCubeNeuralSplineFlow(Diffeomorphism):
+class CubeFlow(Diffeomorphism):
+    def __init__(self, d):
+        super().__init__()
+        self.d = d
+
+class UnitCubeNeuralSplineFlow(CubeFlow):
     """
     This is a diffeomorphism designed to map between [0, 1]^d and itself.
     First off, an inverse sigmoid (LogitTransform) is applied to map inputs from (0, 1) to R.
@@ -65,7 +70,7 @@ class UnitCubeNeuralSplineFlow(Diffeomorphism):
     and finally, a sigmoid with learnable temperature is applied to map back to (0, 1)^d.
     """
     def __init__(self, d, hidden_features=64, num_layers=5, num_blocks=2, alpha=0.0005):
-        super().__init__()
+        super().__init__(d=d)
         layers = []
         for i in range(num_layers):
             layers.append(
@@ -100,7 +105,8 @@ class UnitCubeNeuralSplineFlow(Diffeomorphism):
         x, logabsdet3 = self.logit.inverse(y)
         return x, logabsdet1 + logabsdet2 + logabsdet3
 
-class UnitSquareKumaraswamy(Diffeomorphism):
+
+class UnitSquareKumaraswamy(CubeFlow):
     """
     Extremely simple, numerically stable diffeomorphism [0,1]^2 -> [0,1]^2.
     Coordinatewise monotone Kumaraswamy warps with closed-form inverse.
@@ -113,8 +119,8 @@ class UnitSquareKumaraswamy(Diffeomorphism):
       x_eps = (1 - (1-y)**(1/b))**(1/a)
       x = (x_eps - eps) / (1-2eps)
     """
-    def __init__(self, eps: float = 1e-6, a_min: float = 1e-3, b_min: float = 1e-3):
-        super().__init__()
+    def __init__(self, d: int, eps: float = 1e-6, a_min: float = 1e-3, b_min: float = 1e-3):
+        super().__init__(d=d)
         if not (0.0 < eps < 0.5):
             raise ValueError("eps must be in (0, 0.5).")
         self.eps = eps
@@ -158,7 +164,7 @@ class UnitSquareKumaraswamy(Diffeomorphism):
 
         # log|det J| = sum_i log dy_i/dx_i (diagonal Jacobian)
         # dy/dx = (1-2eps) * a*b*x_eps^(a-1) * (1 - x_eps^a)^(b-1)
-        log_scale = math.log(1.0 - 2.0*self.eps)
+        log_scale = torch.log(1.0 - 2.0*self.eps)
 
         log_dy_dx = (
             log_scale
@@ -194,3 +200,58 @@ class UnitSquareKumaraswamy(Diffeomorphism):
         _, logabsdet_fwd = self.forward(x)
         logabsdet_inv = -logabsdet_fwd
         return x, logabsdet_inv
+
+
+class DiskFlow(Diffeomorphism):
+
+    def __init__(
+        self,
+        cubeflow: CubeFlow,
+    ):
+        super().__init__()
+        if cubeflow.d != 2:
+            raise ValueError("cubeflow must have d=2 for DiskFlow.")
+        self.cubeflow = cubeflow
+        
+    def _cart_to_polar(self, xy: torch.Tensor):
+        r = torch.sqrt(xy[:, 0]**2 + xy[:, 1]**2) # (N,)
+        theta = torch.atan2(xy[:, 1], xy[:, 0])  # (N,)
+        # scale theta to [0,1]
+        theta_scaled = (theta + math.pi) / (2.0 * math.pi)  # (N,) 
+        rtheta = torch.stack([r, theta_scaled]).transpose(0, 1)  # (N,2)
+
+        # log|det d(r,u)/d(x,y)| = -log r - log(2pi)
+        r_safe = r.clamp_min(1e-12)
+        logabsdet = (-torch.log(r_safe) - math.log(2.0 * math.pi)).squeeze(-1)  # (N,)
+        return rtheta, logabsdet
+    
+    def _polar_to_cart(self, rtheta: torch.Tensor):
+        r, theta_scaled = rtheta[:, 0], rtheta[:, 1]
+        theta = theta_scaled * (2.0 * math.pi) - math.pi  # scale back to [-pi, pi]
+        xy = torch.stack([
+            r * torch.cos(theta),
+            r * torch.sin(theta),
+        ]).transpose(0, 1)  # (N,2)
+
+        # log|det d(x,y)/d(r,u)| = log r + log(2pi)
+        r_safe = r.clamp_min(1e-12)
+        logabsdet = (torch.log(r_safe) + math.log(2.0 * math.pi)).squeeze(-1)  # (N,)
+        return xy, logabsdet
+    
+    def forward(self, xy: torch.Tensor):
+        if xy.shape[-1] != 2:
+            raise ValueError("Expected coordinates with last dim = 2.")
+        # compute the log absolute determinent of transforming xy to rtheta
+        rtheta, logabsdet_1 = self._cart_to_polar(xy)  # (N,2), (N,)
+        rtheta_transformed, logabsdet_mid = self.cubeflow.forward(rtheta)  # (N,2), (N,)
+        xy_transformed, logabsdet_2 = self._polar_to_cart(rtheta_transformed)  # (N,2), (N,)
+        return xy_transformed, logabsdet_1 + logabsdet_mid + logabsdet_2
+
+
+    def inverse(self, xy: torch.Tensor):
+        if xy.shape[-1] != 2:
+            raise ValueError("Expected xy with last dim = 2.")
+        rtheta, logabsdet_1 = self._cart_to_polar(xy)  # (N,2), (N,)
+        rtheta_inv, logabsdet_mid = self.cubeflow.inverse(rtheta)  # (N,2), (N,)
+        xy_inv, logabsdet_2 = self._polar_to_cart(rtheta_inv)  # (N,2), (N,)
+        return xy_inv, logabsdet_1 + logabsdet_mid + logabsdet_2
