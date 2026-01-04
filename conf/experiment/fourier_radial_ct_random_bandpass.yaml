@@ -8,7 +8,7 @@ defaults:
 
 _indices: [0, 1, 2, 3, 4, 5, 6, 7, 8]
 
-function_generatord:
+function_generator:
   radial: true
   
 initial_basis_indices: ${_indices}
