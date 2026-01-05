@@ -14,6 +14,10 @@ class TentBasis(BaseFunction):
     ):
         self.total_rows = total_rows
         self.total_cols = total_cols 
+        super().__init__(
+            num_basis_elements=total_rows * total_cols,
+        )
+
     
     def sample_from_domain(
         self,
@@ -35,7 +39,7 @@ class TentBasis(BaseFunction):
 
         return (tent * scale)
 
-    def get(self, xy: torch.Tensor, idx: int):
+    def _get(self, xy: torch.Tensor, idx: int):
         row = idx // self.total_cols
         col = idx % self.total_cols
         return self.__call__(xy, row=row, col=col)

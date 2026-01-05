@@ -12,6 +12,7 @@ import wandb
 from basis_learning.diffeomorphisms.base import Diffeomorphism
 from basis_learning.bases.base import BaseFunction
 from basis_learning.datasets import FunctionClassGenerator
+from basis_learning.utils import gram_projection
 
 # Add resolver for hydra
 OmegaConf.register_new_resolver("eval", eval)
@@ -28,11 +29,10 @@ def train(
     f_gen: FunctionClassGenerator,
     n_functions: int | None,
     initial_basis: BaseFunction,
-    initial_basis_idx: list,
     wandb_enabled: bool,
     resample_grid_frequency: int,
     batch_size: int,
-    unbiased_inner_product_estimator: bool = False,
+    gram_matrix_n_samples: int,
     loss_smoothing_alpha: float = 0.99,
 ):
     diffeomorphism = diffeomorphism.to(device)
@@ -41,10 +41,15 @@ def train(
 
     smoothed_loss = None
     loss_history = []
+    initial_basis.compute_gram_matrix(
+        n_domain_samples=gram_matrix_n_samples, 
+        device=device,
+    )
     
     pbar = tqdm(range(n_epochs))
     coords = initial_basis.sample_from_domain(domain_sample_size).to(device)  # shape (N, d)
     optimizer.zero_grad()
+    losses_temp_history = []
 
     for epoch_i in pbar:
         if n_functions is None:
@@ -56,28 +61,24 @@ def train(
             coords = initial_basis.sample_from_domain(domain_sample_size).to(device) # shape (N, d)
 
         vals = f_gen(coords, seed=seed)  # shape (N,)
-
-        idx_ = torch.randint(0, len(initial_basis_idx), (1,)).item()
-        idx = initial_basis_idx[idx_]
-        deformed_coords, logabsdet = diffeomorphism.forward(coords)
-        deformed_vals = initial_basis.get(deformed_coords, idx).to(device)
-        deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
-
-        # NOTE: an estimator for <e_i, f> = E[e_i(omega) . f(omega)]
-        rv = deformed_vals * vals
-        if unbiased_inner_product_estimator:
-            sum_of_squares = torch.sum(rv * rv)
-            square_of_sum = rv.sum() * rv.sum()
-            loss = - (square_of_sum - sum_of_squares) / (rv.shape[0] * (rv.shape[0] - 1)) / batch_size
-        else:
-            loss = (-rv.mean() ** 2) / batch_size 
+        projection = gram_projection(
+            coords=coords,
+            vals=vals,
+            diffeomorphism=diffeomorphism,
+            basis=initial_basis,
+            device=device,
+        )
+        loss = torch.mean((projection - vals) ** 2) / batch_size
+        losses_temp_history.append(loss.item())
 
         loss.backward()
         if (epoch_i + 1) % batch_size == 0:
+            loss_item = sum(losses_temp_history)
+            losses_temp_history = []
             if smoothed_loss is None:
-                smoothed_loss = loss.item()
+                smoothed_loss = loss_item
             else:
-                smoothed_loss = loss_smoothing_alpha * smoothed_loss + (1 - loss_smoothing_alpha) * loss.item()
+                smoothed_loss = loss_smoothing_alpha * smoothed_loss + (1 - loss_smoothing_alpha) * loss_item
             if wandb_enabled:
                 wandb.log({"train/loss": smoothed_loss})
             pbar.set_postfix({'loss': smoothed_loss})
@@ -140,9 +141,8 @@ def main(conf: DictConfig):
         n_functions=conf.get("n_functions", None),
         initial_basis=initial_basis,
         batch_size=conf.batch_size,
-        initial_basis_idx=conf.initial_basis_indices,
+        gram_matrix_n_samples=conf.gram_matrix_n_samples,
         resample_grid_frequency=conf.resample_grid_frequency,
-        unbiased_inner_product_estimator=conf.unbiased_inner_product_estimator,
         loss_smoothing_alpha=conf.get("loss_smoothing_alpha", 0.99),
         wandb_enabled=conf.wandb.enabled,
     )

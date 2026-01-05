@@ -4,6 +4,7 @@ import math
 import numpy as np
 import torch
 from basis_learning.diffeomorphisms.base import Diffeomorphism
+from basis_learning.bases.base import BaseFunction
 
 def sample_from_disk(N: int):
     u = torch.rand(N, 2)
@@ -35,3 +36,26 @@ def deform_vals(xy, diffeomorphism: Diffeomorphism, basis_fn: callable, **kwargs
     transformed_xy, logabsdet = diffeomorphism.forward(xy)
     basis_fn_vals = basis_fn(transformed_xy, **kwargs)
     return basis_fn_vals * torch.exp(0.5 * logabsdet)
+
+def gram_projection(
+    coords: torch.Tensor,
+    vals: torch.Tensor,
+    diffeomorphism: Diffeomorphism,
+    basis: BaseFunction,
+    device: torch.device,
+):
+    deformed_coords, logabsdet = diffeomorphism.forward(coords)
+    inner_products = []
+    all_deformed_vals = []
+    for idx in range(basis.num_basis_elements):
+        deformed_vals = basis.get(deformed_coords, idx).to(device)
+        deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
+        all_deformed_vals.append(deformed_vals)
+        inner_product = torch.mean(deformed_vals * vals)
+        inner_products.append(inner_product)
+    all_deformed_vals = torch.stack(all_deformed_vals, dim=0)  # shape (n_basis, N)
+    inner_products = torch.stack(inner_products)  # shape (n_basis,)
+    gram_matrix_inv = basis.gram_matrix_inv.to(device)
+    coeffs = gram_matrix_inv @ inner_products  # shape (n_basis,)
+    projection = torch.sum(coeffs[:, None] * all_deformed_vals, dim=0)  # shape (N,)
+    return projection

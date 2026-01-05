@@ -14,12 +14,13 @@ class IsometryCheck(Callback):
     def __init__(
         self,
         basis: BaseFunction,
-        indices: list[int],
         frequency: int,
         density: int,
     ):
         self.basis = basis
-        self.indices = indices
+        if self.basis.num_basis_elements is None:
+            raise ValueError("IsometryCheck requires finite basis.")
+        self.basis.compute_gram_matrix(n_domain_samples=10000, device='cpu')
         self.frequency = frequency
         self.density = density
 
@@ -39,7 +40,7 @@ class IsometryCheck(Callback):
 
         with torch.no_grad():
             n_cols = 2
-            n_rows = len(self.indices)
+            n_rows = self.basis.num_basis_elements
 
             fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
             if n_rows == 1:
@@ -48,7 +49,7 @@ class IsometryCheck(Callback):
             coords = self.basis.sample_from_domain(self.density).to(device)
             deformed_coords, logabsdet = diffeomorphism.forward(coords)
 
-            for i, idx in enumerate(self.indices):
+            for i, idx in enumerate(range(self.basis.num_basis_elements)):
                 if coords.shape[1] != 2:
                     raise ValueError("VisualizeReconstruction only supports 2D bases.")
 

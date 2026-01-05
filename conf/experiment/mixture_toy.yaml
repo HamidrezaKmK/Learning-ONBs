@@ -1,32 +1,29 @@
 # @package _global_
 defaults:
-  - override /function_generator@function_generator: fourier_radial # the forward problem
-  - override /diffeomorphism@diffeomorphism: ct_radial
-  - override /bases@initial_basis: fourier_radial
+  - override /diffeomorphism@diffeomorphism: kumaraswamy
+  - override /bases@initial_basis: mix_toy
   - override /wandb@wandb: enabled
   - _self_
 
-_indices: [0, 1, 2, 3, 4]
-
-initial_basis:
-  basis_indices: ${_indices}
 function_generator:
+  _target_: basis_learning.datasets.BasisRandomGenerator
   basis:
-    basis_indices: ${_indices}
+    _target_: basis_learning.bases.FourierBasis
+    basis_indices: [0, 1, 2, 3]
+
 
 # training hyperparameters
-n_epochs: 500_000
+n_epochs: 50_000_000
 domain_sample_size: 5000
 n_functions: 1000
 loss_smoothing_alpha: 0.99
 
-batch_size: 100
 callbacks:
   reconstruction_visualization:
     _target_: basis_learning.callbacks.VisualizeReconstruction
     basis: ${initial_basis}
     f_gen: ${function_generator}
-    seeds: [0, 1, 2]
+    seeds: [10, 20, 30]
     frequency: 1000
     density: 1000_00
   isometry_check:
@@ -34,16 +31,9 @@ callbacks:
     basis: ${initial_basis}
     frequency: 1000
     density: 1000_00
-  velocity_field:
-    _target_: basis_learning.callbacks.VisualizeVelocityField
-    basis: ${initial_basis}
-    frequency: 1000
-    timesteps: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-    density: 1000
-    viz_magnitude: 10.0
 
 # Add tags so that it is easier to filter the experiments in the W&B dashboard
 wandb:
   tags:
-    experiment: fourier_radial
+    experiment: fourier_2d
     task: reconstruction

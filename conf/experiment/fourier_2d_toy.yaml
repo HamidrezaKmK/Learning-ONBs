@@ -7,9 +7,12 @@ defaults:
   - _self_
 
 _indices: [0, 1, 2, 3, 4, 5]
-function_generator:
+
+initial_basis:
   basis_indices: ${_indices}
-initial_basis_indices: ${_indices}
+function_generator: 
+  basis:
+    basis_indices: ${_indices}
 
 # training hyperparameters
 n_epochs: 50_000_000
@@ -21,7 +24,6 @@ callbacks:
   reconstruction_visualization:
     _target_: basis_learning.callbacks.VisualizeReconstruction
     basis: ${initial_basis}
-    indices: ${_indices}
     f_gen: ${function_generator}
     seeds: [10, 20, 30]
     frequency: 1000
@@ -29,7 +31,6 @@ callbacks:
   isometry_check:
     _target_: basis_learning.callbacks.IsometryCheck
     basis: ${initial_basis}
-    indices: ${_indices}
     frequency: 1000
     density: 1000_00
 

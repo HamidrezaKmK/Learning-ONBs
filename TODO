@@ -1,5 +1,3 @@
-[] Get a sense of the variance of the gradient and the loss without running an optimization step.
-
 [] Compute the deformation outside of the for loop and 
     just use the projection thingy instead of adding a uniform
 
@@ -11,5 +9,4 @@
 
 [] Look up Taylor Green vortex fields
 
-[] (Maybe) Think about turning my orthonormal basis into a Wavelet and read about wavelets more in general
 [] Think about applications where there is a dataset we want to represent

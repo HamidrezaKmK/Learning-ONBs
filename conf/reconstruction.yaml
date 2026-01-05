@@ -8,9 +8,6 @@ defaults:
   - override hydra/hydra_logging: none # hack to fix the logging code
   - override hydra/job_logging: none # hack to fix the logging code
 
-initial_basis_indices: [0, 1, 3, 4, 5]
-unbiased_inner_product_estimator: false
-
 # training hyperparameters
 n_epochs: 5000_00
 domain_sample_size: 100
@@ -26,6 +23,8 @@ scheduler: null
   # step_size: 50
   # gamma: 0.5
   # _partial_: true
+
+gram_matrix_n_samples: 100_000
 
 n_functions: 1000
 batch_size: 100

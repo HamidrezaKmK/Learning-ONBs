@@ -82,10 +82,8 @@ class BasisRandomGenerator(FunctionClassGenerator):
     def __init__(
         self,
         basis: BaseFunction,
-        basis_indices: List[int],
     ):
         self.basis = basis
-        self.basis_indices = basis_indices
     
     def __call__(self, xy: torch.Tensor, seed: int):
         device = xy.device
@@ -95,12 +93,15 @@ class BasisRandomGenerator(FunctionClassGenerator):
         rng = torch.Generator().manual_seed(seed)
 
         # sample random weights and combine
-        num_basis_fns = len(self.basis_indices)
+        num_basis_fns = self.basis.num_basis_elements
+        if num_basis_fns is None:
+            raise ValueError("BasisRandomGenerator requires finite basis.")
+        
         weights = torch.randn(size=(num_basis_fns,), generator=rng) / math.sqrt(num_basis_fns)
         weights = weights.to(device)
         # return a weighted combination of basis functions
         all_e = []
-        for idx in self.basis_indices:
+        for idx in range(num_basis_fns):
             fn_val = self.basis.get(xy, idx)
             all_e.append(fn_val)
         all_e = torch.stack(all_e, dim=0)

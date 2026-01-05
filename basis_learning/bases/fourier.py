@@ -121,7 +121,7 @@ class FourierBasis(BaseFunction):
 
         raise IndexError(f"idx={idx} out of range for computed ring n={n}")
 
-    def get(self, xy: torch.Tensor, idx: int):
+    def _get(self, xy: torch.Tensor, idx: int):
         kx, ky, kind = self._idx_to_params(idx)
         return self.__call__(xy, kx=kx, ky=ky, kind=kind)
 

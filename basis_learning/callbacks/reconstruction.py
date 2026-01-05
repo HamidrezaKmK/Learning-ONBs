@@ -7,6 +7,7 @@ from .base import Callback
 from basis_learning.bases.base import BaseFunction
 from basis_learning.datasets import FunctionClassGenerator
 from basis_learning.diffeomorphisms.base import Diffeomorphism
+from basis_learning.utils import gram_projection
 
 class VisualizeReconstruction(Callback):
     """
@@ -17,14 +18,15 @@ class VisualizeReconstruction(Callback):
     def __init__(
         self,
         basis: BaseFunction,
-        indices: list[int],
         f_gen: FunctionClassGenerator,
         seeds: list[int],
         frequency: int,
         density: int,
     ):
         self.basis = basis
-        self.indices = indices
+        if self.basis.num_basis_elements is None:
+            raise ValueError("VisualizeReconstruction requires finite basis.")
+        self.basis.compute_gram_matrix(n_domain_samples=10000, device='cpu')
         self.f_gen = f_gen
         self.seeds = seeds
         self.frequency = frequency
@@ -54,15 +56,13 @@ class VisualizeReconstruction(Callback):
                 if coords.shape[1] != 2:
                     raise ValueError("VisualizeReconstruction only supports 2D bases.")
                 vals = self.f_gen(coords, seed=seed).to(device)
-
-                proj = torch.zeros_like(vals, device=device)
-                for idx in self.indices:
-                    deformed_coords, logabsdet = diffeomorphism.forward(coords)
-                    deformed_vals = self.basis.get(deformed_coords, idx).to(device)
-                    deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
-
-                    inner_product = torch.mean(deformed_vals * vals)
-                    proj += inner_product * deformed_vals
+                proj = gram_projection(
+                    coords=coords,
+                    vals=vals,
+                    basis=self.basis,
+                    diffeomorphism=diffeomorphism,
+                    device=device,
+                )
 
                 error = torch.abs(vals - proj)
                 norm2 = torch.mean(error * error).item()

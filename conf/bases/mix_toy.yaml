@@ -1,0 +1,9 @@
+_target_: basis_learning.bases.MixtureBasis
+bases:
+  fourier:
+    _target_: basis_learning.bases.FourierBasis
+    num_basis_elements: 6
+  tent_basis:
+    _target_: basis_learning.bases.TentBasis
+    total_rows: 2
+    total_cols: 2

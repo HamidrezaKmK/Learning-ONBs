@@ -1,4 +1,3 @@
 _target_: basis_learning.datasets.BasisRandomGenerator
 basis: 
   _target_: basis_learning.bases.RadialFourierBasis
-basis_indices: [0, 1, 3, 4, 5]
