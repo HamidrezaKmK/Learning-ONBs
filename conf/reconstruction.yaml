@@ -11,7 +11,6 @@ defaults:
 # training hyperparameters
 n_epochs: 5000_00
 domain_sample_size: 100
-resample_grid_frequency: 1000
 
 optimizer:
   _target_: torch.optim.Adam
@@ -19,14 +18,9 @@ optimizer:
   _partial_: true
 
 scheduler: null
-  # _target_: torch.optim.lr_scheduler.StepLR
-  # step_size: 50
-  # gamma: 0.5
-  # _partial_: true
 
 gram_matrix_n_samples: 100_000
 
 n_functions: 1000
 batch_size: 100
-
 loss_smoothing_alpha: 0.99

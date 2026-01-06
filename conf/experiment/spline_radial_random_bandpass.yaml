@@ -1,18 +1,14 @@
 # @package _global_
+# random bandpass learning using a spline flow on the radial domain
 defaults:
-  - override /function_generator@function_generator: fourier_2d # the forward problem
-  - override /diffeomorphism@diffeomorphism: kumaraswamy
-  - override /bases@initial_basis: fourier_2d
+  - override /function_generator@function_generator: random_bandpass
+  - override /diffeomorphism@diffeomorphism: spline_flow_radial
+  - override /bases@initial_basis: mix1_radial
   - override /wandb@wandb: enabled
   - _self_
 
-_indices: [0, 1, 2, 3, 4, 5]
-
-initial_basis:
-  basis_indices: ${_indices}
-function_generator: 
-  basis:
-    basis_indices: ${_indices}
+function_generator:
+  radial: true
 
 # training hyperparameters
 n_epochs: 50_000_000
@@ -26,16 +22,16 @@ callbacks:
     basis: ${initial_basis}
     f_gen: ${function_generator}
     seeds: [10, 20, 30]
-    frequency: 1000
+    frequency: 5000
     density: 1000_00
   isometry_check:
     _target_: basis_learning.callbacks.IsometryCheck
     basis: ${initial_basis}
-    frequency: 1000
+    frequency: 5000
     density: 1000_00
 
 # Add tags so that it is easier to filter the experiments in the W&B dashboard
 wandb:
   tags:
-    experiment: fourier_2d
+    experiment: spline_radial_random_bandpass
     task: reconstruction

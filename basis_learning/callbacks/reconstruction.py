@@ -56,11 +56,13 @@ class VisualizeReconstruction(Callback):
                 if coords.shape[1] != 2:
                     raise ValueError("VisualizeReconstruction only supports 2D bases.")
                 vals = self.f_gen(coords, seed=seed).to(device)
+                warped_coords, logabsdets = diffeomorphism.forward(coords)
                 proj = gram_projection(
                     coords=coords,
+                    warped_coords=warped_coords,
+                    logabsdets=logabsdets,
                     vals=vals,
                     basis=self.basis,
-                    diffeomorphism=diffeomorphism,
                     device=device,
                 )
 

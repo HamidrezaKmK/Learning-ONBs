@@ -39,17 +39,17 @@ def deform_vals(xy, diffeomorphism: Diffeomorphism, basis_fn: callable, **kwargs
 
 def gram_projection(
     coords: torch.Tensor,
+    warped_coords: torch.Tensor,
+    logabsdets: torch.Tensor,
     vals: torch.Tensor,
-    diffeomorphism: Diffeomorphism,
     basis: BaseFunction,
     device: torch.device,
 ):
-    deformed_coords, logabsdet = diffeomorphism.forward(coords)
     inner_products = []
     all_deformed_vals = []
     for idx in range(basis.num_basis_elements):
-        deformed_vals = basis.get(deformed_coords, idx).to(device)
-        deformed_vals = deformed_vals * torch.exp(0.5 * logabsdet)
+        deformed_vals = basis.get(warped_coords, idx).to(device)
+        deformed_vals = deformed_vals * torch.exp(0.5 * logabsdets)
         all_deformed_vals.append(deformed_vals)
         inner_product = torch.mean(deformed_vals * vals)
         inner_products.append(inner_product)

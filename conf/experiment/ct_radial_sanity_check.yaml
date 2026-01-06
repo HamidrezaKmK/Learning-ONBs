@@ -1,21 +1,19 @@
 # @package _global_
+# learning the identity map using a CNF on the radial domain
 defaults:
-  - override /function_generator@function_generator: fourier_radial # the forward problem
   - override /diffeomorphism@diffeomorphism: ct_radial
-  - override /bases@initial_basis: fourier_radial
+  - override /bases@initial_basis: mix1_radial
   - override /wandb@wandb: enabled
   - _self_
 
-_indices: [0, 1, 2, 3, 4]
-
-initial_basis:
-  basis_indices: ${_indices}
 function_generator:
-  basis:
-    basis_indices: ${_indices}
+  basis: ${initial_basis}
+
+optimizer:
+  lr: 0.001
 
 # training hyperparameters
-n_epochs: 500_000
+n_epochs: 500_00
 domain_sample_size: 5000
 n_functions: 1000
 loss_smoothing_alpha: 0.99
@@ -27,17 +25,17 @@ callbacks:
     basis: ${initial_basis}
     f_gen: ${function_generator}
     seeds: [0, 1, 2]
-    frequency: 1000
+    frequency: 500
     density: 1000_00
   isometry_check:
     _target_: basis_learning.callbacks.IsometryCheck
     basis: ${initial_basis}
-    frequency: 1000
+    frequency: 500
     density: 1000_00
   velocity_field:
     _target_: basis_learning.callbacks.VisualizeVelocityField
     basis: ${initial_basis}
-    frequency: 1000
+    frequency: 500
     timesteps: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
     density: 1000
     viz_magnitude: 10.0
@@ -45,5 +43,5 @@ callbacks:
 # Add tags so that it is easier to filter the experiments in the W&B dashboard
 wandb:
   tags:
-    experiment: fourier_radial
+    experiment: ct_radial_sanity_check
     task: reconstruction

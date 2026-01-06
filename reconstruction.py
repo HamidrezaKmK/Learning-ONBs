@@ -30,7 +30,6 @@ def train(
     n_functions: int | None,
     initial_basis: BaseFunction,
     wandb_enabled: bool,
-    resample_grid_frequency: int,
     batch_size: int,
     gram_matrix_n_samples: int,
     loss_smoothing_alpha: float = 0.99,
@@ -46,33 +45,34 @@ def train(
         device=device,
     )
     
-    pbar = tqdm(range(n_epochs))
-    coords = initial_basis.sample_from_domain(domain_sample_size).to(device)  # shape (N, d)
+    pbar = tqdm(range(n_epochs))    
     optimizer.zero_grad()
-    losses_temp_history = []
 
+    losses_temp_history = []
     for epoch_i in pbar:
         if n_functions is None:
             seed = epoch_i
         else:
             seed = torch.randint(0, n_functions, (1,)).item()
 
-        if (epoch_i + 1) % resample_grid_frequency == 0:
+        if epoch_i % batch_size == 0:
             coords = initial_basis.sample_from_domain(domain_sample_size).to(device) # shape (N, d)
-
+            deformed_coords, logabsdets = diffeomorphism.forward(coords)
+        
         vals = f_gen(coords, seed=seed)  # shape (N,)
         projection = gram_projection(
             coords=coords,
+            warped_coords=deformed_coords,
+            logabsdets=logabsdets,
             vals=vals,
-            diffeomorphism=diffeomorphism,
             basis=initial_basis,
             device=device,
         )
         loss = torch.mean((projection - vals) ** 2) / batch_size
         losses_temp_history.append(loss.item())
-
-        loss.backward()
-        if (epoch_i + 1) % batch_size == 0:
+        retain = (epoch_i + 1) % batch_size != 0
+        loss.backward(retain_graph=retain)
+        if not retain:
             loss_item = sum(losses_temp_history)
             losses_temp_history = []
             if smoothed_loss is None:
@@ -142,7 +142,6 @@ def main(conf: DictConfig):
         initial_basis=initial_basis,
         batch_size=conf.batch_size,
         gram_matrix_n_samples=conf.gram_matrix_n_samples,
-        resample_grid_frequency=conf.resample_grid_frequency,
         loss_smoothing_alpha=conf.get("loss_smoothing_alpha", 0.99),
         wandb_enabled=conf.wandb.enabled,
     )
