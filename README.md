@@ -28,12 +28,19 @@ We use a combination of [Weights & Biases](https://docs.wandb.ai/models/quicksta
 
 ## Reconstruction
 
-The `reconstruction.py` script is the first script that actually optimizes a diffeomorphism for the tasks of reconstruction. In this reconstruction task, a forward problem is defined where functions are sampled from an arbitrary linear combination of a set of basis functions that are unknown, and the training objective is to mainimize the reconstruction loss, or maximize the projection magnitude equivalently. 
-
-Run the following script as an example:
+The `reconstruction.py` script is the first script that actually optimizes a diffeomorphism for the tasks of reconstruction. Here are a few experiment templates:
 
 ```bash
-python reconstruction.py +experiment=fourier_2d_toy
+python reconstruction.py +experiment=kumaraswamy_sanity_check # (1)
+python reconstruction.py +experiment=spline_sanity_check # (2)
+python reconstruction.py +experiment=ct_radial_sanity_check # (3)
+python reconstruction.py +experiment=spline_radial_random_bandpass
 ```
+
+1. A very simple sanity check where a Kumaraswamy diffeomorphism is trained to match a dataset generated from a random combination of the initial basis. The optimal solution to this problem is the identity diffeomorphism.
+2. Another sanity check similar to (1) where a spline flow is trained instead of a Kumaraswamy map. This is to sanity check the spline flow.
+3. Similar to (1) and (2) but with a continuous-time normalizing flow (CNF) instead. The optimal map would have zero velocity fields, i.e., the identity flow map. Another change compared to (1) and (2) is that here a basis on the unit disk is used.
+4. In this experiment a spline flow is trained to match a synthetic dataset of trigonomic functions (the one described in the reconstruction notebook) on the radial basis.
+5. Similar to (4) but rather than using a spline flow we use a CNF.
 
 **Note:** For the reconstruction code to properly work, the batch size typically needs to be set to a large value.
