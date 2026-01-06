@@ -34,7 +34,8 @@ The `reconstruction.py` script is the first script that actually optimizes a dif
 python reconstruction.py +experiment=kumaraswamy_sanity_check # (1)
 python reconstruction.py +experiment=spline_sanity_check # (2)
 python reconstruction.py +experiment=ct_radial_sanity_check # (3)
-python reconstruction.py +experiment=spline_radial_random_bandpass
+python reconstruction.py +experiment=spline_radial_random_bandpass #(4)
+python reconstruction.py +experiment=ct_radial_random_bandpass # (5)
 ```
 
 1. A very simple sanity check where a Kumaraswamy diffeomorphism is trained to match a dataset generated from a random combination of the initial basis. The optimal solution to this problem is the identity diffeomorphism.
