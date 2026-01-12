@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import wandb
 from .base import Callback
-from basis_learning.bases.base import BaseFunction
-from basis_learning.diffeomorphisms import CTDiffeomorphism
+from infidictionary.dictionaries.base import InfiDictionary
+from infidictionary.diffeomorphisms import CTDiffeomorphism
 
 class VisualizeVelocityField(Callback):
     """
@@ -14,7 +14,7 @@ class VisualizeVelocityField(Callback):
     """
     def __init__(
         self,
-        basis: BaseFunction,
+        dictionary: InfiDictionary,
         timesteps: list[float],
         frequency: int,
         density: int,
@@ -23,7 +23,7 @@ class VisualizeVelocityField(Callback):
         self.timesteps = timesteps
         self.frequency = frequency
         self.density = density
-        self.basis = basis
+        self.dictionary = dictionary
         self.viz_magnitude = viz_magnitude
         if len(timesteps) != 9:
             raise ValueError("VisualizeVelocityField requires exactly 9 timesteps.")
@@ -42,7 +42,7 @@ class VisualizeVelocityField(Callback):
         N = self.density
         with torch.no_grad():
             fig, axes = plt.subplots(3, 3, figsize=(5 * 3, 4 * 3))
-            xy = self.basis.sample_from_domain(N).to(device)
+            xy = self.dictionary.sample_from_domain(N).to(device)
 
             t = torch.tensor(self.timesteps, device=device)
             t, _ = torch.sort(t)

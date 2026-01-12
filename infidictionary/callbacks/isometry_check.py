@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import wandb
 from .base import Callback
-from basis_learning.bases.base import BaseFunction
-from basis_learning.diffeomorphisms.base import Diffeomorphism
+from infidictionary.dictionaries.base import InfiDictionary
+from infidictionary.diffeomorphisms.base import Diffeomorphism
 
 class IsometryCheck(Callback):
     """
@@ -13,14 +13,14 @@ class IsometryCheck(Callback):
     """
     def __init__(
         self,
-        basis: BaseFunction,
+        dictionary: InfiDictionary,
         frequency: int,
         density: int,
     ):
-        self.basis = basis
-        if self.basis.num_basis_elements is None:
-            raise ValueError("IsometryCheck requires finite basis.")
-        self.basis.compute_gram_matrix(n_domain_samples=10000, device='cpu')
+        self.dictionary = dictionary
+        if self.dictionary.num_atoms is None:
+            raise ValueError("IsometryCheck requires finite dictionary.")
+        self.dictionary.compute_gram_matrix(n_domain_samples=10000, device='cpu')
         self.frequency = frequency
         self.density = density
 
@@ -40,23 +40,23 @@ class IsometryCheck(Callback):
 
         with torch.no_grad():
             n_cols = 2
-            n_rows = self.basis.num_basis_elements
+            n_rows = self.dictionary.num_atoms
 
             fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
             if n_rows == 1:
                 axes = axes.reshape(1, -1)  # make indexing consistent: axes[i, j]
 
-            coords = self.basis.sample_from_domain(self.density).to(device)
+            coords = self.dictionary.sample_from_domain(self.density).to(device)
             deformed_coords, logabsdet = diffeomorphism.forward(coords)
 
-            for i, idx in enumerate(range(self.basis.num_basis_elements)):
+            for i, idx in enumerate(range(self.dictionary.num_atoms)):
                 if coords.shape[1] != 2:
-                    raise ValueError("VisualizeReconstruction only supports 2D bases.")
+                    raise ValueError("VisualizeReconstruction only supports 2D dictionaries.")
 
-                vals_original = self.basis.get(coords, idx).to(device)
+                vals_original = self.dictionary.get_atom(coords, idx).to(device)
                 all_vals_original.append(vals_original.cpu())
 
-                vals_deformed = self.basis.get(deformed_coords, idx).to(device)
+                vals_deformed = self.dictionary.get_atom(deformed_coords, idx).to(device)
                 vals_deformed = vals_deformed * torch.exp(0.5 * logabsdet)
                 all_vals_deformed.append(vals_deformed.cpu())
 

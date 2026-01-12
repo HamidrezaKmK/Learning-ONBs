@@ -4,29 +4,29 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import wandb
 from .base import Callback
-from basis_learning.bases.base import BaseFunction
-from basis_learning.datasets import FunctionClassGenerator
-from basis_learning.diffeomorphisms.base import Diffeomorphism
-from basis_learning.utils import gram_projection
+from infidictionary.dictionaries.base import InfiDictionary
+from infidictionary.datasets import FunctionClassGenerator
+from infidictionary.diffeomorphisms.base import Diffeomorphism
+from infidictionary.utils import gram_projection
 
 class VisualizeReconstruction(Callback):
     """
     Visualize len(seeds) reconstruction of functions generated
-    from the given FunctionClassGenerator using the provided basis functions
+    from the given FunctionClassGenerator using the provided dictionary functions
     and diffeomorphism.
     """
     def __init__(
         self,
-        basis: BaseFunction,
+        dictionary: InfiDictionary,
         f_gen: FunctionClassGenerator,
         seeds: list[int],
         frequency: int,
         density: int,
     ):
-        self.basis = basis
-        if self.basis.num_basis_elements is None:
-            raise ValueError("VisualizeReconstruction requires finite basis.")
-        self.basis.compute_gram_matrix(n_domain_samples=10000, device='cpu')
+        self.dictionary = dictionary
+        if self.dictionary.num_atoms is None:
+            raise ValueError("VisualizeReconstruction requires finite dictionary.")
+        self.dictionary.compute_gram_matrix(n_domain_samples=10000, device='cpu')
         self.f_gen = f_gen
         self.seeds = seeds
         self.frequency = frequency
@@ -52,9 +52,9 @@ class VisualizeReconstruction(Callback):
                 axes = axes.reshape(1, -1)  # make indexing consistent: axes[i, j]
 
             for i, seed in enumerate(self.seeds):
-                coords = self.basis.sample_from_domain(self.density).to(device)
+                coords = self.dictionary.sample_from_domain(self.density).to(device)
                 if coords.shape[1] != 2:
-                    raise ValueError("VisualizeReconstruction only supports 2D bases.")
+                    raise ValueError("VisualizeReconstruction only supports 2D dictionaries.")
                 vals = self.f_gen(coords, seed=seed).to(device)
                 warped_coords, logabsdets = diffeomorphism.forward(coords)
                 proj = gram_projection(
@@ -62,7 +62,7 @@ class VisualizeReconstruction(Callback):
                     warped_coords=warped_coords,
                     logabsdets=logabsdets,
                     vals=vals,
-                    basis=self.basis,
+                    initial_dictionary=self.dictionary,
                     device=device,
                 )
 

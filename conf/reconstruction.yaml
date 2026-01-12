@@ -1,7 +1,7 @@
 defaults:
   - function_generator: fourier_2d # the forward problem
   - diffeomorphism: kumaraswamy
-  - bases@initial_basis: fourier_2d
+  - dictionaries@initial_atoms: fourier_2d
   - hydra: default
   - wandb: disabled # set to enabled for wandb logging
   - _self_

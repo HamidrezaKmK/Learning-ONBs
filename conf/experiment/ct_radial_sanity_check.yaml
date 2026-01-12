@@ -2,12 +2,12 @@
 # learning the identity map using a CNF on the radial domain
 defaults:
   - override /diffeomorphism@diffeomorphism: ct_radial
-  - override /bases@initial_basis: mix1_radial
+  - override /dictionaries@initial_atoms: mix1_radial
   - override /wandb@wandb: enabled
   - _self_
 
 function_generator:
-  basis: ${initial_basis}
+  dictionary: ${initial_atoms}
 
 optimizer:
   lr: 0.001
@@ -21,21 +21,21 @@ loss_smoothing_alpha: 0.99
 batch_size: 100
 callbacks:
   reconstruction_visualization:
-    _target_: basis_learning.callbacks.VisualizeReconstruction
-    basis: ${initial_basis}
+    _target_: infidictionary.callbacks.VisualizeReconstruction
+    dictionary: ${initial_atoms}
     f_gen: ${function_generator}
     seeds: [0, 1, 2]
-    frequency: 500
+    frequency: 20
     density: 1000_00
   isometry_check:
-    _target_: basis_learning.callbacks.IsometryCheck
-    basis: ${initial_basis}
-    frequency: 500
+    _target_: infidictionary.callbacks.IsometryCheck
+    dictionary: ${initial_atoms}
+    frequency: 20
     density: 1000_00
   velocity_field:
-    _target_: basis_learning.callbacks.VisualizeVelocityField
-    basis: ${initial_basis}
-    frequency: 500
+    _target_: infidictionary.callbacks.VisualizeVelocityField
+    dictionary: ${initial_atoms}
+    frequency: 20
     timesteps: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
     density: 1000
     viz_magnitude: 10.0

@@ -1,4 +1,4 @@
-name: basis_learning
+name: infidictionary
 channels:
   - pytorch
   - nvidia
@@ -13,6 +13,8 @@ dependencies:
   - tqdm
   - hydra-core
   - wandb
+  - jupyterlab
+  - ipykernel
   - pip:
       - matplotlib
       - python-dotenv
@@ -25,4 +27,5 @@ dependencies:
       - black
       - isort
       - nflows
+      - torchdiffeq
       # TODO: add Jupyter to the environment from the get-go

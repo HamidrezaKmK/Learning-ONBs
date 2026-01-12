@@ -6,7 +6,7 @@
 defaults:
   - override /function_generator@function_generator: fourier_2d
   - override /diffeomorphism@diffeomorphism: kumaraswamy
-  - override /bases@initial_basis: fourier_2d
+  - override /dictionaries@initial_atoms: fourier_2d
   - override /wandb@wandb: enabled
   - _self_
 
@@ -15,11 +15,11 @@ _indices: [0, 1, 2, 3, 4, 5]
 optimizer:
   lr: 0.001
 
-initial_basis:
-  basis_indices: ${_indices}
+initial_atoms:
+  atom_indices: ${_indices}
 function_generator: 
   basis:
-    basis_indices: ${_indices}
+    atom_indices: ${_indices}
 
 # training hyperparameters
 n_epochs: 50_000_000
@@ -29,16 +29,16 @@ loss_smoothing_alpha: 0.99
 
 callbacks:
   reconstruction_visualization:
-    _target_: basis_learning.callbacks.VisualizeReconstruction
-    basis: ${initial_basis}
+    _target_: infidictionary.callbacks.VisualizeReconstruction
+    dictionary: ${initial_atoms}
     f_gen: ${function_generator}
     seeds: [10, 20, 30]
-    frequency: 5000
+    frequency: 100
     density: 1000_00
   isometry_check:
-    _target_: basis_learning.callbacks.IsometryCheck
-    basis: ${initial_basis}
-    frequency: 5000
+    _target_: infidictionary.callbacks.IsometryCheck
+    dictionary: ${initial_atoms}
+    frequency: 100
     density: 1000_00
 
 # Add tags so that it is easier to filter the experiments in the W&B dashboard

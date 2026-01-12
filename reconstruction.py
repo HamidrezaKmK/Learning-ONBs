@@ -9,10 +9,10 @@ from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 import wandb
 
-from basis_learning.diffeomorphisms.base import Diffeomorphism
-from basis_learning.bases.base import BaseFunction
-from basis_learning.datasets import FunctionClassGenerator
-from basis_learning.utils import gram_projection
+from infidictionary.diffeomorphisms.base import Diffeomorphism
+from infidictionary.dictionaries.base import InfiDictionary
+from infidictionary.datasets import FunctionClassGenerator
+from infidictionary.utils import gram_projection
 
 # Add resolver for hydra
 OmegaConf.register_new_resolver("eval", eval)
@@ -28,7 +28,7 @@ def train(
     callbacks: list,
     f_gen: FunctionClassGenerator,
     n_functions: int | None,
-    initial_basis: BaseFunction,
+    initial_atoms: InfiDictionary,
     wandb_enabled: bool,
     batch_size: int,
     gram_matrix_n_samples: int,
@@ -40,7 +40,7 @@ def train(
 
     smoothed_loss = None
     loss_history = []
-    initial_basis.compute_gram_matrix(
+    initial_atoms.compute_gram_matrix(
         n_domain_samples=gram_matrix_n_samples, 
         device=device,
     )
@@ -56,7 +56,7 @@ def train(
             seed = torch.randint(0, n_functions, (1,)).item()
 
         if epoch_i % batch_size == 0:
-            coords = initial_basis.sample_from_domain(domain_sample_size).to(device) # shape (N, d)
+            coords = initial_atoms.sample_from_domain(domain_sample_size).to(device) # shape (N, d)
             deformed_coords, logabsdets = diffeomorphism.forward(coords)
         
         vals = f_gen(coords, seed=seed)  # shape (N,)
@@ -65,7 +65,7 @@ def train(
             warped_coords=deformed_coords,
             logabsdets=logabsdets,
             vals=vals,
-            basis=initial_basis,
+            initial_dictionary=initial_atoms,
             device=device,
         )
         loss = torch.mean((projection - vals) ** 2) / batch_size
@@ -105,7 +105,7 @@ def main(conf: DictConfig):
 
     diffeomorphism = instantiate(conf.diffeomorphism)
     function_generator = instantiate(conf.function_generator)  # dataset of datasets
-    initial_basis = instantiate(conf.initial_basis)
+    initial_atoms = instantiate(conf.initial_atoms)
     
     if conf.wandb.enabled:
         wandb_run_name = str(conf.wandb.run_name) if conf.wandb.run_name is not None else None
@@ -139,7 +139,7 @@ def main(conf: DictConfig):
         callbacks=callbacks,
         f_gen=function_generator,
         n_functions=conf.get("n_functions", None),
-        initial_basis=initial_basis,
+        initial_atoms=initial_atoms,
         batch_size=conf.batch_size,
         gram_matrix_n_samples=conf.gram_matrix_n_samples,
         loss_smoothing_alpha=conf.get("loss_smoothing_alpha", 0.99),

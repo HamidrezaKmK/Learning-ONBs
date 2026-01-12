@@ -1,7 +1,7 @@
 import torch
 
 from abc import ABC, abstractmethod
-from basis_learning.diffeomorphisms.base import Diffeomorphism
+from infidictionary.diffeomorphisms.base import Diffeomorphism
 
 class Callback(ABC):
 

@@ -1,4 +1,4 @@
-_target_: basis_learning.datasets.RandomBandpassGenerator
+_target_: infidictionary.datasets.RandomBandpassGenerator
 omega_lo: 5
 omega_hi: 10
 r_lo: 0.5

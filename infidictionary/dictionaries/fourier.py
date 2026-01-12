@@ -3,8 +3,8 @@ import torch
 import math
 from typing import Literal
 
-from .base import BaseFunction
-from basis_learning.utils import sample_from_disk
+from .base import InfiDictionary
+from .utils import sample_from_disk
 
 def cos1d(k, t):
     return math.sqrt(2.0) * torch.cos(2.0 * math.pi * k * t) if k > 0 else torch.ones_like(t)
@@ -12,7 +12,7 @@ def cos1d(k, t):
 def sin1d(k, t):
     return math.sqrt(2.0) * torch.sin(2.0 * math.pi * k * t) if k > 0 else torch.zeros_like(t)
 
-class FourierBasis(BaseFunction):
+class FourierDictionary(InfiDictionary):
     
     def sample_from_domain(
         self,
@@ -20,7 +20,7 @@ class FourierBasis(BaseFunction):
     ):
         return torch.rand((N, 2))
 
-    def __call__(
+    def _get_atom_by_args(
         self, 
         xy: torch.Tensor, 
         kx: int, 
@@ -54,8 +54,7 @@ class FourierBasis(BaseFunction):
     _KINDS_KX0 = ("cc", "cs")  # kx=0 => fx is constant, only theta varies
     _KINDS_KY0 = ("cc", "sc")  # ky=0 => ftheta is constant, only r varies
 
-    @staticmethod
-    def _idx_to_params(idx: int):
+    def idx_to_params(self, idx: int):
         """
         Map a single global index to (kx, ky, kind) in the requested order.
 
@@ -90,7 +89,7 @@ class FourierBasis(BaseFunction):
 
         # Segment 1: (0,n) with 2 kinds
         if j < 2:
-            kind = FourierBasis._KINDS_KX0[j]
+            kind = FourierDictionary._KINDS_KX0[j]
             return 0, n, kind
 
         j -= 2
@@ -99,7 +98,7 @@ class FourierBasis(BaseFunction):
         # total length = 4n
         if j < 4 * n:
             k = 1 + (j // 4)                         # kx
-            kind = FourierBasis._KINDS_4[j % 4]
+            kind = FourierDictionary._KINDS_4[j % 4]
             return k, n, kind
 
         j -= 4 * n
@@ -109,24 +108,24 @@ class FourierBasis(BaseFunction):
         if n > 1 and j < 4 * (n - 1):
             m = j // 4                               # 0..n-2
             ky = (n - 1) - m
-            kind = FourierBasis._KINDS_4[j % 4]
+            kind = FourierDictionary._KINDS_4[j % 4]
             return n, ky, kind
 
         j -= 4 * max(n - 1, 0)
 
         # Segment 4: (n,0) with 2 kinds
         if j < 2:
-            kind = FourierBasis._KINDS_KY0[j]
+            kind = FourierDictionary._KINDS_KY0[j]
             return n, 0, kind
 
         raise IndexError(f"idx={idx} out of range for computed ring n={n}")
 
-    def _get(self, xy: torch.Tensor, idx: int):
-        kx, ky, kind = self._idx_to_params(idx)
-        return self.__call__(xy, kx=kx, ky=ky, kind=kind)
+    def _get_atom(self, xy: torch.Tensor, idx: int):
+        kx, ky, kind = self.idx_to_params(idx)
+        return self._get_atom_by_args(xy, kx=kx, ky=ky, kind=kind)
 
 
-class RadialFourierBasis(FourierBasis):
+class RadialFourierDictionary(FourierDictionary):
     
     def sample_from_domain(
         self,
@@ -134,7 +133,7 @@ class RadialFourierBasis(FourierBasis):
     ):
         return sample_from_disk(N)
     
-    def __call__(
+    def _get_atom_by_args(
         self, 
         xy: torch.Tensor, 
         kx: int, 
@@ -146,5 +145,5 @@ class RadialFourierBasis(FourierBasis):
         theta = theta / (2 * math.pi)  # normalize to [-1,1]
         
         rtheta = torch.stack([r, theta], dim=1)
-        return super().__call__(rtheta, kx, ky, kind)
+        return super()._get_atom_by_args(rtheta, kx, ky, kind)
 

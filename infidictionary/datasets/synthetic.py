@@ -5,13 +5,15 @@ from typing import List
 
 from abc import ABC, abstractmethod
 
-from basis_learning.bases.base import BaseFunction
+from infidictionary.dictionaries.base import InfiDictionary
 
 class FunctionClassGenerator(ABC):
     
     @abstractmethod
     def __call__(self, coords: torch.Tensor, seed: int):
         raise NotImplementedError("FunctionClassGenerator is an abstract base class.")
+
+    # TODO: add get_batch here
 
 class RandomBandpassGenerator(FunctionClassGenerator):
     def __init__(
@@ -60,7 +62,7 @@ class RandomBandpassGenerator(FunctionClassGenerator):
             seed + torch.randint(0, 10000, (1,), generator=rng_global).item()
         )
     
-        # evaluate basis functions
+        # evaluate dictionary functions
         inner_product_cos = torch.einsum("ij,kj->ik", self.omega_cos.to(device), xy)  # (l_X, N)
         inner_product_cos = inner_product_cos + self.phase_cos.to(device).unsqueeze(1)  # (l_X, N)
         e_cos = torch.cos(inner_product_cos) * self.r_cos.to(device).unsqueeze(1)  # (l_X, N)
@@ -81,9 +83,9 @@ class RandomBandpassGenerator(FunctionClassGenerator):
 class BasisRandomGenerator(FunctionClassGenerator):
     def __init__(
         self,
-        basis: BaseFunction,
+        dictionary: InfiDictionary,
     ):
-        self.basis = basis
+        self.dictionary = dictionary
     
     def __call__(self, xy: torch.Tensor, seed: int):
         device = xy.device
@@ -93,16 +95,16 @@ class BasisRandomGenerator(FunctionClassGenerator):
         rng = torch.Generator().manual_seed(seed)
 
         # sample random weights and combine
-        num_basis_fns = self.basis.num_basis_elements
-        if num_basis_fns is None:
-            raise ValueError("BasisRandomGenerator requires finite basis.")
+        num_dictionary_fns = self.dictionary.num_atoms
+        if num_dictionary_fns is None:
+            raise ValueError("dictionaryRandomGenerator requires finite dictionary.")
         
-        weights = torch.randn(size=(num_basis_fns,), generator=rng) / math.sqrt(num_basis_fns)
+        weights = torch.randn(size=(num_dictionary_fns,), generator=rng) / math.sqrt(num_dictionary_fns)
         weights = weights.to(device)
-        # return a weighted combination of basis functions
+        # return a weighted combination of dictionary functions
         all_e = []
-        for idx in range(num_basis_fns):
-            fn_val = self.basis.get(xy, idx)
+        for idx in range(num_dictionary_fns):
+            fn_val = self.dictionary.get_atom(xy, idx)
             all_e.append(fn_val)
         all_e = torch.stack(all_e, dim=0)
         val = (weights.unsqueeze(1) * all_e).sum(axis=0)

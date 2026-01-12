@@ -11,7 +11,15 @@
     [] https://pubs.aip.org/asa/jasa/article-abstract/141/3/1749/1056459/Dictionary-learning-of-sound-speed-profiles?redirectedFrom=fulltext&utm_source=chatgpt.com
     [] https://jmlr.org/papers/volume17/maggioni16a/maggioni16a.pdf?utm_source=chatgpt.com
 
+[] Refactoring branch todos:
+    [] Rename everything in a better language and make sure everything works as before
+    [] Vectorize the get_atom interfrace and speed up batch training
+    [] Vectorize the function generator and make it batchwise
+    [] Add the gram matrix inverse interface
+    
 [] Add the linear synthesis stuff and the Eulerian view (this is a big update)
+
+[] Add wavelet dictionaries
 
 [] Ablate the stratified sampling for the grid integrals
 [] Use new methods for computing inner products, such as the pullback and

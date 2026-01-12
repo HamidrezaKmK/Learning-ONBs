@@ -2,10 +2,10 @@
 import torch
 import math
 
-from .base import BaseFunction
-from basis_learning.utils import sample_from_disk
+from .base import InfiDictionary
+from .utils import sample_from_disk
 
-class TentBasis(BaseFunction):
+class TentDictionary(InfiDictionary):
 
     def __init__(
         self,
@@ -15,7 +15,7 @@ class TentBasis(BaseFunction):
         self.total_rows = total_rows
         self.total_cols = total_cols 
         super().__init__(
-            num_basis_elements=total_rows * total_cols,
+            num_atoms=total_rows * total_cols,
         )
 
     
@@ -24,9 +24,10 @@ class TentBasis(BaseFunction):
         N: int,
     ):
         return torch.rand((N, 2))
-    
-    def __call__(self, xy: torch.Tensor, row: int, col: int):
 
+    def _get_atom(self, xy: torch.Tensor, idx: int):
+        row = idx // self.total_cols
+        col = idx % self.total_cols
         w = 1.0 / float(self.total_cols)
         h = 1.0 / float(self.total_rows)
         xc = (col + 0.5) * w
@@ -39,12 +40,7 @@ class TentBasis(BaseFunction):
 
         return (tent * scale)
 
-    def _get(self, xy: torch.Tensor, idx: int):
-        row = idx // self.total_cols
-        col = idx % self.total_cols
-        return self.__call__(xy, row=row, col=col)
-
-class RadialTentBasis(TentBasis):
+class RadialTentDictionary(TentDictionary):
 
     def sample_from_domain(
         self,
@@ -52,10 +48,10 @@ class RadialTentBasis(TentBasis):
     ):
         return sample_from_disk(N)
 
-    def __call__(self, xy, row, col):
+    def _get_atom(self, xy, idx):
         r = xy[:, 0]**2 + xy[:, 1]**2
         theta = torch.atan2(xy[:, 1], xy[:, 0]) + math.pi
         theta = theta / (2 * math.pi)
         
         rtheta = torch.stack([r, theta], dim=1)
-        return super().__call__(rtheta, row, col)
+        return super()._get_atom(rtheta, idx)

@@ -1,4 +1,4 @@
-_target_: basis_learning.diffeomorphisms.UnitSquareKumaraswamy
+_target_: infidictionary.diffeomorphisms.UnitSquareKumaraswamy
 d: 2
 eps: 0.000001
 a_min: 1

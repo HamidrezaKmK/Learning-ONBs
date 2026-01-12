@@ -1,0 +1,9 @@
+_target_: infidictionary.dictionaries.MixedDictionary
+atoms:
+  fourier:
+    _target_: infidictionary.dictionaries.FourierDictionary
+    num_atoms: 9
+  tent_basis:
+    _target_: infidictionary.dictionaries.TentDictionary
+    total_rows: 3
+    total_cols: 3

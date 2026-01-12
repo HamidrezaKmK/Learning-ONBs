@@ -1,4 +1,4 @@
-_target_: basis_learning.datasets.BasisRandomGenerator
-basis: 
-  _target_: basis_learning.bases.FourierBasis
+_target_: infidictionary.datasets.BasisRandomGenerator
+dictionary: 
+  _target_: infidictionary.dictionaries.FourierDictionary
 

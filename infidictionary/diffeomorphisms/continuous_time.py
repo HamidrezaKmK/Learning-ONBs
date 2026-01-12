@@ -4,7 +4,7 @@ from torch import nn
 from abc import abstractmethod
 
 from torchdiffeq import odeint, odeint_adjoint
-from basis_learning.diffeomorphisms.base import Diffeomorphism
+from infidictionary.diffeomorphisms.base import Diffeomorphism
 from .utils import SinusoidalTimeEmbedding
 
 class CTDiffeomorphism(Diffeomorphism):
