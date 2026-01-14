@@ -2,6 +2,7 @@ import torch
 
 from abc import ABC, abstractmethod
 from infidictionary.diffeomorphisms.base import Diffeomorphism
+from infidictionary.linear_synthesis import OrthogonalSynthesis
 
 class Callback(ABC):
 
@@ -9,6 +10,7 @@ class Callback(ABC):
     def __call__(
         self,
         epoch: int,
+        orthogonal_synthesis: OrthogonalSynthesis,
         diffeomorphism: Diffeomorphism,
         wandb_enabled: bool,
         device: torch.device,

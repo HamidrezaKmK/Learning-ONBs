@@ -8,6 +8,7 @@ from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.datasets import FunctionClassGenerator
 from infidictionary.diffeomorphisms.base import Diffeomorphism
 from infidictionary.utils import gram_projection
+from infidictionary.linear_synthesis import OrthogonalSynthesis
 
 class VisualizeReconstruction(Callback):
     """
@@ -22,6 +23,7 @@ class VisualizeReconstruction(Callback):
         seeds: list[int],
         frequency: int,
         density: int,
+        n_truncation: int | None = None,
     ):
         self.dictionary = dictionary
         if self.dictionary.num_atoms is None:
@@ -30,11 +32,12 @@ class VisualizeReconstruction(Callback):
         self.seeds = seeds
         self.frequency = frequency
         self.density = density
-
+        self.n_truncation = n_truncation
     
     def __call__(
         self,
         epoch: int,
+        orthogonal_synthesis: OrthogonalSynthesis,
         diffeomorphism: Diffeomorphism,
         wandb_enabled: bool,
         device: torch.device,
@@ -59,6 +62,7 @@ class VisualizeReconstruction(Callback):
                 deformed_vals = self.f_gen(deformed_coords, seed=seed).to(device)
                 atom_indices = torch.arange(self.dictionary.num_atoms, device=device)
                 proj = gram_projection(
+                    orthogonal_synthesis=orthogonal_synthesis,
                     atom_indices=atom_indices,
                     coords=coords,
                     vals=vals.unsqueeze(0),
@@ -67,6 +71,7 @@ class VisualizeReconstruction(Callback):
                     logabsdets=logabsdets,
                     initial_dictionary=self.dictionary,
                     device=device,
+                    n_truncation=self.n_truncation,
                 ).squeeze(0)
 
                 error = torch.abs(vals - proj)

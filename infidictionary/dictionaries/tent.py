@@ -24,21 +24,6 @@ class TentDictionary(InfiDictionary):
         N: int,
     ):
         return torch.rand((N, 2))
-
-    # def _get_atoms(self, xy: torch.Tensor, idx: int):
-    #     row = idx // self.total_cols
-    #     col = idx % self.total_cols
-    #     w = 1.0 / float(self.total_cols)
-    #     h = 1.0 / float(self.total_rows)
-    #     xc = (col + 0.5) * w
-    #     yc = (row + 0.5) * h
-
-    #     u = torch.abs(xy[:, 0] - xc) / (0.5 * w)
-    #     v = torch.abs(xy[:, 1] - yc) / (0.5 * h)
-    #     tent = torch.clamp(1.0 - torch.maximum(u, v), min=0.0)
-    #     scale = math.sqrt(6.0 / (w * h)) 
-
-    #     return (tent * scale)
     
     def _get_atoms(self, xy: torch.Tensor, idx: torch.Tensor):
         # idx: (K,) long tensor of atom indices
@@ -61,6 +46,10 @@ class TentDictionary(InfiDictionary):
         scale = math.sqrt(6.0 / (w * h))
         return tent * scale                                              # (K, N)
 
+    def gram_solve(self, atom_indices: torch.Tensor, inner_products: torch.Tensor):
+        return inner_products[atom_indices]
+
+        
 class RadialTentDictionary(TentDictionary):
 
     def sample_from_domain(

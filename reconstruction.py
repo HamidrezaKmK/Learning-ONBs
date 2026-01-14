@@ -13,6 +13,7 @@ from infidictionary.diffeomorphisms.base import Diffeomorphism
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.datasets import FunctionClassGenerator
 from infidictionary.utils import gram_projection
+from infidictionary.linear_synthesis.base import OrthogonalSynthesis
 
 # Add resolver for hydra
 OmegaConf.register_new_resolver("eval", eval)
@@ -20,6 +21,7 @@ OmegaConf.register_new_resolver("eval", eval)
 
 def train(
     diffeomorphism: Diffeomorphism,
+    orthogonal_synthesis: OrthogonalSynthesis,
     n_epochs: int,
     domain_sample_size: int,
     device: torch.device,
@@ -32,6 +34,7 @@ def train(
     wandb_enabled: bool,
     batch_size: int,
     grad_accumulation_steps: int,
+    n_reduced_order: int,
     loss_smoothing_alpha: float = 0.99,
 ):
     diffeomorphism = diffeomorphism.to(device)
@@ -61,6 +64,7 @@ def train(
         deformed_vals = all_vals[:, domain_sample_size:].to(device)  # shape (B, N)
         atom_indices = torch.arange(initial_atoms.num_atoms, device=device)
         projection = gram_projection(
+            orthogonal_synthesis=orthogonal_synthesis,
             atom_indices=atom_indices,
             coords=coords,
             vals=vals,
@@ -69,6 +73,7 @@ def train(
             logabsdets=logabsdets,
             initial_dictionary=initial_atoms,
             device=device,
+            n_truncation=n_reduced_order,
         ) # shape (B, N)
         loss = torch.mean((projection - vals) ** 2) / grad_accumulation_steps
         losses_temp_history.append(loss.item())
@@ -83,6 +88,7 @@ def train(
                 smoothed_loss = loss_smoothing_alpha * smoothed_loss + (1 - loss_smoothing_alpha) * loss_item
             if wandb_enabled:
                 wandb.log({"train/loss": smoothed_loss})
+                wandb.log({"train/iteration": epoch_i})
             pbar.set_postfix({'loss': smoothed_loss})
             optimizer.step()
             optimizer.zero_grad()
@@ -97,6 +103,7 @@ def train(
         for callback in callbacks:
             callback(
                 epoch=epoch_i,
+                orthogonal_synthesis=orthogonal_synthesis,
                 diffeomorphism=diffeomorphism,
                 wandb_enabled=wandb_enabled,
                 device=device,
@@ -107,8 +114,11 @@ def main(conf: DictConfig):
 
     diffeomorphism = instantiate(conf.diffeomorphism)
     function_generator = instantiate(conf.function_generator)  # dataset of datasets
-    initial_atoms = instantiate(conf.initial_atoms)
-    
+    initial_atoms: InfiDictionary = instantiate(conf.initial_atoms)
+    orthogonal_synthesis_partial = instantiate(conf.orthogonal_synthesis_partial)
+    orthogonal_synthesis = orthogonal_synthesis_partial(n_atoms=initial_atoms.num_atoms)
+    n_reduced_order = conf.get("n_reduced_order", None) or initial_atoms.num_atoms
+
     if conf.wandb.enabled:
         wandb_run_name = str(conf.wandb.run_name) if conf.wandb.run_name is not None else None
         tags = [f"{key}:{value}" for key, value in conf.wandb.tags.items()] if "tags" in conf.wandb else []
@@ -133,6 +143,7 @@ def main(conf: DictConfig):
     
     train(
         diffeomorphism=diffeomorphism,
+        orthogonal_synthesis=orthogonal_synthesis,
         n_epochs=conf.n_epochs,
         domain_sample_size=conf.domain_sample_size,
         device=device,
@@ -146,6 +157,7 @@ def main(conf: DictConfig):
         grad_accumulation_steps=conf.grad_accumulation_steps,
         loss_smoothing_alpha=conf.get("loss_smoothing_alpha", 0.99),
         wandb_enabled=conf.wandb.enabled,
+        n_reduced_order=n_reduced_order,
     )
 
     if conf.wandb.enabled:

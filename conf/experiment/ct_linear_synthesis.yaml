@@ -2,13 +2,17 @@
 # random bandpass learning using a CNF on the radial domain
 defaults:
   - override /function_generator@function_generator: random_bandpass
+  - override /orthogonal_synthesis@orthogonal_synthesis_partial: householder
   - override /diffeomorphism@diffeomorphism: ct_radial
-  - override /dictionaries@initial_atoms: mix1_radial
+  - override /dictionaries@initial_atoms: fourier_radial
   - override /wandb@wandb: enabled
   - _self_
 
 function_generator:
   radial: true
+
+initial_atoms:
+  num_atoms: 500
 
 optimizer:
   lr: 0.001
@@ -16,11 +20,11 @@ batch_size: 100
 grad_accumulation_steps: 10
 
 # training hyperparameters
-n_epochs: 5000
-domain_sample_size: 5000
+n_epochs: 50000
+domain_sample_size: 1000
 n_functions: 1000
 loss_smoothing_alpha: 0.99
-
+n_reduced_order: 9
 
 callbacks:
   reconstruction_visualization:
@@ -30,9 +34,11 @@ callbacks:
     seeds: [0, 1, 2]
     frequency: 10
     density: 1000_00
+    n_truncation: ${n_reduced_order}
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
     dictionary: ${initial_atoms}
+    n_truncation: ${n_reduced_order}
     frequency: 10
     density: 1000_00
   velocity_field:
@@ -44,6 +50,7 @@ callbacks:
     timesteps: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
     density: 1000
     viz_magnitude: 10.0
+    
 
 # Add tags so that it is easier to filter the experiments in the W&B dashboard
 wandb:

@@ -1,6 +1,7 @@
 defaults:
   - function_generator: fourier_2d # the forward problem
   - diffeomorphism: kumaraswamy
+  - orthogonal_synthesis@orthogonal_synthesis_partial: identity
   - dictionaries@initial_atoms: fourier_2d
   - hydra: default
   - wandb: disabled # set to enabled for wandb logging
@@ -23,3 +24,4 @@ n_functions: 1000
 batch_size: 100
 grad_accumulation_steps: 10
 loss_smoothing_alpha: 0.99
+n_reduced_order: null

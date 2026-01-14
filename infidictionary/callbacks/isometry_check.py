@@ -6,6 +6,8 @@ import wandb
 from .base import Callback
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.diffeomorphisms.base import Diffeomorphism
+from infidictionary.linear_synthesis import OrthogonalSynthesis
+from infidictionary.utils import dictionary_pullback
 
 class IsometryCheck(Callback):
     """
@@ -16,17 +18,19 @@ class IsometryCheck(Callback):
         dictionary: InfiDictionary,
         frequency: int,
         density: int,
+        n_truncation: int | None = None,
     ):
         self.dictionary = dictionary
         if self.dictionary.num_atoms is None:
             raise ValueError("IsometryCheck requires finite dictionary.")
         self.frequency = frequency
         self.density = density
-
+        self.n_truncation = n_truncation or self.dictionary.num_atoms
     
     def __call__(
         self,
         epoch: int,
+        orthogonal_synthesis: OrthogonalSynthesis,
         diffeomorphism: Diffeomorphism,
         wandb_enabled: bool,
         device: torch.device,
@@ -39,7 +43,7 @@ class IsometryCheck(Callback):
 
         with torch.no_grad():
             n_cols = 2
-            n_rows = self.dictionary.num_atoms
+            n_rows = self.n_truncation
 
             fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
             if n_rows == 1:
@@ -47,12 +51,22 @@ class IsometryCheck(Callback):
 
             coords = self.dictionary.sample_from_domain(self.density).to(device)
             deformed_coords, logabsdet = diffeomorphism.forward(coords)
-            all_indices = torch.arange(self.dictionary.num_atoms, device=device)
-            all_vals_original = self.dictionary.get_atom(coords, all_indices).to(device)
-            all_vals_deformed = self.dictionary.get_atom(deformed_coords, all_indices).to(device)
-            all_vals_deformed = all_vals_deformed * torch.exp(0.5 * logabsdet).unsqueeze(0)
+            all_vals_original = self.dictionary.get_atom(
+                coords, 
+                torch.arange(self.n_truncation, device=device),
+            ).to(device)
 
-            for idx in range(self.dictionary.num_atoms):
+            all_vals_deformed = dictionary_pullback(
+                orthogonal_synthesis=orthogonal_synthesis,
+                initial_dictionary=self.dictionary,
+                atom_indices=torch.arange(self.dictionary.num_atoms, device=device),
+                deformed_coords=deformed_coords,
+                logabsdets=logabsdet,
+                device=device,
+            )
+            all_vals_deformed = all_vals_deformed[:self.n_truncation, :]
+            
+            for idx in range(self.n_truncation):
                 if coords.shape[1] != 2:
                     raise ValueError("VisualizeReconstruction only supports 2D dictionaries.")
 
