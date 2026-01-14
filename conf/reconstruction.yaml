@@ -19,8 +19,7 @@ optimizer:
 
 scheduler: null
 
-gram_matrix_n_samples: 100_000
-
 n_functions: 1000
 batch_size: 100
+grad_accumulation_steps: 10
 loss_smoothing_alpha: 0.99

@@ -13,7 +13,11 @@ class FunctionClassGenerator(ABC):
     def __call__(self, coords: torch.Tensor, seed: int):
         raise NotImplementedError("FunctionClassGenerator is an abstract base class.")
 
-    # TODO: add get_batch here
+    def get_batch(self, coords: torch.Tensor, seeds: torch.Tensor):
+        all_vals = []
+        for seed in seeds:
+            all_vals.append(self.__call__(coords, seed.item()))
+        return torch.stack(all_vals, dim=0)
 
 class RandomBandpassGenerator(FunctionClassGenerator):
     def __init__(

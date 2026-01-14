@@ -5,24 +5,26 @@ from infidictionary.diffeomorphisms.base import Diffeomorphism
 from infidictionary.dictionaries.base import InfiDictionary
 
 def gram_projection(
-    coords: torch.Tensor,
-    warped_coords: torch.Tensor,
-    logabsdets: torch.Tensor,
-    vals: torch.Tensor,
+    atom_indices: torch.Tensor,
+    coords: torch.Tensor, # (N, d)
+    vals: torch.Tensor, # (B, N)
+    deformed_coords: torch.Tensor, # (N, d)
+    deformed_vals: torch.Tensor, # (B, N)
+    logabsdets: torch.Tensor, # (N,)
     initial_dictionary: InfiDictionary,
     device: torch.device,
 ):
-    inner_products = []
-    all_deformed_vals = []
-    for idx in range(initial_dictionary.num_atoms):
-        deformed_vals = initial_dictionary.get_atom(warped_coords, idx).to(device)
-        deformed_vals = deformed_vals * torch.exp(0.5 * logabsdets)
-        all_deformed_vals.append(deformed_vals)
-        inner_product = torch.mean(deformed_vals * vals)
-        inner_products.append(inner_product)
-    all_deformed_vals = torch.stack(all_deformed_vals, dim=0)  # shape (n_dictionary, N)
-    inner_products = torch.stack(inner_products)  # shape (n_dictionary,)
-    gram_matrix_inv = initial_dictionary.gram_matrix_inv.to(device)
-    coeffs = gram_matrix_inv @ inner_products  # shape (n_dictionary,)
-    projection = torch.sum(coeffs[:, None] * all_deformed_vals, dim=0)  # shape (N,)
+    N = coords.shape[0]
+    
+    all_deformed_vals_theta = initial_dictionary.get_atom(deformed_coords, atom_indices).to(device) # (A, N)
+    all_deformed_vals_theta = all_deformed_vals_theta * torch.exp(0.5 * logabsdets) # (A, N)
+    inner_products_1 = torch.einsum("an,bn->ab", all_deformed_vals_theta, vals) / N # (A, B)
+    
+    all_deformed_vals_pullback = initial_dictionary.get_atom(coords, atom_indices).to(device)   # (A, N)
+    all_deformed_vals_pullback = all_deformed_vals_pullback * torch.exp(-0.5 * logabsdets) # (A, N)
+    inner_products_2 = torch.einsum("an,bn->ab", all_deformed_vals_pullback, deformed_vals) / N # (A, B)
+    
+    inner_products = 0.5 * (inner_products_1 + inner_products_2)  # shape (A, B)
+    coeffs = initial_dictionary.gram_solve(atom_indices, inner_products)
+    projection = torch.einsum("ai,an->in", coeffs, all_deformed_vals_theta)  # shape (B, N)
     return projection

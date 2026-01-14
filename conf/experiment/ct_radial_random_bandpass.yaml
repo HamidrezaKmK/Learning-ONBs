@@ -12,31 +12,33 @@ function_generator:
 
 optimizer:
   lr: 0.001
+batch_size: 100
+grad_accumulation_steps: 10
 
 # training hyperparameters
-n_epochs: 500_00
+n_epochs: 5000
 domain_sample_size: 5000
 n_functions: 1000
 loss_smoothing_alpha: 0.99
 
-batch_size: 100
+
 callbacks:
   reconstruction_visualization:
     _target_: infidictionary.callbacks.VisualizeReconstruction
     dictionary: ${initial_atoms}
     f_gen: ${function_generator}
     seeds: [0, 1, 2]
-    frequency: 20
+    frequency: 10
     density: 1000_00
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
     dictionary: ${initial_atoms}
-    frequency: 20
+    frequency: 10
     density: 1000_00
   velocity_field:
     _target_: infidictionary.callbacks.VisualizeVelocityField
     dictionary: ${initial_atoms}
-    frequency: 20
+    frequency: 10
     timesteps: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
     density: 1000
     viz_magnitude: 10.0

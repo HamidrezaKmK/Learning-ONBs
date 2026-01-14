@@ -26,7 +26,6 @@ class VisualizeReconstruction(Callback):
         self.dictionary = dictionary
         if self.dictionary.num_atoms is None:
             raise ValueError("VisualizeReconstruction requires finite dictionary.")
-        self.dictionary.compute_gram_matrix(n_domain_samples=10000, device='cpu')
         self.f_gen = f_gen
         self.seeds = seeds
         self.frequency = frequency
@@ -56,15 +55,19 @@ class VisualizeReconstruction(Callback):
                 if coords.shape[1] != 2:
                     raise ValueError("VisualizeReconstruction only supports 2D dictionaries.")
                 vals = self.f_gen(coords, seed=seed).to(device)
-                warped_coords, logabsdets = diffeomorphism.forward(coords)
+                deformed_coords, logabsdets = diffeomorphism.forward(coords)
+                deformed_vals = self.f_gen(deformed_coords, seed=seed).to(device)
+                atom_indices = torch.arange(self.dictionary.num_atoms, device=device)
                 proj = gram_projection(
+                    atom_indices=atom_indices,
                     coords=coords,
-                    warped_coords=warped_coords,
+                    vals=vals.unsqueeze(0),
+                    deformed_coords=deformed_coords,
+                    deformed_vals=deformed_vals.unsqueeze(0),
                     logabsdets=logabsdets,
-                    vals=vals,
                     initial_dictionary=self.dictionary,
                     device=device,
-                )
+                ).squeeze(0)
 
                 error = torch.abs(vals - proj)
                 norm2 = torch.mean(error * error).item()

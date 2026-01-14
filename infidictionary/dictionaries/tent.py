@@ -25,20 +25,41 @@ class TentDictionary(InfiDictionary):
     ):
         return torch.rand((N, 2))
 
-    def _get_atom(self, xy: torch.Tensor, idx: int):
-        row = idx // self.total_cols
-        col = idx % self.total_cols
+    # def _get_atoms(self, xy: torch.Tensor, idx: int):
+    #     row = idx // self.total_cols
+    #     col = idx % self.total_cols
+    #     w = 1.0 / float(self.total_cols)
+    #     h = 1.0 / float(self.total_rows)
+    #     xc = (col + 0.5) * w
+    #     yc = (row + 0.5) * h
+
+    #     u = torch.abs(xy[:, 0] - xc) / (0.5 * w)
+    #     v = torch.abs(xy[:, 1] - yc) / (0.5 * h)
+    #     tent = torch.clamp(1.0 - torch.maximum(u, v), min=0.0)
+    #     scale = math.sqrt(6.0 / (w * h)) 
+
+    #     return (tent * scale)
+    
+    def _get_atoms(self, xy: torch.Tensor, idx: torch.Tensor):
+        # idx: (K,) long tensor of atom indices
+        idx = idx.to(device=xy.device, dtype=torch.long).view(-1)  # (K,)
+
+        row = idx // self.total_cols                      # (K,)
+        col = idx % self.total_cols                       # (K,)
+
         w = 1.0 / float(self.total_cols)
         h = 1.0 / float(self.total_rows)
-        xc = (col + 0.5) * w
-        yc = (row + 0.5) * h
 
-        u = torch.abs(xy[:, 0] - xc) / (0.5 * w)
-        v = torch.abs(xy[:, 1] - yc) / (0.5 * h)
-        tent = torch.clamp(1.0 - torch.maximum(u, v), min=0.0)
-        scale = math.sqrt(6.0 / (w * h)) 
+        xc = (col + 0.5) * w                              # (K,)
+        yc = (row + 0.5) * h                              # (K,)
 
-        return (tent * scale)
+        # Broadcast over (K, N)
+        u = (xy[:, 0].unsqueeze(0) - xc.unsqueeze(1)).abs() / (0.5 * w)  # (K, N)
+        v = (xy[:, 1].unsqueeze(0) - yc.unsqueeze(1)).abs() / (0.5 * h)  # (K, N)
+
+        tent = torch.clamp(1.0 - torch.maximum(u, v), min=0.0)           # (K, N)
+        scale = math.sqrt(6.0 / (w * h))
+        return tent * scale                                              # (K, N)
 
 class RadialTentDictionary(TentDictionary):
 
@@ -48,10 +69,10 @@ class RadialTentDictionary(TentDictionary):
     ):
         return sample_from_disk(N)
 
-    def _get_atom(self, xy, idx):
+    def _get_atoms(self, xy, idx):
         r = xy[:, 0]**2 + xy[:, 1]**2
         theta = torch.atan2(xy[:, 1], xy[:, 0]) + math.pi
         theta = theta / (2 * math.pi)
         
         rtheta = torch.stack([r, theta], dim=1)
-        return super()._get_atom(rtheta, idx)
+        return super()._get_atoms(rtheta, idx)

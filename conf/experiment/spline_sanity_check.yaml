@@ -12,7 +12,7 @@ function_generator:
 
 
 # training hyperparameters
-n_epochs: 50_000_000
+n_epochs: 50_000
 domain_sample_size: 5000
 n_functions: 1000
 loss_smoothing_alpha: 0.99
@@ -23,12 +23,12 @@ callbacks:
     dictionary: ${initial_atoms}
     f_gen: ${function_generator}
     seeds: [10, 20, 30]
-    frequency: 100
+    frequency: 50
     density: 1000_00
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
     dictionary: ${initial_atoms}
-    frequency: 100
+    frequency: 50
     density: 1000_00
 
 # Add tags so that it is easier to filter the experiments in the W&B dashboard

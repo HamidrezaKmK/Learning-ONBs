@@ -28,4 +28,3 @@ dependencies:
       - isort
       - nflows
       - torchdiffeq
-      # TODO: add Jupyter to the environment from the get-go

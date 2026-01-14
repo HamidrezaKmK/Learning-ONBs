@@ -20,7 +20,6 @@ class IsometryCheck(Callback):
         self.dictionary = dictionary
         if self.dictionary.num_atoms is None:
             raise ValueError("IsometryCheck requires finite dictionary.")
-        self.dictionary.compute_gram_matrix(n_domain_samples=10000, device='cpu')
         self.frequency = frequency
         self.density = density
 
@@ -48,19 +47,19 @@ class IsometryCheck(Callback):
 
             coords = self.dictionary.sample_from_domain(self.density).to(device)
             deformed_coords, logabsdet = diffeomorphism.forward(coords)
+            all_indices = torch.arange(self.dictionary.num_atoms, device=device)
+            all_vals_original = self.dictionary.get_atom(coords, all_indices).to(device)
+            all_vals_deformed = self.dictionary.get_atom(deformed_coords, all_indices).to(device)
+            all_vals_deformed = all_vals_deformed * torch.exp(0.5 * logabsdet).unsqueeze(0)
 
-            for i, idx in enumerate(range(self.dictionary.num_atoms)):
+            for idx in range(self.dictionary.num_atoms):
                 if coords.shape[1] != 2:
                     raise ValueError("VisualizeReconstruction only supports 2D dictionaries.")
 
-                vals_original = self.dictionary.get_atom(coords, idx).to(device)
-                all_vals_original.append(vals_original.cpu())
+                vals_original = all_vals_original[idx] 
+                vals_deformed = all_vals_deformed[idx]
 
-                vals_deformed = self.dictionary.get_atom(deformed_coords, idx).to(device)
-                vals_deformed = vals_deformed * torch.exp(0.5 * logabsdet)
-                all_vals_deformed.append(vals_deformed.cpu())
-
-                ax0, ax1 = axes[i, 0], axes[i, 1]
+                ax0, ax1 = axes[idx, 0], axes[idx, 1]
                 cmap = "viridis"
 
                 vmin_01 = torch.quantile(vals_original.flatten(), 0.01).item()
@@ -105,17 +104,12 @@ class IsometryCheck(Callback):
 
             # Log overall statistics in one plot as a heatmap
             # compute pairwise inner products
-            inner_products = torch.zeros((len(all_vals_original), len(all_vals_original)))
-            inner_products_deformed = torch.zeros((len(all_vals_original), len(all_vals_original)))
+            inner_products = (all_vals_original @ all_vals_original.T) / all_vals_original.shape[1]
+            inner_products = inner_products.detach().cpu()
+            inner_products_deformed = (all_vals_deformed @ all_vals_deformed.T) / all_vals_deformed.shape[1]
+            inner_products_deformed = inner_products_deformed.detach().cpu()
             fig, axes = plt.subplots(figsize=(22, 6), nrows=1, ncols=3)
-            for i in range(len(all_vals_original)):
-                for j in range(len(all_vals_original)):
-                    vi = all_vals_original[i]
-                    vj = all_vals_original[j]
-                    inner_products[i, j] = (vi * vj).mean().item()
-                    vi_def = all_vals_deformed[i]
-                    vj_def = all_vals_deformed[j]
-                    inner_products_deformed[i, j] = (vi_def * vj_def).mean().item()
+
             # heatmap of inner products
             m = axes[2].imshow(inner_products_deformed)
             fig.colorbar(m, ax=axes[2], label='Inner Product (Deformed)')

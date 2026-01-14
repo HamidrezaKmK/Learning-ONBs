@@ -5,14 +5,13 @@ import numpy as np
 
 import torch
 
-# TODO: vectorize the get_atom code to allow for more parallelization
-# TODO: replace the gram matrix interfact with some like a Gram inverse action with an index
 class InfiDictionary(ABC):
 
     def __init__(
         self,
         atom_indices: list[int] | None = None,
         num_atoms: int | None = None,
+        numerical_gram_n_samples: int | None = None,
     ):
         if atom_indices is not None:
             self.atom_indices = atom_indices
@@ -23,75 +22,84 @@ class InfiDictionary(ABC):
         else:
             self.atom_indices = None
             self.num_atoms = None
+        
+        if self.atom_indices is not None:
+            self.atom_indices_tensor = torch.tensor(self.atom_indices, dtype=torch.long)
+        else:
+            self.atom_indices_tensor = None
+        
+        self.numerical_gram_n_samples = numerical_gram_n_samples or 100_000
 
     @abstractmethod
     def sample_from_domain(self, N: int):
         raise NotImplementedError("Subclasses must implement this method")
     
     @abstractmethod
-    def _get_atom(self, coords: torch.Tensor, idx: int):
+    def _get_atoms(self, coords: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError("Subclasses must implement this method if needed")
 
-    def get_atom(self, coords: torch.Tensor, idx: int):
+    def get_atom(self, coords: torch.Tensor, idx: int | torch.Tensor):
         if self.atom_indices is None:
-            real_idx = idx
+            real_idx = torch.tensor([idx]).cpu() if isinstance(idx, int) else idx.cpu()
+            atoms = self._get_atoms(coords, real_idx)
+            return atoms.squeeze(0)
+        elif isinstance(idx, torch.Tensor):
+            real_idx = self.atom_indices_tensor[idx.cpu()]
+            return self._get_atoms(coords, real_idx)
         else:
-            real_idx = self.atom_indices[idx]
-
-        return self._get_atom(coords, real_idx)
+            real_idx = torch.tensor([self.atom_indices[idx]])
+            return self._get_atoms(coords, real_idx).squeeze(0)
     
-    def compute_gram_matrix(self, n_domain_samples: int, device: torch.device):
+    def gram_solve(self, atom_indices: torch.Tensor, inner_products: torch.Tensor):
+        device = inner_products.device
         if self.num_atoms is None:
             raise ValueError("Cannot compute Gram matrix for infinite basis.")
-        N = n_domain_samples
-        coords = self.sample_from_domain(N).to(device)
-        n_funcs = len(self.atom_indices)
-        gram_matrix = torch.zeros((n_funcs, n_funcs), device=device)
-        for i in range(n_funcs):
-            for j in range(i+1):
-                fi = self.get_atom(coords, self.atom_indices[i])
-                fj = self.get_atom(coords, self.atom_indices[j])
-                integrand: torch.Tensor = fi * fj
-                gram_matrix[i, j] = integrand.mean()
-                gram_matrix[j, i] = gram_matrix[i, j]
-        self._gram_matrix_inv = torch.linalg.pinv(gram_matrix)
-    
-    @property
-    def gram_matrix_inv(self):
         if not hasattr(self, "_gram_matrix_inv"):
-            raise ValueError("Gram matrix inverse has not been computed yet. Call compute_gram_matrix first.")
-        return self._gram_matrix_inv
+            N = self.numerical_gram_n_samples
+            coords = self.sample_from_domain(N).cpu()
+            all_f = self.get_atom(coords, atom_indices).cpu()  # shape (A, N)
+            gram_matrix = all_f @ all_f.T / N  # shape (A, A)
+            self._gram_matrix_inv = torch.linalg.pinv(gram_matrix)
+        gram_matrix_inv = self._gram_matrix_inv.to(device)
+        coeffs = torch.einsum("ij,jb->ib", gram_matrix_inv, inner_products)  # shape (A, B)
+        return coeffs
 
 class MixedDictionary(InfiDictionary):
     """
     The mixture of multiple dictionaries by just combining their atoms
     """
-    def __init__(self, atoms: List[InfiDictionary] | Dict[str, InfiDictionary]):
-        if isinstance(atoms, list):
-            self.atoms = atoms
+    def __init__(self, dictionaries: List[InfiDictionary] | Dict[str, InfiDictionary]):
+        if isinstance(dictionaries, list):
+            self.dictionaries: List[InfiDictionary] = dictionaries
         else:
-            self.atoms = list(atoms.values())
+            self.dictionaries: List[InfiDictionary] = list(dictionaries.values())
 
-        for dictionary in self.atoms:
+        for dictionary in self.dictionaries:
             if dictionary.atom_indices is None:
                 raise ValueError("All atoms in MixedDictionary must have finite atom_indices.")
         
-        self._map = {}
+        self._map = torch.zeros((sum(len(d.atom_indices) for d in self.dictionaries), 2), dtype=torch.long)
         idx = 0
-        for dictionary_idx, dictionary in enumerate(self.atoms):
+        for dictionary_idx, dictionary in enumerate(self.dictionaries):
             for b_idx in dictionary.atom_indices:
-                self._map[idx] = (dictionary_idx, b_idx)
+                self._map[idx][0] = dictionary_idx
+                self._map[idx][1] = b_idx
                 idx += 1
 
         super().__init__(num_atoms=idx)
         
-    def _get_atom(self, coords: torch.Tensor, idx: int):
-        if idx not in self._map:
-            raise ValueError(f"Index {idx} not found in MixedDictionary.")
-        dictionary_idx, b_idx = self._map[idx]
-        return self.atoms[dictionary_idx]._get_atom(coords, b_idx)
+    def _get_atoms(self, coords: torch.Tensor, idx: torch.Tensor):
+        dictionary_indices = self._map[idx][:, 0]
+        atom_indices = self._map[idx][:, 1]
+        d_ids, inverse_indices = torch.unique(dictionary_indices, return_inverse=True)
+        results = torch.zeros((len(idx), coords.shape[0]), device=coords.device)
+        for i, d_id in enumerate(d_ids):
+            mask = (inverse_indices == i)
+            b_idxs = atom_indices[mask]
+            results[mask] = self.dictionaries[d_id.item()]._get_atoms(coords, b_idxs)
+        return results    
 
     def sample_from_domain(self, N: int):
-        if len(self.atoms) == 0:
+        if len(self.dictionaries) == 0:
             raise ValueError("MixedDictionary has no atoms to sample from.")
-        return self.atoms[0].sample_from_domain(N)
+        return self.dictionaries[0].sample_from_domain(N)

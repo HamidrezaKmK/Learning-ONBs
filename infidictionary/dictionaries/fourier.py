@@ -6,49 +6,42 @@ from typing import Literal
 from .base import InfiDictionary
 from .utils import sample_from_disk
 
-def cos1d(k, t):
-    return math.sqrt(2.0) * torch.cos(2.0 * math.pi * k * t) if k > 0 else torch.ones_like(t)
+def cos1d(k: torch.Tensor, t: torch.Tensor):
+    """
+    k: (N_idx,) integer tensor
+    t: (N_coords,) float tensor
+    returns: (N_idx, N_coords)
+    """
+    k = k.to(t.dtype)
+    kt = 2.0 * math.pi * k[:, None] * t[None, :]   # (N_idx, N_coords)
 
-def sin1d(k, t):
-    return math.sqrt(2.0) * torch.sin(2.0 * math.pi * k * t) if k > 0 else torch.zeros_like(t)
+    out = math.sqrt(2.0) * torch.cos(kt)
+    mask = (k > 0)[:, None]
+
+    return torch.where(mask, out, torch.ones_like(out))
+
+
+def sin1d(k: torch.Tensor, t: torch.Tensor):
+    """
+    k: (N_idx,) integer tensor
+    t: (N_coords,) float tensor
+    returns: (N_idx, N_coords)
+    """
+    k = k.to(t.dtype)
+    kt = 2.0 * math.pi * k[:, None] * t[None, :]
+
+    out = math.sqrt(2.0) * torch.sin(kt)
+    mask = (k > 0)[:, None]
+
+    return torch.where(mask, out, torch.zeros_like(out))
 
 class FourierDictionary(InfiDictionary):
-    
+
     def sample_from_domain(
         self,
         N: int,
     ):
         return torch.rand((N, 2))
-
-    def _get_atom_by_args(
-        self, 
-        xy: torch.Tensor, 
-        kx: int, 
-        ky: int,
-        kind: Literal["cc", "cs", "sc", "ss"] = "cc",
-    ):
-        if kx < 0 or ky < 0:
-            raise ValueError("kx, ky must be >= 0")
-        if kind not in ("cc", "cs", "sc", "ss"):
-            raise ValueError("kind must be one of {'cc','cs','sc','ss'}")
-
-        x, y = xy[:, 0], xy[:, 1]
-
-
-        fx_c = cos1d(kx, x); fx_s = sin1d(kx, x)
-        fy_c = cos1d(ky, y); fy_s = sin1d(ky, y)
-
-        if kind == "cc":
-            vals = fx_c * fy_c
-        elif kind == "cs":
-            vals = fx_c * fy_s
-        elif kind == "sc":
-            vals = fx_s * fy_c
-        else:
-            vals = fx_s * fy_s
-
-        return vals  # shape (N,)
-
 
     _KINDS_4 = ("cc", "cs", "sc", "ss")
     _KINDS_KX0 = ("cc", "cs")  # kx=0 => fx is constant, only theta varies
@@ -120,9 +113,116 @@ class FourierDictionary(InfiDictionary):
 
         raise IndexError(f"idx={idx} out of range for computed ring n={n}")
 
-    def _get_atom(self, xy: torch.Tensor, idx: int):
-        kx, ky, kind = self.idx_to_params(idx)
-        return self._get_atom_by_args(xy, kx=kx, ky=ky, kind=kind)
+    def idxs_to_params_vectorized(self, idx: torch.Tensor) -> torch.Tensor:
+        """
+        idx: (N,) int tensor (global indices)
+        returns: (N,4) long tensor: [kx, ky, kind0, kind1]
+        kind0 = 0 if first char is 'c' else 1
+        kind1 = 0 if second char is 'c' else 1
+        """
+        if idx.ndim != 1:
+            idx = idx.reshape(-1)
+        if (idx < 0).any():
+            raise ValueError("idx must be >= 0")
+
+        device = idx.device
+        idx = idx.to(torch.long)
+
+        N = idx.numel()
+        kx = torch.zeros(N, dtype=torch.long, device=device)
+        ky = torch.zeros(N, dtype=torch.long, device=device)
+        kind0 = torch.zeros(N, dtype=torch.long, device=device)
+        kind1 = torch.zeros(N, dtype=torch.long, device=device)
+
+        # n=0 special case: idx==0 -> (0,0,"cc") => bits (0,0)
+        mask0 = (idx == 0)
+        mask = ~mask0
+        if mask.any():
+            idx1 = idx[mask]
+
+            # n = ceil((-1 + sqrt(1+idx))/2), clamp to >=1
+            idxf = idx1.to(torch.float64)
+            n = torch.ceil((-1.0 + torch.sqrt(1.0 + idxf)) / 2.0).to(torch.long)
+            n = torch.clamp(n, min=1)
+
+            ring_start = 1 + 4 * (n - 1) * n           # start index of ring n
+            j = idx1 - ring_start                       # local offset in [0, 8n-1]
+
+            # Segment 1: j in {0,1}  -> (0,n) kinds: ["cc","cs"]
+            m1 = (j < 2)
+            if m1.any():
+                ky[mask.nonzero().squeeze(1)[m1]] = n[m1]
+                # kind0 stays 0; kind1 is 0 for "cc", 1 for "cs"
+                kind1[mask.nonzero().squeeze(1)[m1]] = j[m1]
+
+            # Segment 2: next 4n -> (k,n), k=1..n, kinds: ["cc","cs","sc","ss"]
+            j2 = j - 2
+            m2 = (j2 >= 0) & (j2 < 4 * n)
+            if m2.any():
+                k = 1 + (j2[m2] // 4)
+                r = (j2[m2] % 4)                        # 0..3
+                out_idx = mask.nonzero().squeeze(1)[m2]
+                kx[out_idx] = k
+                ky[out_idx] = n[m2]
+                kind0[out_idx] = (r >= 2).to(torch.long) # c,c,s,s
+                kind1[out_idx] = (r & 1).to(torch.long)  # c,s,c,s
+
+            # Segment 3: next 4(n-1) -> (n,ky), ky=n-1..1, same 4 kinds
+            j3 = j2 - 4 * n
+            m3 = (n > 1) & (j3 >= 0) & (j3 < 4 * (n - 1))
+            if m3.any():
+                m = (j3[m3] // 4)                       # 0..n-2
+                ky3 = (n[m3] - 1) - m                   # n-1..1
+                r = (j3[m3] % 4)
+                out_idx = mask.nonzero().squeeze(1)[m3]
+                kx[out_idx] = n[m3]
+                ky[out_idx] = ky3
+                kind0[out_idx] = (r >= 2).to(torch.long)
+                kind1[out_idx] = (r & 1).to(torch.long)
+
+            # Segment 4: last 2 -> (n,0) kinds: ["cc","sc"]
+            # local index within seg4:
+            j4 = j3 - 4 * (n - 1)
+            m4 = (j4 >= 0) & (j4 < 2)
+            if m4.any():
+                out_idx = mask.nonzero().squeeze(1)[m4]
+                kx[out_idx] = n[m4]
+                # ky stays 0
+                # kind0: 0 for "cc", 1 for "sc"; kind1 stays 0
+                kind0[out_idx] = j4[m4]
+
+            # sanity (optional): every nonzero idx must fall into exactly one segment
+            # if you want strict checking, uncomment:
+            # covered = m1 | m2 | m3 | m4
+            # if not covered.all():
+            #     bad = idx1[~covered]
+            #     raise IndexError(f"Some idx out of range? e.g. {bad[:10].tolist()}")
+
+        return torch.stack([kx, ky, kind0, kind1], dim=-1)
+
+
+    def _get_atoms(self, xy: torch.Tensor, idx: torch.Tensor):
+        kx_ky_kind = self.idxs_to_params_vectorized(idx)
+        kx, ky, kind = kx_ky_kind[:,0], kx_ky_kind[:,1], kx_ky_kind[:,2]*2 + kx_ky_kind[:,3]
+        kx = kx.to(xy.device)
+        ky = ky.to(xy.device)
+        kind = kind.to(xy.device)
+
+        x, y = xy[:, 0], xy[:, 1]
+        fx_c = cos1d(kx, x); fx_s = sin1d(kx, x)
+        fy_c = cos1d(ky, y); fy_s = sin1d(ky, y)
+        vals = torch.zeros((idx.shape[0], xy.shape[0]), device=xy.device, dtype=xy.dtype)
+
+        if (kind == 0).any():
+            vals[kind == 0] = fx_c[kind == 0] * fy_c[kind == 0]  # "cc"
+        if (kind == 1).any():
+            vals[kind == 1] = fx_c[kind == 1] * fy_s[kind == 1]  # "cs"
+        if (kind == 2).any():
+            vals[kind == 2] = fx_s[kind == 2] * fy_c[kind == 2]  # "sc"
+        if (kind == 3).any():
+            vals[kind == 3] = fx_s[kind == 3] * fy_s[kind == 3]  # "ss"
+
+        return vals  # shape (N_idx, N_coords)
 
 
 class RadialFourierDictionary(FourierDictionary):
@@ -133,17 +233,11 @@ class RadialFourierDictionary(FourierDictionary):
     ):
         return sample_from_disk(N)
     
-    def _get_atom_by_args(
-        self, 
-        xy: torch.Tensor, 
-        kx: int, 
-        ky: int,
-        kind: Literal["cc", "cs", "sc", "ss"] = "cc",
-    ):
+    def _get_atoms(self, xy: torch.Tensor, idx: torch.Tensor):
         r = xy[:, 0]**2 + xy[:, 1]**2
         theta = torch.atan2(xy[:, 1], xy[:, 0]) + math.pi
-        theta = theta / (2 * math.pi)  # normalize to [-1,1]
+        theta = theta / (2 * math.pi)  # normalize to [0, 1]
         
         rtheta = torch.stack([r, theta], dim=1)
-        return super()._get_atom_by_args(rtheta, kx, ky, kind)
+        return super()._get_atoms(rtheta, idx)
 

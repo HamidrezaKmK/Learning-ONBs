@@ -31,7 +31,7 @@ def train(
     initial_atoms: InfiDictionary,
     wandb_enabled: bool,
     batch_size: int,
-    gram_matrix_n_samples: int,
+    grad_accumulation_steps: int,
     loss_smoothing_alpha: float = 0.99,
 ):
     diffeomorphism = diffeomorphism.to(device)
@@ -40,37 +40,39 @@ def train(
 
     smoothed_loss = None
     loss_history = []
-    initial_atoms.compute_gram_matrix(
-        n_domain_samples=gram_matrix_n_samples, 
-        device=device,
-    )
     
     pbar = tqdm(range(n_epochs))    
     optimizer.zero_grad()
 
     losses_temp_history = []
     for epoch_i in pbar:
-        if n_functions is None:
-            seed = epoch_i
-        else:
-            seed = torch.randint(0, n_functions, (1,)).item()
 
-        if epoch_i % batch_size == 0:
+        if epoch_i % grad_accumulation_steps == 0:
             coords = initial_atoms.sample_from_domain(domain_sample_size).to(device) # shape (N, d)
             deformed_coords, logabsdets = diffeomorphism.forward(coords)
         
-        vals = f_gen(coords, seed=seed)  # shape (N,)
+        # pick batch_size numbers from [0, n_seeds)
+        n_seeds = n_functions or n_epochs
+        seed_batch = torch.randperm(n_seeds)[:batch_size].to(device)
+        # concatenate coords and deformed_coords accordingly
+        all_coords = torch.cat([coords, deformed_coords], dim=0)  # shape (2N, d)
+        all_vals = f_gen.get_batch(all_coords, seeds=seed_batch)  # shape (B, 2N)
+        vals = all_vals[:, :domain_sample_size].to(device)  # shape (B, N)
+        deformed_vals = all_vals[:, domain_sample_size:].to(device)  # shape (B, N)
+        atom_indices = torch.arange(initial_atoms.num_atoms, device=device)
         projection = gram_projection(
+            atom_indices=atom_indices,
             coords=coords,
-            warped_coords=deformed_coords,
-            logabsdets=logabsdets,
             vals=vals,
+            deformed_coords=deformed_coords,
+            deformed_vals=deformed_vals,
+            logabsdets=logabsdets,
             initial_dictionary=initial_atoms,
             device=device,
-        )
-        loss = torch.mean((projection - vals) ** 2) / batch_size
+        ) # shape (B, N)
+        loss = torch.mean((projection - vals) ** 2) / grad_accumulation_steps
         losses_temp_history.append(loss.item())
-        retain = (epoch_i + 1) % batch_size != 0
+        retain = (epoch_i + 1) % grad_accumulation_steps != 0
         loss.backward(retain_graph=retain)
         if not retain:
             loss_item = sum(losses_temp_history)
@@ -141,7 +143,7 @@ def main(conf: DictConfig):
         n_functions=conf.get("n_functions", None),
         initial_atoms=initial_atoms,
         batch_size=conf.batch_size,
-        gram_matrix_n_samples=conf.gram_matrix_n_samples,
+        grad_accumulation_steps=conf.grad_accumulation_steps,
         loss_smoothing_alpha=conf.get("loss_smoothing_alpha", 0.99),
         wandb_enabled=conf.wandb.enabled,
     )

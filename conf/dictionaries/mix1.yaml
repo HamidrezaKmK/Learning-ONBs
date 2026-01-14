@@ -1,5 +1,5 @@
 _target_: infidictionary.dictionaries.MixedDictionary
-atoms:
+dictionaries:
   fourier:
     _target_: infidictionary.dictionaries.FourierDictionary
     num_atoms: 9
