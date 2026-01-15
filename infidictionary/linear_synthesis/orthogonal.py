@@ -27,11 +27,11 @@ class HouseholderSynthesis(OrthogonalSynthesis):
 
         return f
     
-    def forward(self, initial_atoms: torch.Tensor, atom_indices: torch.Tensor) -> torch.Tensor:    
+    def pushforward(self, initial_atoms: torch.Tensor, atom_indices: torch.Tensor) -> torch.Tensor:    
         V = self.V.to(dtype=initial_atoms.dtype, device=initial_atoms.device)[:, atom_indices]
         return self._transform(initial_atoms, V)
 
-    def inverse(self, synthesized_atoms: torch.Tensor, atom_indices: torch.Tensor) -> torch.Tensor:
+    def pullback(self, synthesized_atoms: torch.Tensor, atom_indices: torch.Tensor) -> torch.Tensor:
         V = self.V.to(dtype=synthesized_atoms.dtype, device=synthesized_atoms.device)[:, atom_indices]
         # invert the order of the rows in V
         V = torch.flip(V, dims=[0])

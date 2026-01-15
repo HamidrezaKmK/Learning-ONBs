@@ -38,7 +38,10 @@ def train(
     loss_smoothing_alpha: float = 0.99,
 ):
     diffeomorphism = diffeomorphism.to(device)
-    optimizer = optimizer_callable(diffeomorphism.parameters())
+    # create optimizer on both diffeomorphism and orthogonal_synthesis parameters
+    optimizer = optimizer_callable(
+        list(diffeomorphism.parameters()) + list(orthogonal_synthesis.parameters())
+    )
     scheduler = scheduler_callable(optimizer) if scheduler_callable is not None else None
 
     smoothed_loss = None
