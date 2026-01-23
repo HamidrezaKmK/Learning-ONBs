@@ -1,8 +1,7 @@
 import torch
 
 from abc import ABC, abstractmethod
-from infidictionary.diffeomorphisms.base import Diffeomorphism
-from infidictionary.linear_synthesis import OrthogonalSynthesis
+from infidictionary.neural_isometries import NeuralIsometry
 
 class Callback(ABC):
 
@@ -10,8 +9,7 @@ class Callback(ABC):
     def __call__(
         self,
         epoch: int,
-        orthogonal_synthesis: OrthogonalSynthesis,
-        diffeomorphism: Diffeomorphism,
+        neural_isometry: NeuralIsometry,
         wandb_enabled: bool,
         device: torch.device,
     ):

@@ -1,7 +1,6 @@
 defaults:
   - function_generator: fourier_2d # the forward problem
-  - diffeomorphism: kumaraswamy
-  - orthogonal_synthesis@orthogonal_synthesis_partial: identity
+  - neural_isometry: half_density_kumaraswamy_radial
   - dictionaries@initial_atoms: fourier_2d
   - hydra: default
   - wandb: disabled # set to enabled for wandb logging
@@ -9,9 +8,6 @@ defaults:
   - override hydra/hydra_logging: none # hack to fix the logging code
   - override hydra/job_logging: none # hack to fix the logging code
 
-# training hyperparameters
-n_epochs: 5000_00
-domain_sample_size: 100
 
 optimizer:
   _target_: torch.optim.Adam
@@ -20,8 +16,16 @@ optimizer:
 
 scheduler: null
 
+# training hyperparameters
+n_epochs: 500000
+domain_sample_size: 100
 n_functions: 1000
 batch_size: 100
+atom_index_batch_size: 100
 grad_accumulation_steps: 10
-loss_smoothing_alpha: 0.99
+energy_smoothing_alpha: 0.99
 n_reduced_order: null
+
+atom_index_distribution:
+  _target_: torch.distributions.Geometric
+  probs: 0.2

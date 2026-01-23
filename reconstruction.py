@@ -9,105 +9,103 @@ from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 import wandb
 
-from infidictionary.diffeomorphisms.base import Diffeomorphism
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.datasets import FunctionClassGenerator
-from infidictionary.utils import gram_projection
-from infidictionary.linear_synthesis.base import OrthogonalSynthesis
+from infidictionary.neural_isometries import NeuralIsometry
 
 # Add resolver for hydra
 OmegaConf.register_new_resolver("eval", eval)
 # torch.set_default_dtype(torch.float64)
 
 def train(
-    diffeomorphism: Diffeomorphism,
-    orthogonal_synthesis: OrthogonalSynthesis,
+    neural_isometry: NeuralIsometry,
+    f_gen: FunctionClassGenerator,
+    initial_atoms: InfiDictionary,
+    atom_index_distribution: torch.distributions.Distribution, # defines the \ell^2 on the coefficient space (energy)
+    batch_size: int,
     n_epochs: int,
     domain_sample_size: int,
     device: torch.device,
     optimizer_callable: Callable[[Any,], torch.optim.Optimizer],
     scheduler_callable: Callable[[torch.optim.Optimizer,], torch.optim.lr_scheduler._LRScheduler],
     callbacks: list,
-    f_gen: FunctionClassGenerator,
     n_functions: int | None,
-    initial_atoms: InfiDictionary,
     wandb_enabled: bool,
-    batch_size: int,
     grad_accumulation_steps: int,
-    n_reduced_order: int,
-    loss_smoothing_alpha: float = 0.99,
+    atom_index_batch_size: int,
+    energy_smoothing_alpha: float = 0.99,
 ):
-    diffeomorphism = diffeomorphism.to(device)
     # create optimizer on both diffeomorphism and orthogonal_synthesis parameters
-    optimizer = optimizer_callable(
-        list(diffeomorphism.parameters()) + list(orthogonal_synthesis.parameters())
-    )
+    neural_isometry = neural_isometry.to(device)
+    optimizer = optimizer_callable(neural_isometry.parameters())
     scheduler = scheduler_callable(optimizer) if scheduler_callable is not None else None
 
-    smoothed_loss = None
-    loss_history = []
+    smoothed_energy = None
+    energies_history = []
     
     pbar = tqdm(range(n_epochs))    
     optimizer.zero_grad()
 
-    losses_temp_history = []
+    energies_temp_history = []
     for epoch_i in pbar:
 
         if epoch_i % grad_accumulation_steps == 0:
+            # TODO: add a domain sampler object
+            # TODO: make this more efficient
             coords = initial_atoms.sample_from_domain(domain_sample_size).to(device) # shape (N, d)
-            deformed_coords, logabsdets = diffeomorphism.forward(coords)
         
         # pick batch_size numbers from [0, n_seeds)
         n_seeds = n_functions or n_epochs
         seed_batch = torch.randperm(n_seeds)[:batch_size].to(device)
-        # concatenate coords and deformed_coords accordingly
-        all_coords = torch.cat([coords, deformed_coords], dim=0)  # shape (2N, d)
-        all_vals = f_gen.get_batch(all_coords, seeds=seed_batch)  # shape (B, 2N)
-        vals = all_vals[:, :domain_sample_size].to(device)  # shape (B, N)
-        deformed_vals = all_vals[:, domain_sample_size:].to(device)  # shape (B, N)
-        atom_indices = torch.arange(initial_atoms.num_atoms, device=device)
-        projection = gram_projection(
-            orthogonal_synthesis=orthogonal_synthesis,
+        vals = f_gen.get_batch(coords, seeds=seed_batch).to(device)  # shape (B, N)
+        
+        # sample atom_indices as a batch of indices distributed according to a decreasing index distribution
+        atom_indices = atom_index_distribution.sample((atom_index_batch_size,)).flatten()
+        atom_indices = atom_indices.long().to(device)  # shape (A, )
+
+        # for each function compute the inner products with all deformed atoms, thus 
+        # getting a (B, A) matrix of inner products
+        b = neural_isometry.inner_products( 
             atom_indices=atom_indices,
             coords=coords,
             vals=vals,
-            deformed_coords=deformed_coords,
-            deformed_vals=deformed_vals,
-            logabsdets=logabsdets,
             initial_dictionary=initial_atoms,
             device=device,
-            n_truncation=n_reduced_order,
-        ) # shape (B, N)
-        loss = torch.mean((projection - vals) ** 2) / grad_accumulation_steps
-        losses_temp_history.append(loss.item())
-        retain = (epoch_i + 1) % grad_accumulation_steps != 0
-        loss.backward(retain_graph=retain)
-        if not retain:
-            loss_item = sum(losses_temp_history)
-            losses_temp_history = []
-            if smoothed_loss is None:
-                smoothed_loss = loss_item
+        )
+        # due to isometry, the initial dictionary gram projection is used to compute the coefficients
+        coeffs = initial_atoms.gram_solve(atom_indices, b) 
+
+        # maximize the captured energy
+        loss = -torch.mean(coeffs ** 2) / grad_accumulation_steps
+        energies_temp_history.append(-loss.item())
+
+        loss.backward(retain_graph=False)
+
+        if (epoch_i + 1) % grad_accumulation_steps == 0:
+            energy_item = sum(energies_temp_history)
+            energies_temp_history = []
+            if smoothed_energy is None:
+                smoothed_energy = energy_item
             else:
-                smoothed_loss = loss_smoothing_alpha * smoothed_loss + (1 - loss_smoothing_alpha) * loss_item
+                smoothed_energy = energy_smoothing_alpha * smoothed_energy + (1 - energy_smoothing_alpha) * energy_item
             if wandb_enabled:
-                wandb.log({"train/loss": smoothed_loss})
+                wandb.log({"train/captured_energy": smoothed_energy})
                 wandb.log({"train/iteration": epoch_i})
-            pbar.set_postfix({'loss': smoothed_loss})
+            pbar.set_postfix({'captured_energy': smoothed_energy})
             optimizer.step()
             optimizer.zero_grad()
             # check if it is reduce on plateau scheduler
             if scheduler is not None:
                 if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    scheduler.step(smoothed_loss)
+                    scheduler.step(smoothed_energy)
                 else:
                     scheduler.step()
-            loss_history.append(smoothed_loss)
+            energies_history.append(smoothed_energy)
         
         for callback in callbacks:
             callback(
                 epoch=epoch_i,
-                orthogonal_synthesis=orthogonal_synthesis,
-                diffeomorphism=diffeomorphism,
+                neural_isometry=neural_isometry,
                 wandb_enabled=wandb_enabled,
                 device=device,
             )
@@ -115,12 +113,10 @@ def train(
 @hydra.main(version_base=None, config_path="conf", config_name="reconstruction")
 def main(conf: DictConfig):
 
-    diffeomorphism = instantiate(conf.diffeomorphism)
-    function_generator = instantiate(conf.function_generator)  # dataset of datasets
+    neural_isometry: NeuralIsometry = instantiate(conf.neural_isometry)
+    function_generator: FunctionClassGenerator = instantiate(conf.function_generator)  # dataset of datasets
     initial_atoms: InfiDictionary = instantiate(conf.initial_atoms)
-    orthogonal_synthesis_partial = instantiate(conf.orthogonal_synthesis_partial)
-    orthogonal_synthesis = orthogonal_synthesis_partial(n_atoms=initial_atoms.num_atoms)
-    n_reduced_order = conf.get("n_reduced_order", None) or initial_atoms.num_atoms
+    atom_index_distribution: torch.distributions.Distribution = instantiate(conf.atom_index_distribution)
 
     if conf.wandb.enabled:
         wandb_run_name = str(conf.wandb.run_name) if conf.wandb.run_name is not None else None
@@ -145,22 +141,22 @@ def main(conf: DictConfig):
     optimizer_callable = instantiate(conf.optimizer)
     
     train(
-        diffeomorphism=diffeomorphism,
-        orthogonal_synthesis=orthogonal_synthesis,
+        neural_isometry=neural_isometry,
+        f_gen=function_generator,
+        initial_atoms=initial_atoms,
+        atom_index_distribution=atom_index_distribution,
+        batch_size=conf.batch_size,
         n_epochs=conf.n_epochs,
         domain_sample_size=conf.domain_sample_size,
         device=device,
         optimizer_callable=optimizer_callable,
         scheduler_callable=scheduler_callable,
         callbacks=callbacks,
-        f_gen=function_generator,
         n_functions=conf.get("n_functions", None),
-        initial_atoms=initial_atoms,
-        batch_size=conf.batch_size,
-        grad_accumulation_steps=conf.grad_accumulation_steps,
-        loss_smoothing_alpha=conf.get("loss_smoothing_alpha", 0.99),
         wandb_enabled=conf.wandb.enabled,
-        n_reduced_order=n_reduced_order,
+        grad_accumulation_steps=conf.grad_accumulation_steps,
+        atom_index_batch_size=conf.atom_index_batch_size,
+        energy_smoothing_alpha=conf.get("energy_smoothing_alpha", 0.99),
     )
 
     if conf.wandb.enabled:

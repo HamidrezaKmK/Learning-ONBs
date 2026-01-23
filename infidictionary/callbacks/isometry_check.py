@@ -5,9 +5,7 @@ import matplotlib as mpl
 import wandb
 from .base import Callback
 from infidictionary.dictionaries.base import InfiDictionary
-from infidictionary.diffeomorphisms.base import Diffeomorphism
-from infidictionary.linear_synthesis import OrthogonalSynthesis
-from infidictionary.utils import dictionary_pullback
+from infidictionary.neural_isometries import NeuralIsometry
 
 class IsometryCheck(Callback):
     """
@@ -21,17 +19,16 @@ class IsometryCheck(Callback):
         n_truncation: int | None = None,
     ):
         self.dictionary = dictionary
-        if self.dictionary.num_atoms is None:
-            raise ValueError("IsometryCheck requires finite dictionary.")
         self.frequency = frequency
         self.density = density
         self.n_truncation = n_truncation or self.dictionary.num_atoms
+        if self.n_truncation is None:
+            raise ValueError("n_truncation must be specified if the dictionary has infinite atoms.")
     
     def __call__(
         self,
         epoch: int,
-        orthogonal_synthesis: OrthogonalSynthesis,
-        diffeomorphism: Diffeomorphism,
+        neural_isometry: NeuralIsometry,
         wandb_enabled: bool,
         device: torch.device,
     ): 
@@ -50,21 +47,19 @@ class IsometryCheck(Callback):
                 axes = axes.reshape(1, -1)  # make indexing consistent: axes[i, j]
 
             coords = self.dictionary.sample_from_domain(self.density).to(device)
-            deformed_coords, logabsdet = diffeomorphism.forward(coords)
+            
             all_vals_original = self.dictionary.get_atom(
                 coords, 
                 torch.arange(self.n_truncation, device=device),
             ).to(device)
 
-            all_vals_deformed = dictionary_pullback(
-                orthogonal_synthesis=orthogonal_synthesis,
+            all_vals_deformed = neural_isometry.transform(
                 initial_dictionary=self.dictionary,
-                atom_indices=torch.arange(self.dictionary.num_atoms, device=device),
-                deformed_coords=deformed_coords,
-                logabsdets=logabsdet,
+                atom_indices=torch.arange(self.n_truncation, device=device),
+                coords=coords,
                 device=device,
+                mode='pullback',
             )
-            all_vals_deformed = all_vals_deformed[:self.n_truncation, :]
             
             for idx in range(self.n_truncation):
                 if coords.shape[1] != 2:

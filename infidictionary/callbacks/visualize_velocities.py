@@ -5,9 +5,7 @@ import matplotlib as mpl
 from typing import Callable
 import wandb
 from .base import Callback
-from infidictionary.dictionaries.base import InfiDictionary
-from infidictionary.diffeomorphisms import CTDiffeomorphism
-from infidictionary.linear_synthesis import OrthogonalSynthesis
+from infidictionary.neural_isometries import HalfDensityIsometry
 
 class VisualizeVelocityField(Callback):
     """
@@ -34,8 +32,7 @@ class VisualizeVelocityField(Callback):
     def __call__(
         self,
         epoch: int,
-        orthogonal_synthesis: OrthogonalSynthesis,
-        diffeomorphism: CTDiffeomorphism,
+        neural_isometry: HalfDensityIsometry,
         wandb_enabled: bool,
         device: torch.device,
     ): 
@@ -51,7 +48,7 @@ class VisualizeVelocityField(Callback):
             t, _ = torch.sort(t)
             t = torch.repeat_interleave(t, N)
             xy = xy.repeat(len(self.timesteps), 1)
-            v =  self.viz_magnitude * diffeomorphism.velocity_field(t, xy)
+            v =  self.viz_magnitude * neural_isometry.diffeomorphism.velocity_field(t, xy)
 
             for row in range(3):
                 for col in range(3):

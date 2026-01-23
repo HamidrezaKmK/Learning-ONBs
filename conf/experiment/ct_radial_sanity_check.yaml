@@ -1,7 +1,7 @@
 # @package _global_
 # learning the identity map using a CNF on the radial domain
 defaults:
-  - override /diffeomorphism@diffeomorphism: ct_radial
+  - override /diffeomorphisms@diffeomorphism: ct_radial
   - override /dictionaries@initial_atoms: mix1_radial
   - override /wandb@wandb: enabled
   - _self_
@@ -16,7 +16,7 @@ optimizer:
 n_epochs: 5000
 domain_sample_size: 5000
 n_functions: 1000
-loss_smoothing_alpha: 0.99
+energy_smoothing_alpha: 0.99
 
 batch_size: 100
 grad_accumulation_steps: 10

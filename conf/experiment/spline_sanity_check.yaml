@@ -1,7 +1,7 @@
 # @package _global_
 # A spline flow used to learn the identity map
 defaults:
-  - override /diffeomorphism@diffeomorphism: spline_flow
+  - override /diffeomorphisms@diffeomorphism: spline_flow
   - override /dictionaries@initial_atoms: mix1
   - override /wandb@wandb: enabled
   - _self_
@@ -15,7 +15,7 @@ function_generator:
 n_epochs: 50_000
 domain_sample_size: 5000
 n_functions: 1000
-loss_smoothing_alpha: 0.99
+energy_smoothing_alpha: 0.99
 
 callbacks:
   reconstruction_visualization:

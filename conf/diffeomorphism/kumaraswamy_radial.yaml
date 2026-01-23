@@ -1,7 +1,0 @@
-_target_: infidictionary.diffeomorphisms.DiskFlow
-cubeflow:
-  _target_: infidictionary.diffeomorphisms.UnitSquareKumaraswamy
-  d: 2
-  eps: 0.000001
-  a_min: 1
-  b_min: 0.5

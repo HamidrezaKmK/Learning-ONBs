@@ -6,9 +6,7 @@ import wandb
 from .base import Callback
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.datasets import FunctionClassGenerator
-from infidictionary.diffeomorphisms.base import Diffeomorphism
-from infidictionary.utils import gram_projection
-from infidictionary.linear_synthesis import OrthogonalSynthesis
+from infidictionary.neural_isometries import NeuralIsometry
 
 class VisualizeReconstruction(Callback):
     """
@@ -26,19 +24,18 @@ class VisualizeReconstruction(Callback):
         n_truncation: int | None = None,
     ):
         self.dictionary = dictionary
-        if self.dictionary.num_atoms is None:
-            raise ValueError("VisualizeReconstruction requires finite dictionary.")
         self.f_gen = f_gen
         self.seeds = seeds
         self.frequency = frequency
         self.density = density
-        self.n_truncation = n_truncation
+        self.n_truncation = n_truncation or self.dictionary.num_atoms
+        if self.n_truncation is None:
+            raise ValueError("n_truncation must be specified if the dictionary has infinite atoms.")
     
     def __call__(
         self,
         epoch: int,
-        orthogonal_synthesis: OrthogonalSynthesis,
-        diffeomorphism: Diffeomorphism,
+        neural_isometry: NeuralIsometry,
         wandb_enabled: bool,
         device: torch.device,
     ): 
@@ -58,22 +55,29 @@ class VisualizeReconstruction(Callback):
                 if coords.shape[1] != 2:
                     raise ValueError("VisualizeReconstruction only supports 2D dictionaries.")
                 vals = self.f_gen(coords, seed=seed).to(device)
-                deformed_coords, logabsdets = diffeomorphism.forward(coords)
-                deformed_vals = self.f_gen(deformed_coords, seed=seed).to(device)
-                atom_indices = torch.arange(self.dictionary.num_atoms, device=device)
-                proj = gram_projection(
-                    orthogonal_synthesis=orthogonal_synthesis,
+
+                # for each function compute the inner products with all deformed atoms, thus 
+                # getting a (B, A) matrix of inner products
+                atom_indices = torch.arange(self.n_truncation, device=device).long()
+                b = neural_isometry.inner_products( 
                     atom_indices=atom_indices,
                     coords=coords,
-                    vals=vals.unsqueeze(0),
-                    deformed_coords=deformed_coords,
-                    deformed_vals=deformed_vals.unsqueeze(0),
-                    logabsdets=logabsdets,
+                    vals=vals.unsqueeze(0),  # (1, N)
                     initial_dictionary=self.dictionary,
                     device=device,
-                    n_truncation=self.n_truncation,
-                ).squeeze(0)
-
+                )
+                # due to isometry, the initial dictionary gram projection is used to compute the coefficients
+                # breakpoint()
+                coeffs = self.dictionary.gram_solve(atom_indices, b).squeeze(-1)  # (A, )
+                # breakpoint()
+                functions = neural_isometry.transform(
+                    initial_dictionary=self.dictionary,
+                    atom_indices=atom_indices,
+                    coords=coords,
+                    device=device,
+                    mode='pullback',
+                )
+                proj = functions.T @ coeffs
                 error = torch.abs(vals - proj)
                 norm2 = torch.mean(error * error).item()
                 wandb.log({f"reconstruction/err_{seed}": norm2})

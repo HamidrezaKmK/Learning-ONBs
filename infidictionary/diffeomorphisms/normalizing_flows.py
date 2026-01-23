@@ -255,3 +255,11 @@ class DiskFlow(Diffeomorphism):
         rtheta_inv, logabsdet_mid = self.cubeflow.inverse(rtheta)  # (N,2), (N,)
         xy_inv, logabsdet_2 = self._polar_to_cart(rtheta_inv)  # (N,2), (N,)
         return xy_inv, logabsdet_1 + logabsdet_mid + logabsdet_2
+
+class IdentityFlow(Diffeomorphism):
+    
+    def forward(self, x: torch.Tensor):
+        return x, torch.zeros(x.shape[0], device=x.device)
+
+    def inverse(self, y: torch.Tensor):
+        return y, torch.zeros(y.shape[0], device=y.device)
