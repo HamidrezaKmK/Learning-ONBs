@@ -62,5 +62,5 @@ class VisualizeVelocityField(Callback):
                     ax.set_ylim(-1.05,1.05)
                     ax.set_xlabel('x')
                     ax.set_ylabel('y')
-            wandb.log({f"velocity_field/visualization": wandb.Image(fig)})
+            wandb.log({f"velocity_field/visualization": wandb.Image(fig)}, step=epoch)
             plt.close(fig)

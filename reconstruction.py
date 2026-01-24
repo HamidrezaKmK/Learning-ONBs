@@ -1,6 +1,7 @@
 import math
 from typing import Any, Callable
-
+import matplotlib
+matplotlib.use("Agg") 
 import hydra
 import torch
 from hydra.utils import instantiate
@@ -12,6 +13,7 @@ import wandb
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.datasets import FunctionClassGenerator
 from infidictionary.neural_isometries import NeuralIsometry
+from infidictionary.index_sampler import IndexSampler
 
 # Add resolver for hydra
 OmegaConf.register_new_resolver("eval", eval)
@@ -21,7 +23,7 @@ def train(
     neural_isometry: NeuralIsometry,
     f_gen: FunctionClassGenerator,
     initial_atoms: InfiDictionary,
-    atom_index_distribution: torch.distributions.Distribution, # defines the \ell^2 on the coefficient space (energy)
+    index_sampler: IndexSampler, # defines the \ell^2 on the coefficient space (energy)
     batch_size: int,
     n_epochs: int,
     domain_sample_size: int,
@@ -60,7 +62,7 @@ def train(
         vals = f_gen.get_batch(coords, seeds=seed_batch).to(device)  # shape (B, N)
         
         # sample atom_indices as a batch of indices distributed according to a decreasing index distribution
-        atom_indices = atom_index_distribution.sample((atom_index_batch_size,)).flatten()
+        atom_indices = index_sampler.sample_indices(atom_index_batch_size, epoch_i, n_epochs)
         atom_indices = atom_indices.long().to(device)  # shape (A, )
 
         # for each function compute the inner products with all deformed atoms, thus 
@@ -72,25 +74,27 @@ def train(
             initial_dictionary=initial_atoms,
             device=device,
         )
+        # TODO: figure out why the captured energy scales when changing the distribution
         # due to isometry, the initial dictionary gram projection is used to compute the coefficients
         coeffs = initial_atoms.gram_solve(atom_indices, b) 
 
         # maximize the captured energy
-        loss = -torch.mean(coeffs ** 2) / grad_accumulation_steps
-        energies_temp_history.append(-loss.item())
+        captured_energy = torch.mean(coeffs ** 2)
+        loss = - captured_energy / grad_accumulation_steps
+        energies_temp_history.append(captured_energy)
 
         loss.backward(retain_graph=False)
 
         if (epoch_i + 1) % grad_accumulation_steps == 0:
-            energy_item = sum(energies_temp_history)
+            energy_item = sum(energies_temp_history) / len(energies_temp_history)
             energies_temp_history = []
             if smoothed_energy is None:
                 smoothed_energy = energy_item
             else:
                 smoothed_energy = energy_smoothing_alpha * smoothed_energy + (1 - energy_smoothing_alpha) * energy_item
             if wandb_enabled:
-                wandb.log({"train/captured_energy": smoothed_energy})
-                wandb.log({"train/iteration": epoch_i})
+                wandb.log({"train/captured_energy": smoothed_energy}, step=epoch_i)
+                wandb.log({"train/iteration": epoch_i}, step=epoch_i)
             pbar.set_postfix({'captured_energy': smoothed_energy})
             optimizer.step()
             optimizer.zero_grad()
@@ -116,7 +120,7 @@ def main(conf: DictConfig):
     neural_isometry: NeuralIsometry = instantiate(conf.neural_isometry)
     function_generator: FunctionClassGenerator = instantiate(conf.function_generator)  # dataset of datasets
     initial_atoms: InfiDictionary = instantiate(conf.initial_atoms)
-    atom_index_distribution: torch.distributions.Distribution = instantiate(conf.atom_index_distribution)
+    index_sampler: IndexSampler = instantiate(conf.index_sampler)
 
     if conf.wandb.enabled:
         wandb_run_name = str(conf.wandb.run_name) if conf.wandb.run_name is not None else None
@@ -144,7 +148,7 @@ def main(conf: DictConfig):
         neural_isometry=neural_isometry,
         f_gen=function_generator,
         initial_atoms=initial_atoms,
-        atom_index_distribution=atom_index_distribution,
+        index_sampler=index_sampler,
         batch_size=conf.batch_size,
         n_epochs=conf.n_epochs,
         domain_sample_size=conf.domain_sample_size,

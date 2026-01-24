@@ -108,7 +108,7 @@ class IsometryCheck(Callback):
                 sm_02.set_array([])
                 fig.colorbar(sm_02, ax=ax1, fraction=0.03, pad=0.02)
 
-            wandb.log({f"isometry_check/before_and_after": wandb.Image(fig)})
+            wandb.log({f"isometry_check/before_and_after": wandb.Image(fig)}, step=epoch)
             plt.close(fig)
 
             # Log overall statistics in one plot as a heatmap
@@ -138,5 +138,5 @@ class IsometryCheck(Callback):
             axes[0].set_xlabel('Difference')
             axes[0].set_ylabel('Frequency')
 
-            wandb.log({f"isometry_check/inner_products": wandb.Image(fig)})
+            wandb.log({f"isometry_check/inner_products": wandb.Image(fig)}, step=epoch)
             plt.close(fig)

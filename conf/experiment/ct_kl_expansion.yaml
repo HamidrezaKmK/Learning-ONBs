@@ -30,7 +30,7 @@ callbacks:
     seeds: [0, 1, 2]
     frequency: 50
     density: 1000_00
-    n_truncation: 10
+    n_truncation: 20
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
     dictionary: ${initial_atoms}

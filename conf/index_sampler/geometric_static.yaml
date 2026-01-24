@@ -1,0 +1,4 @@
+_target_: infidictionary.index_sampler.GeometricIndexSampler
+base_p: 0.2
+final_p: 0.2
+gamma: 1.

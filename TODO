@@ -15,6 +15,8 @@
 [] Immediate:
     [] Change the config with NeuralIsometry
     [] Merge the two notebooks on half-densities
+    [] Change n_truncation in the CheckIsometry config
+    [] Change the name of reconstruction code to kl_expansion
 
 [] Use FFT with aliasing
 [] Retry the pullback/pushforward idea for inner products

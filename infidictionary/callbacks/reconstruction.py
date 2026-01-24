@@ -67,9 +67,7 @@ class VisualizeReconstruction(Callback):
                     device=device,
                 )
                 # due to isometry, the initial dictionary gram projection is used to compute the coefficients
-                # breakpoint()
                 coeffs = self.dictionary.gram_solve(atom_indices, b).squeeze(-1)  # (A, )
-                # breakpoint()
                 functions = neural_isometry.transform(
                     initial_dictionary=self.dictionary,
                     atom_indices=atom_indices,
@@ -80,7 +78,7 @@ class VisualizeReconstruction(Callback):
                 proj = functions.T @ coeffs
                 error = torch.abs(vals - proj)
                 norm2 = torch.mean(error * error).item()
-                wandb.log({f"reconstruction/err_{seed}": norm2})
+                wandb.log({f"reconstruction/err_{seed}": norm2}, step=epoch)
 
                 ax0, ax1, ax2 = axes[i, 0], axes[i, 1], axes[i, 2]
                 cmap = "viridis"
@@ -136,5 +134,5 @@ class VisualizeReconstruction(Callback):
                 sm_2.set_array([])
                 fig.colorbar(sm_2, ax=[ax2], fraction=0.03, pad=0.02)
 
-            wandb.log({f"reconstruction/visualization": wandb.Image(fig)})
+            wandb.log({f"reconstruction/visualization": wandb.Image(fig)}, step=epoch)
             plt.close(fig)
