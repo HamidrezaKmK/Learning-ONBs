@@ -10,8 +10,6 @@ defaults:
 function_generator:
   radial: true
 
-optimizer:
-  lr: 0.001
 batch_size: 512
 atom_index_batch_size: 512
 grad_accumulation_steps: 32
@@ -20,17 +18,17 @@ grad_accumulation_steps: 32
 n_epochs: 50000
 domain_sample_size: 1000
 n_functions: 1000
-energy_smoothing_alpha: 0.99
+explained_variance_smoothing_alpha: 0.99
 
 callbacks:
   reconstruction_visualization:
-    _target_: infidictionary.callbacks.VisualizeReconstruction
+    _target_: infidictionary.callbacks.VisualizeKLExpansionReconstruction
     dictionary: ${initial_atoms}
     f_gen: ${function_generator}
     seeds: [0, 1, 2]
     frequency: 50
     density: 1000_00
-    n_truncation: 20
+    truncation_factors: [10, 20, 30]
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
     dictionary: ${initial_atoms}

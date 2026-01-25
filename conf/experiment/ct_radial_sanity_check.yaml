@@ -16,7 +16,7 @@ optimizer:
 n_epochs: 5000
 domain_sample_size: 5000
 n_functions: 1000
-energy_smoothing_alpha: 0.99
+explained_variance_smoothing_alpha: 0.99
 
 batch_size: 100
 grad_accumulation_steps: 10

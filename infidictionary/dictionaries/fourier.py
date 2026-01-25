@@ -225,7 +225,7 @@ class FourierDictionary(InfiDictionary):
         return vals  # shape (N_idx, N_coords)
 
     def gram_solve(self, atom_indices: torch.Tensor, inner_products: torch.Tensor):
-        return inner_products[atom_indices]
+        return inner_products # Gram matrix is identity due to orthonormality
 
 
 class RadialFourierDictionary(FourierDictionary):

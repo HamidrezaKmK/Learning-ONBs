@@ -25,7 +25,7 @@ function_generator:
 n_epochs: 50_000
 domain_sample_size: 5000
 n_functions: 1000
-energy_smoothing_alpha: 0.99
+explained_variance_smoothing_alpha: 0.99
 
 callbacks:
   reconstruction_visualization:

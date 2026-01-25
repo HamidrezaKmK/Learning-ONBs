@@ -1,4 +1,4 @@
 from .base import Callback
-from .reconstruction import VisualizeReconstruction
+from .reconstruction import VisualizeReconstruction, VisualizeKLExpansionReconstruction
 from .isometry_check import IsometryCheck
 from .visualize_velocities import VisualizeVelocityField

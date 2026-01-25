@@ -35,20 +35,20 @@ def train(
     wandb_enabled: bool,
     grad_accumulation_steps: int,
     atom_index_batch_size: int,
-    energy_smoothing_alpha: float = 0.99,
+    explained_variance_smoothing_alpha: float = 0.99,
 ):
     # create optimizer on both diffeomorphism and orthogonal_synthesis parameters
     neural_isometry = neural_isometry.to(device)
     optimizer = optimizer_callable(neural_isometry.parameters())
     scheduler = scheduler_callable(optimizer) if scheduler_callable is not None else None
 
-    smoothed_energy = None
-    energies_history = []
+    smoother_explained_variance = None
+    captured_variance_history = []
     
     pbar = tqdm(range(n_epochs))    
     optimizer.zero_grad()
 
-    energies_temp_history = []
+    captured_variance_temp_history = []
     for epoch_i in pbar:
 
         if epoch_i % grad_accumulation_steps == 0:
@@ -56,17 +56,17 @@ def train(
             # TODO: make this more efficient
             coords = initial_atoms.sample_from_domain(domain_sample_size).to(device) # shape (N, d)
         
-        # pick batch_size numbers from [0, n_seeds)
-        n_seeds = n_functions or n_epochs
-        seed_batch = torch.randperm(n_seeds)[:batch_size].to(device)
-        vals = f_gen.get_batch(coords, seeds=seed_batch).to(device)  # shape (B, N)
+        # pick 2 * batch_size numbers from [0, n_seeds)
+        seed_batch = torch.randint(0, f_gen.n_functions if n_functions is None else n_functions, (2 * batch_size,))
+        vals = f_gen.get_batch(coords, seeds=seed_batch).to(device)  # shape (2 * B, N)
         
         # sample atom_indices as a batch of indices distributed according to a decreasing index distribution
         atom_indices = index_sampler.sample_indices(atom_index_batch_size, epoch_i, n_epochs)
-        atom_indices = atom_indices.long().to(device)  # shape (A, )
+        atom_indices = atom_indices.long().cpu()  # shape (A, )
 
         # for each function compute the inner products with all deformed atoms, thus 
         # getting a (B, A) matrix of inner products
+
         b = neural_isometry.inner_products( 
             atom_indices=atom_indices,
             coords=coords,
@@ -74,37 +74,56 @@ def train(
             initial_dictionary=initial_atoms,
             device=device,
         )
-        # TODO: figure out why the captured energy scales when changing the distribution
-        # due to isometry, the initial dictionary gram projection is used to compute the coefficients
-        coeffs = initial_atoms.gram_solve(atom_indices, b) 
+        coeffs = initial_atoms.gram_solve(atom_indices, b) # shape (A, 2 * B)
+        # compute the difference between the coeffs to get (B, A)
+        coeffs_diff = coeffs[:, :batch_size] - coeffs[:, batch_size:]  # shape (A, B)
+        # sum up to get (A, )
+        captured_variance_estimator = torch.mean(coeffs_diff ** 2) * 0.5
 
-        # maximize the captured energy
-        captured_energy = torch.mean(coeffs ** 2)
-        loss = - captured_energy / grad_accumulation_steps
-        energies_temp_history.append(captured_energy)
+        loss = - captured_variance_estimator / grad_accumulation_steps 
 
+        # maximize the captured variance
         loss.backward(retain_graph=False)
-
+        captured_variance_temp_history.append(captured_variance_estimator.item())
         if (epoch_i + 1) % grad_accumulation_steps == 0:
-            energy_item = sum(energies_temp_history) / len(energies_temp_history)
-            energies_temp_history = []
-            if smoothed_energy is None:
-                smoothed_energy = energy_item
+            variance_item = sum(captured_variance_temp_history) / len(captured_variance_temp_history)
+            captured_variance_temp_history = []
+            if smoother_explained_variance is None:
+                smoother_explained_variance = variance_item
             else:
-                smoothed_energy = energy_smoothing_alpha * smoothed_energy + (1 - energy_smoothing_alpha) * energy_item
+                smoother_explained_variance = explained_variance_smoothing_alpha * smoother_explained_variance + (1 - explained_variance_smoothing_alpha) * variance_item
             if wandb_enabled:
-                wandb.log({"train/captured_energy": smoothed_energy}, step=epoch_i)
+                wandb.log({"train/captured_variance": smoother_explained_variance}, step=epoch_i)
                 wandb.log({"train/iteration": epoch_i}, step=epoch_i)
-            pbar.set_postfix({'captured_energy': smoothed_energy})
+                # visualize norm of the gradients of the parameters
+                all_grads = []
+                for param in neural_isometry.parameters():
+                    if param.grad is not None:
+                        all_grads.append(param.grad.view(-1))
+                all_grads = torch.cat(all_grads)
+                grad_norm = torch.norm(all_grads).item()
+                wandb.log({"train/grad_norm": grad_norm}, step=epoch_i)
+                # visualize the magnitude of the parameters
+                all_params = []
+                for param in neural_isometry.parameters():
+                    all_params.append(param.view(-1))
+                all_params = torch.cat(all_params)
+                param_norm = torch.norm(all_params).item()
+                wandb.log({"train/param_norm": param_norm}, step=epoch_i)
+                # visualize the average learning rate of the optimizer
+                lrs = [group['lr'] for group in optimizer.param_groups]
+                avg_lr = sum(lrs) / len(lrs)
+                wandb.log({"train/avg_lr": avg_lr}, step=epoch_i)
+            pbar.set_postfix({'captured_variance': smoother_explained_variance})
             optimizer.step()
             optimizer.zero_grad()
             # check if it is reduce on plateau scheduler
             if scheduler is not None:
                 if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    scheduler.step(smoothed_energy)
+                    scheduler.step(-smoother_explained_variance)
                 else:
                     scheduler.step()
-            energies_history.append(smoothed_energy)
+            captured_variance_history.append(smoother_explained_variance)
         
         for callback in callbacks:
             callback(
@@ -160,7 +179,7 @@ def main(conf: DictConfig):
         wandb_enabled=conf.wandb.enabled,
         grad_accumulation_steps=conf.grad_accumulation_steps,
         atom_index_batch_size=conf.atom_index_batch_size,
-        energy_smoothing_alpha=conf.get("energy_smoothing_alpha", 0.99),
+        explained_variance_smoothing_alpha=conf.get("explained_variance_smoothing_alpha", 0.99),
     )
 
     if conf.wandb.enabled:

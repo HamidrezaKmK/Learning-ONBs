@@ -47,7 +47,7 @@ class TentDictionary(InfiDictionary):
         return tent * scale                                              # (K, N)
 
     def gram_solve(self, atom_indices: torch.Tensor, inner_products: torch.Tensor):
-        return inner_products[atom_indices]
+        return inner_products # Gram matrixc is identity due to orthonormality
 
         
 class RadialTentDictionary(TentDictionary):

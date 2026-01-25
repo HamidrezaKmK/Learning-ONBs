@@ -23,7 +23,7 @@ grad_accumulation_steps: 10
 n_epochs: 50000
 domain_sample_size: 1000
 n_functions: 1000
-energy_smoothing_alpha: 0.99
+explained_variance_smoothing_alpha: 0.99
 n_reduced_order: 9
 
 callbacks:
@@ -34,7 +34,6 @@ callbacks:
     seeds: [0, 1, 2]
     frequency: 10
     density: 1000_00
-    n_truncation: ${n_reduced_order}
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
     dictionary: ${initial_atoms}
