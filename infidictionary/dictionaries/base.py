@@ -12,6 +12,7 @@ class InfiDictionary(ABC):
         atom_indices: list[int] | None = None,
         num_atoms: int | None = None,
         numerical_gram_n_samples: int | None = None,
+        is_orthonormal: bool = False,
     ):
         if atom_indices is not None:
             self.atom_indices = atom_indices
@@ -27,7 +28,8 @@ class InfiDictionary(ABC):
             self.atom_indices_tensor = torch.tensor(self.atom_indices, dtype=torch.long)
         else:
             self.atom_indices_tensor = None
-        
+
+        self.is_orthonormal = is_orthonormal
         self.numerical_gram_n_samples = numerical_gram_n_samples or 100_000
 
     @abstractmethod
@@ -64,19 +66,22 @@ class InfiDictionary(ABC):
 
         In many cases, the gram matrix is identity or diagonal, so this can be to just return inner_products.
         """
-        device = inner_products.device
-        if self.num_atoms is None:
-            raise ValueError("Cannot compute Gram matrix for infinite basis.")
-        if not self.check_gram_computed(atom_indices):
-            N = self.numerical_gram_n_samples
-            coords = self.sample_from_domain(N).cpu()
-            all_f = self.get_atom(coords, atom_indices).cpu()  # shape (A, N)
-            gram_matrix = all_f @ all_f.T / N  # shape (A, A)
-            self._gram_matrix_inv = torch.linalg.pinv(gram_matrix)
-            self._saved_atom_indices = atom_indices.cpu().long()
-        gram_matrix_inv = self._gram_matrix_inv.to(device)
-        coeffs = torch.einsum("ij,jb->ib", gram_matrix_inv, inner_products)  # shape (A, B)
-        return coeffs
+        if self.is_orthonormal:
+            return inner_products
+        else:
+            device = inner_products.device
+            if self.num_atoms is None:
+                raise ValueError("Cannot compute Gram matrix for infinite basis.")
+            if not self.check_gram_computed(atom_indices):
+                N = self.numerical_gram_n_samples
+                coords = self.sample_from_domain(N).cpu()
+                all_f = self.get_atom(coords, atom_indices).cpu()  # shape (A, N)
+                gram_matrix = all_f @ all_f.T / N  # shape (A, A)
+                self._gram_matrix_inv = torch.linalg.pinv(gram_matrix)
+                self._saved_atom_indices = atom_indices.cpu().long()
+            gram_matrix_inv = self._gram_matrix_inv.to(device)
+            coeffs = torch.einsum("ij,jb->ib", gram_matrix_inv, inner_products)  # shape (A, B)
+            return coeffs
 
 class MixedDictionary(InfiDictionary):
     """
@@ -101,7 +106,7 @@ class MixedDictionary(InfiDictionary):
                 self._map[idx][1] = b_idx
                 idx += 1
 
-        super().__init__(num_atoms=idx)
+        super().__init__(num_atoms=idx, is_orthonormal=False)
         
     def _get_atoms(self, coords: torch.Tensor, idx: torch.Tensor):
         dictionary_indices = self._map[idx][:, 0]

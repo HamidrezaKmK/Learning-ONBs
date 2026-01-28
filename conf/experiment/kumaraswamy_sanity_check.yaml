@@ -6,7 +6,7 @@
 defaults:
   - override /function_generator@function_generator: fourier_2d
   - override /diffeomorphisms@diffeomorphism: kumaraswamy
-  - override /dictionaries@initial_atoms: fourier_2d
+  - override /dictionaries@initial_dictionary: fourier_2d
   - override /wandb@wandb: enabled
   - _self_
 
@@ -15,7 +15,7 @@ _indices: [0, 1, 2, 3, 4, 5]
 optimizer:
   lr: 0.001
 
-initial_atoms:
+initial_dictionary:
   atom_indices: ${_indices}
 function_generator: 
   dictionary:
@@ -25,19 +25,18 @@ function_generator:
 n_epochs: 50_000
 domain_sample_size: 5000
 n_functions: 1000
-explained_variance_smoothing_alpha: 0.99
 
 callbacks:
   reconstruction_visualization:
     _target_: infidictionary.callbacks.VisualizeReconstruction
-    dictionary: ${initial_atoms}
+    dictionary: ${initial_dictionary}
     f_gen: ${function_generator}
     seeds: [10, 20, 30]
     frequency: 50
     density: 1000_00
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
-    dictionary: ${initial_atoms}
+    dictionary: ${initial_dictionary}
     frequency: 50
     density: 1000_00
 

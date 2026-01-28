@@ -4,14 +4,14 @@ defaults:
   - override /function_generator@function_generator: random_bandpass
   - override /orthogonal_synthesis@orthogonal_synthesis_partial: householder
   - override /diffeomorphisms@diffeomorphism: ct_radial
-  - override /dictionaries@initial_atoms: fourier_radial
+  - override /dictionaries@initial_dictionary: fourier_radial
   - override /wandb@wandb: enabled
   - _self_
 
 function_generator:
   radial: true
 
-initial_atoms:
+initial_dictionary:
   num_atoms: 500
 
 optimizer:
@@ -23,20 +23,19 @@ grad_accumulation_steps: 10
 n_epochs: 50000
 domain_sample_size: 1000
 n_functions: 1000
-explained_variance_smoothing_alpha: 0.99
 n_reduced_order: 9
 
 callbacks:
   reconstruction_visualization:
     _target_: infidictionary.callbacks.VisualizeReconstruction
-    dictionary: ${initial_atoms}
+    dictionary: ${initial_dictionary}
     f_gen: ${function_generator}
     seeds: [0, 1, 2]
     frequency: 10
     density: 1000_00
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
-    dictionary: ${initial_atoms}
+    dictionary: ${initial_dictionary}
     n_truncation: ${n_reduced_order}
     frequency: 10
     density: 1000_00

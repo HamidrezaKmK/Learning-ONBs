@@ -6,6 +6,7 @@ from typing import Callable
 import wandb
 from .base import Callback
 from infidictionary.neural_isometries import HalfDensityIsometry
+from infidictionary.utils import NeuralField
 
 class VisualizeVelocityField(Callback):
     """
@@ -33,6 +34,7 @@ class VisualizeVelocityField(Callback):
         self,
         epoch: int,
         neural_isometry: HalfDensityIsometry,
+        mean_function: NeuralField,
         wandb_enabled: bool,
         device: torch.device,
     ): 

@@ -1,5 +1,7 @@
 # Learning Basis Functions on Function Spaces
 
+(TODO: revamp the entire thing)
+
 This project is aimed at learning basis functions on function spaces using diffeomorphic transformations. For more details on the theory of the method please look at the Overleaf document.
 
 The code is implemented in Python and leverages PyTorch for automatic differentiation and optimization.

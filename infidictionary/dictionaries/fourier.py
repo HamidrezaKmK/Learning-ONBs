@@ -37,6 +37,9 @@ def sin1d(k: torch.Tensor, t: torch.Tensor):
 
 class FourierDictionary(InfiDictionary):
 
+    def __init__(self):
+        super().__init__(atom_indices=None, num_atoms=None, numerical_gram_n_samples=None, is_orthonormal=True)
+    
     def sample_from_domain(
         self,
         N: int,
@@ -223,9 +226,6 @@ class FourierDictionary(InfiDictionary):
             vals[kind == 3] = fx_s[kind == 3] * fy_s[kind == 3]  # "ss"
 
         return vals  # shape (N_idx, N_coords)
-
-    def gram_solve(self, atom_indices: torch.Tensor, inner_products: torch.Tensor):
-        return inner_products # Gram matrix is identity due to orthonormality
 
 
 class RadialFourierDictionary(FourierDictionary):

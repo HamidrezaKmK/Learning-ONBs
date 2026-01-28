@@ -3,7 +3,7 @@
 defaults:
   - override /function_generator@function_generator: random_bandpass
   - override /diffeomorphisms@diffeomorphism: ct_radial
-  - override /dictionaries@initial_atoms: mix1_radial
+  - override /dictionaries@initial_dictionary: mix1_radial
   - override /wandb@wandb: enabled
   - _self_
 
@@ -19,20 +19,19 @@ grad_accumulation_steps: 10
 n_epochs: 5000
 domain_sample_size: 5000
 n_functions: 1000
-explained_variance_smoothing_alpha: 0.99
 
 
 callbacks:
   reconstruction_visualization:
     _target_: infidictionary.callbacks.VisualizeReconstruction
-    dictionary: ${initial_atoms}
+    dictionary: ${initial_dictionary}
     f_gen: ${function_generator}
     seeds: [0, 1, 2]
     frequency: 10
     density: 1000_00
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
-    dictionary: ${initial_atoms}
+    dictionary: ${initial_dictionary}
     frequency: 10
     density: 1000_00
   velocity_field:

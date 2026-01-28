@@ -3,7 +3,7 @@
 defaults:
   - override /function_generator@function_generator: random_bandpass
   - override /neural_isometry@neural_isometry: half_density_ct_flow_radial
-  - override /dictionaries@initial_atoms: fourier_radial
+  - override /dictionaries@initial_dictionary: fourier_radial
   - override /wandb@wandb: enabled
   - _self_
 
@@ -18,12 +18,16 @@ grad_accumulation_steps: 32
 n_epochs: 50000
 domain_sample_size: 1000
 n_functions: 1000
-explained_variance_smoothing_alpha: 0.99
 
 callbacks:
+  mean_function_visualization:
+    _target_: infidictionary.callbacks.VisualizeMeanFunction
+    initial_dictionary: ${initial_dictionary}
+    frequency: 50
+    density: 1000_00
   reconstruction_visualization:
     _target_: infidictionary.callbacks.VisualizeKLExpansionReconstruction
-    dictionary: ${initial_atoms}
+    dictionary: ${initial_dictionary}
     f_gen: ${function_generator}
     seeds: [0, 1, 2]
     frequency: 50
@@ -31,7 +35,7 @@ callbacks:
     truncation_factors: [10, 20, 30]
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
-    dictionary: ${initial_atoms}
+    dictionary: ${initial_dictionary}
     n_truncation: 10
     frequency: 50
     density: 1000_00

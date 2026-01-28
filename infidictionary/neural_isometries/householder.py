@@ -20,6 +20,7 @@ class HouseholderIsometry(NeuralIsometry):
         self.n_reflections = n_reflections
         # create n neural fields
         for i in range(n_reflections):
+            # TODO: maybe use Neural Field here?
             setattr(
                 self,
                 f"reflection_{i}",

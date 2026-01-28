@@ -32,6 +32,7 @@ class RandomBandpassGenerator(FunctionClassGenerator):
         r_lo: float = 0.5,
         r_hi: float = 1.0,
         seed: int = 42,
+        mean_seed: int | None = None,
     ):
         self.l_sin = l_sin
         self.l_cos = l_cos
@@ -46,9 +47,9 @@ class RandomBandpassGenerator(FunctionClassGenerator):
         self.phase_cos = torch.rand(size=(self.l_cos,), generator=self.rng_dset) * (phase_hi - phase_lo) + phase_lo
         self.r_sin = torch.rand(size=(self.l_sin,), generator=self.rng_dset) * (r_hi - r_lo) + r_lo
         self.r_cos = torch.rand(size=(self.l_cos,), generator=self.rng_dset) * (r_hi - r_lo) + r_lo
+        self.mean_seed = mean_seed
 
-
-    def __call__(self, xy: torch.Tensor, seed: int):
+    def _call(self, xy: torch.Tensor, seed: int):
         device = xy.device
 
         if xy.ndim != 2 or xy.shape[1] != 2:
@@ -83,6 +84,13 @@ class RandomBandpassGenerator(FunctionClassGenerator):
 
         val = (weights.unsqueeze(1) * all_e).sum(axis=0)  # (N,)
         return val
+    
+    def __call__(self, xy: torch.Tensor, seed: int):
+        ret = self._call(xy, seed)
+        if self.mean_seed is not None:
+            mean_val = self._call(xy, self.mean_seed)
+            ret = ret + mean_val
+        return ret
 
 class BasisRandomGenerator(FunctionClassGenerator):
     def __init__(

@@ -16,11 +16,9 @@
 
 [] Check all of the experiments are working and add integration tests
 [] Immediate:
-    [] Change the config with NeuralIsometry
-    [] Merge the two notebooks on half-densities
-    [] Change n_truncation in the CheckIsometry config
-    [] Change the name of reconstruction code to kl_expansion
-
+    [] Try the geometric version of the optimization and get it to work (It didn't work ...)
+    [] Try all of the sanity check codes
+    
 [] Use FFT with aliasing
 [] Retry the pullback/pushforward idea for inner products
 [] Is there a simulation free training for the half-density transfrom?

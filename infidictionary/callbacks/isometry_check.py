@@ -6,6 +6,7 @@ import wandb
 from .base import Callback
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.neural_isometries import NeuralIsometry
+from infidictionary.utils import NeuralField
 
 class IsometryCheck(Callback):
     """
@@ -29,6 +30,7 @@ class IsometryCheck(Callback):
         self,
         epoch: int,
         neural_isometry: NeuralIsometry,
+        mean_function: NeuralField,
         wandb_enabled: bool,
         device: torch.device,
     ): 

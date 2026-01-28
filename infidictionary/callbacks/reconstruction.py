@@ -8,11 +8,13 @@ from .base import Callback
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.datasets import FunctionClassGenerator
 from infidictionary.neural_isometries import NeuralIsometry, IdentityIsometry
+from infidictionary.utils import NeuralField
 
 def get_reconstructions(
     coords: torch.Tensor, # (N, d)
     functions: torch.Tensor, # (B, N)
     neural_isometry: NeuralIsometry,
+    mean_function: NeuralField,
     dictionary: InfiDictionary,
     prefixes: List[int],
     device: torch.device,
@@ -22,6 +24,8 @@ def get_reconstructions(
     neural isometry and dictionary at the specified atom indices (prefixes).
     """
     atom_indices = torch.arange(prefixes[-1], device=device).long()
+    avg = mean_function(coords).squeeze(-1)  # (N, )
+    functions = functions - avg.unsqueeze(0)  # (B, N)
     b, all_deformed_functions = neural_isometry.inner_products( 
         atom_indices=atom_indices,
         coords=coords,
@@ -36,7 +40,7 @@ def get_reconstructions(
         coeffs = all_coeffs[:prefix_size]
         deformed_functions = all_deformed_functions[:prefix_size]
         proj = coeffs.T @ deformed_functions  # shape (B, N)
-        proj_list.append(proj)
+        proj_list.append(proj + avg.unsqueeze(0))  # add back the mean
     return proj_list
 
 class VisualizeReconstruction(Callback):
@@ -65,6 +69,7 @@ class VisualizeReconstruction(Callback):
         self,
         epoch: int,
         neural_isometry: NeuralIsometry,
+        mean_function: NeuralField,
         wandb_enabled: bool,
         device: torch.device,
     ): 
@@ -87,6 +92,7 @@ class VisualizeReconstruction(Callback):
                 coords=coords,
                 functions=all_vals,
                 neural_isometry=neural_isometry,
+                mean_function=mean_function,
                 dictionary=self.dictionary,
                 prefixes=[self.dictionary.num_atoms],
                 device=device,
@@ -191,6 +197,7 @@ class VisualizeKLExpansionReconstruction(Callback):
         self,
         epoch: int,
         neural_isometry: NeuralIsometry,
+        mean_function: NeuralField,
         wandb_enabled: bool,
         device: torch.device,
     ): 
@@ -212,24 +219,25 @@ class VisualizeKLExpansionReconstruction(Callback):
                 coords=coords,
                 functions=all_vals,
                 neural_isometry=neural_isometry,
+                mean_function=mean_function,
                 dictionary=self.dictionary,
                 prefixes=self.truncation_factors,
                 device=device,
             ) # list of size len(self.truncation_factors) x (len(seeds), N)
             reconstructions = torch.stack(reconstructions, dim=0)  # (len(truncation_factors), len(seeds), N)
             reconstructions = reconstructions.permute(1, 0, 2)  # (len(seeds), len(truncation_factors), N)
-
+            
             reconstructions_identity = get_reconstructions(
                 coords=coords,
                 functions=all_vals,
                 neural_isometry=IdentityIsometry(),
+                mean_function=mean_function,
                 dictionary=self.dictionary,
                 prefixes=self.truncation_factors,
                 device=device,
             ) # list of size len(self.truncation_factors) x (len(seeds), N)
             reconstructions_identity = torch.stack(reconstructions_identity, dim=0)  # (len(truncation_factors), len(seeds), N)
             reconstructions_identity = reconstructions_identity.permute(1, 0, 2)  # (len(seeds), len(truncation_factors), N)
-
             
             n_cols = 1 + len(self.truncation_factors)
             n_rows = 2 * len(self.seeds)

@@ -1,7 +1,8 @@
 defaults:
   - function_generator: fourier_2d # the forward problem
   - neural_isometry: half_density_kumaraswamy_radial
-  - dictionaries@initial_atoms: fourier_2d
+  - neural_fields@mean_function: mlp
+  - dictionaries@initial_dictionary: fourier_2d
   - index_sampler: geometric_static
   - hydra: default
   - wandb: disabled # set to enabled for wandb logging
@@ -9,15 +10,18 @@ defaults:
   - override hydra/hydra_logging: none # hack to fix the logging code
   - override hydra/job_logging: none # hack to fix the logging code
 
-
-optimizer:
+mean_function_optimizer_callable:
   _target_: torch.optim.Adam
   lr: 0.001
   _partial_: true
+mean_function_schedular_callable: null
 
-scheduler: 
-  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+isometry_optimizer_callable:
+  _target_: torch.optim.Adam
+  lr: 0.001
   _partial_: true
+isometry_scheduler_callable: null
+
 
 # training hyperparameters
 n_epochs: 500000
@@ -26,5 +30,5 @@ n_functions: 1000
 batch_size: 100
 atom_index_batch_size: 100
 grad_accumulation_steps: 10
-explained_variance_smoothing_alpha: 0.99
 n_reduced_order: null
+coordinatewise_loss_p: 0

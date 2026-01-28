@@ -10,15 +10,15 @@ class HouseholderSynthesis(OrthogonalSynthesis):
         self.V = nn.Parameter(torch.randn(n_householder, n_atoms))
         self.eps = eps
 
-    def _transform(self, initial_atoms: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
+    def _transform(self, initial_dictionary: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
         """
         Apply a sequence of Householder reflections:
             f <- (I - 2 v v^T) f
         where v is a unit vector in R^{n_atoms}.
-        initial_atoms: (n_atoms, N)
+        initial_dictionary: (n_atoms, N)
         returns:       (n_atoms, N)
         """
-        f = initial_atoms
+        f = initial_dictionary
         for i in range(V.shape[0]):
             v = V[i]  # (n_atoms,)
             v = v / (v.norm(p=2) + self.eps)  # (n_atoms,)
@@ -27,9 +27,9 @@ class HouseholderSynthesis(OrthogonalSynthesis):
 
         return f
     
-    def pushforward(self, initial_atoms: torch.Tensor, atom_indices: torch.Tensor) -> torch.Tensor:    
-        V = self.V.to(dtype=initial_atoms.dtype, device=initial_atoms.device)[:, atom_indices]
-        return self._transform(initial_atoms, V)
+    def pushforward(self, initial_dictionary: torch.Tensor, atom_indices: torch.Tensor) -> torch.Tensor:    
+        V = self.V.to(dtype=initial_dictionary.dtype, device=initial_dictionary.device)[:, atom_indices]
+        return self._transform(initial_dictionary, V)
 
     def pullback(self, synthesized_atoms: torch.Tensor, atom_indices: torch.Tensor) -> torch.Tensor:
         V = self.V.to(dtype=synthesized_atoms.dtype, device=synthesized_atoms.device)[:, atom_indices]

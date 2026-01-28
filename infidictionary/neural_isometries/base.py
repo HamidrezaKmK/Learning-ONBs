@@ -14,7 +14,7 @@ class NeuralIsometry(ABC, torch.nn.Module):
     ):
         super().__init__()
         self.initial_diffeomorphism = initial_diffeomorphism or IdentityFlow()
-        
+
     @abstractmethod
     def transform(
         self,

@@ -6,7 +6,11 @@ from .base import InfiDictionary
 from .utils import sample_from_disk
 
 class TentDictionary(InfiDictionary):
-
+    
+    def __init__(self):
+        super().__init__(atom_indices=None, num_atoms=None, numerical_gram_n_samples=None, is_orthonormal=True)
+    
+    
     def __init__(
         self,
         total_rows: int,
@@ -45,10 +49,6 @@ class TentDictionary(InfiDictionary):
         tent = torch.clamp(1.0 - torch.maximum(u, v), min=0.0)           # (K, N)
         scale = math.sqrt(6.0 / (w * h))
         return tent * scale                                              # (K, N)
-
-    def gram_solve(self, atom_indices: torch.Tensor, inner_products: torch.Tensor):
-        return inner_products # Gram matrixc is identity due to orthonormality
-
         
 class RadialTentDictionary(TentDictionary):
 

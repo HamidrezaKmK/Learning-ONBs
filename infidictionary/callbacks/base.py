@@ -2,6 +2,7 @@ import torch
 
 from abc import ABC, abstractmethod
 from infidictionary.neural_isometries import NeuralIsometry
+from infidictionary.utils import NeuralField
 
 class Callback(ABC):
 
@@ -10,6 +11,7 @@ class Callback(ABC):
         self,
         epoch: int,
         neural_isometry: NeuralIsometry,
+        mean_function: NeuralField,
         wandb_enabled: bool,
         device: torch.device,
     ):

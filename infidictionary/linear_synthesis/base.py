@@ -20,7 +20,7 @@ class OrthogonalSynthesis(nn.Module):
 
     def pushforward(
         self,
-        initial_atoms: torch.Tensor, # (B, N)
+        initial_dictionary: torch.Tensor, # (B, N)
         atom_indices: torch.Tensor,
     ):
         """Returns the synthesized atoms from the initial signal of size (B, N)"""
@@ -28,9 +28,9 @@ class OrthogonalSynthesis(nn.Module):
     
     def forward(
         self, 
-        initial_atoms: torch.Tensor, # (B, N)
+        initial_dictionary: torch.Tensor, # (B, N)
         atom_indices: torch.Tensor,
     ) -> torch.Tensor:
         """Returns the synthesized signal of size (B, N)"""
-        return self.pullback(initial_atoms, atom_indices)
+        return self.pullback(initial_dictionary, atom_indices)
     

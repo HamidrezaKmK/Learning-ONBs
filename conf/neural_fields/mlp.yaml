@@ -1,0 +1,10 @@
+_target_: infidictionary.utils.MLPNeuralField
+input_dim: 2
+output_dim: 1
+hidden_dims:
+  zero: 128
+  one: 128
+  two: 128
+activation: 
+  _target_: torch.nn.ReLU
+  _partial_: true
