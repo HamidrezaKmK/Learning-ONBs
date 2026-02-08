@@ -71,3 +71,47 @@ class IdentityIsometry(NeuralIsometry):
         mode: Literal['pullback', 'pushforward'],
     ):
         return initial_dictionary.get_atom(coords, atom_indices)  # (A, N)  
+
+
+class ComposedIsometry(NeuralIsometry): # TODO: BUG!
+    """
+    Composed neural isometry that applies a sequence of neural isometries.
+    """
+    
+    def __init__(
+        self,
+        eulerian: NeuralIsometry,
+        lagrangian: NeuralIsometry,
+        initial_diffeomorphism: Diffeomorphism | None = None,
+    ):
+        super().__init__(initial_diffeomorphism=initial_diffeomorphism)
+        if not isinstance(eulerian.initial_diffeomorphism, IdentityFlow):
+            raise ValueError("ComposedIsometry only composes isometries with identity initial diffeomorphisms.")
+        if not isinstance(lagrangian.initial_diffeomorphism, IdentityFlow):
+            raise ValueError("ComposedIsometry only composes isometries with identity initial diffeomorphisms.")
+        self.eulerian = eulerian
+        self.lagrangian = lagrangian
+    
+    def transform(
+        self,
+        initial_dictionary: InfiDictionary,
+        atom_indices: torch.Tensor,
+        coords: torch.Tensor, # (N, d)
+        device: torch.device,
+        mode: Literal['pullback', 'pushforward'],
+    ):
+        if mode == 'pushforward':
+            raise NotImplementedError("ComposedIsometry currently only supports pullback mode.")
+        # First apply the lagrangian isometry
+        intermediate_dictionary = self.lagrangian.transform(
+            initial_dictionary=initial_dictionary,
+            atom_indices=atom_indices,
+            coords=coords,
+            device=device,
+            mode=mode,
+        )  # (A, N)
+        res = self.eulerian.pullback(
+            coords=coords,
+            field_values=intermediate_dictionary,
+        )  # (A, N) # NOTE: do they commute?
+        return res

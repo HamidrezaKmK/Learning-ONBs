@@ -1,0 +1,23 @@
+_target_: infidictionary.neural_isometries.InfinitesimalGivensIsometry
+coords_dim: 2
+vector_field_partial:
+  _target_: infidictionary.neural_isometries.householder.TimeEvolvingField
+  _partial_: true
+  base_field_partial:
+    _target_: infidictionary.utils.MLPNeuralField
+    _partial_: true
+    hidden_dims:
+      a: 16
+      b: 32
+      c: 64
+      d: 32
+    activation:
+      _target_: torch.nn.ReLU
+      _partial_: true
+use_adjoint: false
+method: euler_householder
+rtol: 1e-5
+atol: 1e-6
+start_time: 0.0
+end_time: 1.0
+initial_diffeomorphism: null

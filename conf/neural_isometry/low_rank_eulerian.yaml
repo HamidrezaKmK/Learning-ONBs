@@ -1,0 +1,15 @@
+_target_: infidictionary.neural_isometries.LowRankEulerianIsometry
+n_steps: 200
+eulerian_dynamics:
+  _target_: infidictionary.neural_isometries.low_rank_eulerian.EulerianDynamics
+  field_partial:
+    _target_: infidictionary.utils.MLPNeuralField
+    _partial_: true
+    hidden_dims:
+      a: 64
+      b: 64
+    activation: 
+      _target_: torch.nn.ReLU
+      _partial_: true
+  coord_dims: 2
+  value_dims: 1
