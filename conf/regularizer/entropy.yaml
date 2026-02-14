@@ -1,0 +1,2 @@
+_target_: infidictionary.regularizers.EntropyRegularizer
+sigma: 0.1

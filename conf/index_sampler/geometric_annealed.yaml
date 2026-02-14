@@ -1,4 +1,4 @@
 _target_: infidictionary.index_sampler.GeometricIndexSampler
-base_p: 0.2
+base_p: 0.5
 final_p: 0.01
 gamma: 1. # linear annealing

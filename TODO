@@ -1,23 +1,23 @@
-[] Look up dictionary Learning methods:
-    [] Look at this guy's works: https://peterchencyc.com/ (he's also behind shape space spectra)
-    [] Look at the papers in this chat: https://chatgpt.com/share/69751d97-241c-8006-a28c-c120bf6784fe
-    
-    [] Kernelized supervised dictionary learning: https://uwaterloo.ca/data-analytics/sites/default/files/uploads/documents/gangeh_kernelized_pre_print.pdf?utm_source=chatgpt.com
-    [] The sample complexity of dictionary learning: https://proceedings.mlr.press/v19/vainsencher11a/vainsencher11a.pdf?utm_source=chatgpt.com
-    [] Extended dynamic mode decomposition: https://pubs.aip.org/aip/cha/article/27/10/103111/151485/Extended-dynamic-mode-decomposition-with?utm_source=chatgpt.com
-    [] Deep Functional Dictionaries in 3D: https://mhsung.github.io/assets/files/deep-functional-dictionaries.pdf?utm_source=chatgpt.com
-    [] Off-the-grid learning of mixtures from a continuous dictionary: https://arxiv.org/pdf/2207.00171
-    [] (Application) https://infoscience.epfl.ch/server/api/core/bitstreams/6a5d461b-848e-40b7-97da-81caea9c63de/content?utm_source=chatgpt.com
-    [] Read about finite-element methods: https://www.mdpi.com/2227-7390/7/5/412?utm_source=chatgpt.com
-    [] https://link.springer.com/article/10.1007/s10444-024-10129-4?utm_source=chatgpt.com
-    [] https://pmc.ncbi.nlm.nih.gov/articles/PMC5312119/?utm_source=chatgpt.com
-    [] https://pubs.aip.org/asa/jasa/article-abstract/141/3/1749/1056459/Dictionary-learning-of-sound-speed-profiles?redirectedFrom=fulltext&utm_source=chatgpt.com
-    [] https://jmlr.org/papers/volume17/maggioni16a/maggioni16a.pdf?utm_source=chatgpt.com
 
-[] Check all of the experiments are working and add integration tests
 [] Immediate:
-    [] Try the geometric version of the optimization and get it to work (It didn't work ...)
-    [] Try all of the sanity check codes
+    [] Rename KL expansion to PCA
+    [] Rename PWC to basis_discovery
+    [] Add a proper domain sampler abstraction outside of dictionaries
+
+[] Pullback rather than pushforward
+    [] Add source and target coordinates and densities and revamp the interface of the NeuralIsometry to account for it.
+    [] Fix the velocity field sign bug
+    [] Add initial diffeomorphism too for changing domains
+    [] Each dictionary has an interface for inner products, it takes an index sampler and weights different coefficients
+    [] Then, it either returns a Monte-carlo estimate of inner product, or performs a transform and uses the weights
+
+
+    [] Fix the pullback pushforward convention I currently have and think of a better abstraction for the transform 
+        (I can return volume values and the coordinates, then I can use the volume values for computing inner products)
+    [] Fix the indexing of the current dictionaries I have
+    [] Use FFTs (ignoraing aliasing) rather than Monte-carlo on everything
+    [] Move to complex fields
+    [] Add Haar wavelet dictionaries
     
 [] Use FFT with aliasing
 [] Retry the pullback/pushforward idea for inner products
@@ -25,11 +25,4 @@
 [] Add wavelet dictionaries
 
 [] Ablate the stratified sampling for the grid integrals
-[] Use new methods for computing inner products, such as the pullback and
-    pushforward mixing, i.e., <T e_i, f> = <e_i, T* f>, we know we have T*
-    we can also do this in continuous time. 
-[] The rejection sampling idea
 
-[] Doing Regression/Interpolation with the current idea
-[] Look up Taylor Green vortex fields
-[] Think about applications where there is a dataset we want to represent

@@ -1,0 +1,3 @@
+_target_: infidictionary.regularizers.FouriererRegularizer
+asset_path: ./assets/Joseph_Fourier.jpg
+resize_to: 512
