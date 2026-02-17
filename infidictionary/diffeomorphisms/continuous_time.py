@@ -12,16 +12,12 @@ class CTDiffeomorphism(Diffeomorphism):
 
     def __init__(
         self,
-        start_time: float,
-        end_time: float,
         use_adjoint: bool = True,
         method: str = 'dopri5',
         rtol: float = 1e-6,
         atol: float = 1e-6,
     ):
         super().__init__()
-        self.start_time = start_time
-        self.end_time = end_time
         self.use_adjoint = use_adjoint
         self.method = method
         self.rtol = rtol
@@ -58,15 +54,17 @@ class CTDiffeomorphism(Diffeomorphism):
         self, 
         xy: torch.Tensor, 
         forward: bool,
+        start_time: float,
+        end_time: float,
     ):
         # initial augmented state
         s0 = torch.zeros((xy.shape[0], 1), device=xy.device, dtype=xy.dtype)
         y0 = torch.cat([xy, s0], dim=-1)
 
         if forward:
-            tspan = torch.tensor([self.start_time, self.end_time], device=xy.device, dtype=xy.dtype)
+            tspan = torch.tensor([start_time, end_time], device=xy.device, dtype=xy.dtype)
         else:
-            tspan = torch.tensor([self.end_time, self.start_time], device=xy.device, dtype=xy.dtype)
+            tspan = torch.tensor([end_time, start_time], device=xy.device, dtype=xy.dtype)
 
         func = CTDynamics(self)
 
@@ -87,20 +85,29 @@ class CTDiffeomorphism(Diffeomorphism):
     def forward(
         self,
         xy: torch.Tensor, 
+        start_time: float,
+        end_time: float,
     ):
         return self._run_ode(
             xy,
             forward=True,
+            start_time=start_time,
+            end_time=end_time,
         ) 
     
     def inverse(
         self,
         xy: torch.Tensor, 
+        start_time: float,
+        end_time: float,
     ):
         return self._run_ode(
             xy,
             forward=False,
-        ) 
+            start_time=start_time,
+            end_time=end_time,
+        )
+
 
 class CTDynamics(torch.nn.Module):
     def __init__(self, flow: CTDiffeomorphism):
@@ -143,12 +150,11 @@ class CTDynamics(torch.nn.Module):
 
         return torch.cat([v, ds], dim=-1)         # (B, d+1)
 
+
 class CTCubeFlow(CTDiffeomorphism):
     def __init__(
         self,
         dimensions: int,
-        start_time: float,
-        end_time: float,
         use_adjoint: bool = True,
         method: str = 'dopri5',
         rtol: float = 1e-6,
@@ -159,8 +165,6 @@ class CTCubeFlow(CTDiffeomorphism):
         gamma: float = 1.0,
     ):
         super().__init__(
-            start_time=start_time, 
-            end_time=end_time,
             use_adjoint=use_adjoint,
             method=method,
             rtol=rtol,

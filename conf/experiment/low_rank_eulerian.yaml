@@ -64,5 +64,5 @@ callbacks:
 # Add tags so that it is easier to filter the experiments in the W&B dashboard
 wandb:
   tags:
-    experiment: ct_kl_expansion
+    experiment: ct_fpca
     task: reconstruction

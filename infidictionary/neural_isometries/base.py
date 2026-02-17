@@ -2,116 +2,76 @@ import torch
 from typing import Literal
 
 from abc import ABC, abstractmethod
-from infidictionary.dictionaries.base import InfiDictionary
-from infidictionary.diffeomorphisms.base import Diffeomorphism 
-from infidictionary.diffeomorphisms import IdentityFlow
+from infidictionary.domain_samplers import DomainSampler
 
 class NeuralIsometry(ABC, torch.nn.Module):
 
+    """
+    Implements a general abstract Neural Isometry that maps arbitrary
+    functions to other functions while preserving inner products.
+
+    The general abstraction takes in domain sampler object which essentially
+    samples coordinates on the domain w.r.t. some pre-defined probability measure.
+
+    The pushforward and pullback methods take in coordinates, along their field values
+    at those coordinates, then the function returns the transformed coordinates, and
+    transformed function values at those coordinates.
+    """
     def __init__(
         self,
-        initial_diffeomorphism: Diffeomorphism | None = None,
     ):
         super().__init__()
-        self.initial_diffeomorphism = initial_diffeomorphism or IdentityFlow()
+        
+    @abstractmethod
+    def pushforward(
+        self,
+        src_coords: torch.Tensor, # (N, d)
+        src_logabsdet: torch.Tensor, # (N, )
+        src_field: torch.Tensor, # (B, N, c),
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Returns the coordinates and values of the pushforward operation
+        """
+        pass
 
     @abstractmethod
-    def transform(
+    def pullback(
         self,
-        initial_dictionary: InfiDictionary,
-        atom_indices: torch.Tensor,
-        coords: torch.Tensor, # (N, d)
-        device: torch.device,
-        mode: Literal['pullback', 'pushforward'],
-    ):
-        raise NotImplementedError("Subclasses must implement this method")
-    
-    def inner_products(
-        self,
-        atom_indices: torch.Tensor, # (A, )
-        coords: torch.Tensor, # (N, d)
-        vals: torch.Tensor, # (B, N)
-        initial_dictionary: InfiDictionary,
-        device: torch.device,
-        return_pullback: bool = False,
-    ): # TODO: there are more elaborate ways of doing inner products with fourier and over time pullback pushforwards
+        tgt_coords: torch.Tensor, # (N, d)
+        tgt_logabsdet: torch.Tensor, # (N, )
+        tgt_field: torch.Tensor, # (B, N, c),
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Compute the inner products on the deformed dictionary atoms in atom_indices
-        and the functions vals sampled at coords.
-
-        Also return whether or not the same computation graph is used or not.
+        Returns the coordinates and values of the pullback operation
+        Due to the isometry property, the pullback should be the inverse of the pushforward.
         """
-        N = coords.shape[0]
-        all_deformed_vals_pullback = self.transform(
-            initial_dictionary=initial_dictionary,
-            atom_indices=atom_indices,
-            coords=coords,
-            device=device,
-            mode='pullback',
-        )  # (A, N)
-        inner_products = torch.einsum("an,bn->ab", all_deformed_vals_pullback, vals) / N # (A, B)
-        if return_pullback:
-            return inner_products, all_deformed_vals_pullback
-        return inner_products
+        pass
 
 class IdentityIsometry(NeuralIsometry):
     """
-    Identity neural isometry that does not change the dictionary atoms.
+    A toy neural isometry that does nothing, but is still an isometry. Useful for debugging and testing.
     """
 
-    def __init__(self):
-        super().__init__(initial_diffeomorphism=IdentityFlow())
+    def __init__(self, domain_sampler: DomainSampler):
+        super().__init__(domain_sampler)
 
-    def transform(
-        self,
-        initial_dictionary: InfiDictionary,
-        atom_indices: torch.Tensor,
-        coords: torch.Tensor, # (N, d)
-        device: torch.device,
-        mode: Literal['pullback', 'pushforward'],
-    ):
-        return initial_dictionary.get_atom(coords, atom_indices)  # (A, N)  
-
-
-class ComposedIsometry(NeuralIsometry): # TODO: BUG!
-    """
-    Composed neural isometry that applies a sequence of neural isometries.
-    """
     
-    def __init__(
+    def pushforward(
         self,
-        eulerian: NeuralIsometry,
-        lagrangian: NeuralIsometry,
-        initial_diffeomorphism: Diffeomorphism | None = None,
+        src_coords: torch.Tensor, # (N, d)
+        src_logabsdet: torch.Tensor, # (N, )
+        src_field: torch.Tensor, # (B, N, c),
+        src_time: float | None = None, # optional time argument for time-dependent isometries
+        tgt_time: float | None = None, # optional time argument for time-dependent isometries
     ):
-        super().__init__(initial_diffeomorphism=initial_diffeomorphism)
-        if not isinstance(eulerian.initial_diffeomorphism, IdentityFlow):
-            raise ValueError("ComposedIsometry only composes isometries with identity initial diffeomorphisms.")
-        if not isinstance(lagrangian.initial_diffeomorphism, IdentityFlow):
-            raise ValueError("ComposedIsometry only composes isometries with identity initial diffeomorphisms.")
-        self.eulerian = eulerian
-        self.lagrangian = lagrangian
-    
-    def transform(
+        return src_coords, src_logabsdet, src_field
+
+    def pullback(
         self,
-        initial_dictionary: InfiDictionary,
-        atom_indices: torch.Tensor,
-        coords: torch.Tensor, # (N, d)
-        device: torch.device,
-        mode: Literal['pullback', 'pushforward'],
+        tgt_coords: torch.Tensor, # (N, d) 
+        tgt_logabsdet: torch.Tensor, # (N, )
+        tgt_field: torch.Tensor, # (B, N, c),
+        src_time: float | None = None, # optional time argument for time-dependent isometries
+        tgt_time: float | None = None, # optional time argument for time-dependent isometr
     ):
-        if mode == 'pushforward':
-            raise NotImplementedError("ComposedIsometry currently only supports pullback mode.")
-        # First apply the lagrangian isometry
-        intermediate_dictionary = self.lagrangian.transform(
-            initial_dictionary=initial_dictionary,
-            atom_indices=atom_indices,
-            coords=coords,
-            device=device,
-            mode=mode,
-        )  # (A, N)
-        res = self.eulerian.pullback(
-            coords=coords,
-            field_values=intermediate_dictionary,
-        )  # (A, N) # NOTE: do they commute?
-        return res
+        return tgt_coords, tgt_logabsdet, tgt_field

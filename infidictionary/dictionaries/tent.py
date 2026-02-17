@@ -3,7 +3,6 @@ import torch
 import math
 
 from .base import InfiDictionary
-from .utils import sample_from_disk
 
 class TentDictionary(InfiDictionary):
     
@@ -21,13 +20,6 @@ class TentDictionary(InfiDictionary):
         super().__init__(
             num_atoms=total_rows * total_cols,
         )
-
-    
-    def sample_from_domain(
-        self,
-        N: int,
-    ):
-        return torch.rand((N, 2))
     
     def _get_atoms(self, xy: torch.Tensor, idx: torch.Tensor):
         # idx: (K,) long tensor of atom indices
@@ -51,12 +43,6 @@ class TentDictionary(InfiDictionary):
         return tent * scale                                              # (K, N)
         
 class RadialTentDictionary(TentDictionary):
-
-    def sample_from_domain(
-        self,
-        N: int,
-    ):
-        return sample_from_disk(N)
 
     def _get_atoms(self, xy, idx):
         r = xy[:, 0]**2 + xy[:, 1]**2

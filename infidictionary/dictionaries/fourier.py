@@ -4,7 +4,6 @@ import math
 from typing import Literal
 
 from .base import InfiDictionary
-from .utils import sample_from_disk
 
 def cos1d(k: torch.Tensor, t: torch.Tensor):
     """
@@ -39,12 +38,6 @@ class FourierDictionary(InfiDictionary):
 
     def __init__(self):
         super().__init__(atom_indices=None, num_atoms=None, numerical_gram_n_samples=None, is_orthonormal=True)
-    
-    def sample_from_domain(
-        self,
-        N: int,
-    ):
-        return torch.rand((N, 2))
 
     _KINDS_4 = ("cc", "cs", "sc", "ss")
     _KINDS_KX0 = ("cc", "cs")  # kx=0 => fx is constant, only theta varies
@@ -229,12 +222,6 @@ class FourierDictionary(InfiDictionary):
 
 
 class RadialFourierDictionary(FourierDictionary):
-    
-    def sample_from_domain(
-        self,
-        N: int,
-    ):
-        return sample_from_disk(N)
     
     def _get_atoms(self, xy: torch.Tensor, idx: torch.Tensor):
         r = xy[:, 0]**2 + xy[:, 1]**2

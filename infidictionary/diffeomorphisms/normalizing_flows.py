@@ -1,13 +1,12 @@
+from typing import Literal
 import math
 import torch
 import torch.nn.functional as F
 from torch import nn
-from nflows.transforms import Transform, CompositeTransform, Sigmoid, IdentityTransform, PiecewiseRationalQuadraticCouplingTransform, ActNorm
-from nflows.transforms.autoregressive import MaskedAffineAutoregressiveTransform as MAF
-from nflows.transforms.permutations import RandomPermutation
+from nflows.transforms import Transform, CompositeTransform, PiecewiseRationalQuadraticCouplingTransform, ActNorm
 from nflows.nn.nets import ResidualNet
 
-from .base import Diffeomorphism
+from .base import Diffeomorphism, IdentityFlow, ChainDiffeomorphism, InverseDiffeomorphism
 
 class LogitTransform(Transform):
     """
@@ -56,7 +55,7 @@ class LogitTransform(Transform):
             dim=dims
         )
         return x, logdets
-
+    
 class CubeFlow(Diffeomorphism):
     def __init__(self, d):
         super().__init__()
@@ -200,66 +199,3 @@ class UnitSquareKumaraswamy(CubeFlow):
         _, logabsdet_fwd = self.forward(x)
         logabsdet_inv = -logabsdet_fwd
         return x, logabsdet_inv
-
-
-class DiskFlow(Diffeomorphism):
-
-    def __init__(
-        self,
-        cubeflow: CubeFlow,
-    ):
-        super().__init__()
-        if cubeflow.d != 2:
-            raise ValueError("cubeflow must have d=2 for DiskFlow.")
-        self.cubeflow = cubeflow
-        
-    def _cart_to_polar(self, xy: torch.Tensor):
-        r = torch.sqrt(xy[:, 0]**2 + xy[:, 1]**2) # (N,)
-        theta = torch.atan2(xy[:, 1], xy[:, 0])  # (N,)
-        # scale theta to [0,1]
-        theta_scaled = (theta + math.pi) / (2.0 * math.pi)  # (N,) 
-        rtheta = torch.stack([r, theta_scaled]).transpose(0, 1)  # (N,2)
-
-        # log|det d(r,u)/d(x,y)| = -log r - log(2pi)
-        r_safe = r.clamp_min(1e-12)
-        logabsdet = (-torch.log(r_safe) - math.log(2.0 * math.pi)).squeeze(-1)  # (N,)
-        return rtheta, logabsdet
-    
-    def _polar_to_cart(self, rtheta: torch.Tensor):
-        r, theta_scaled = rtheta[:, 0], rtheta[:, 1]
-        theta = theta_scaled * (2.0 * math.pi) - math.pi  # scale back to [-pi, pi]
-        xy = torch.stack([
-            r * torch.cos(theta),
-            r * torch.sin(theta),
-        ]).transpose(0, 1)  # (N,2)
-
-        # log|det d(x,y)/d(r,u)| = log r + log(2pi)
-        r_safe = r.clamp_min(1e-12)
-        logabsdet = (torch.log(r_safe) + math.log(2.0 * math.pi)).squeeze(-1)  # (N,)
-        return xy, logabsdet
-    
-    def forward(self, xy: torch.Tensor):
-        if xy.shape[-1] != 2:
-            raise ValueError("Expected coordinates with last dim = 2.")
-        # compute the log absolute determinent of transforming xy to rtheta
-        rtheta, logabsdet_1 = self._cart_to_polar(xy)  # (N,2), (N,)
-        rtheta_transformed, logabsdet_mid = self.cubeflow.forward(rtheta)  # (N,2), (N,)
-        xy_transformed, logabsdet_2 = self._polar_to_cart(rtheta_transformed)  # (N,2), (N,)
-        return xy_transformed, logabsdet_1 + logabsdet_mid + logabsdet_2
-
-
-    def inverse(self, xy: torch.Tensor):
-        if xy.shape[-1] != 2:
-            raise ValueError("Expected xy with last dim = 2.")
-        rtheta, logabsdet_1 = self._cart_to_polar(xy)  # (N,2), (N,)
-        rtheta_inv, logabsdet_mid = self.cubeflow.inverse(rtheta)  # (N,2), (N,)
-        xy_inv, logabsdet_2 = self._polar_to_cart(rtheta_inv)  # (N,2), (N,)
-        return xy_inv, logabsdet_1 + logabsdet_mid + logabsdet_2
-
-class IdentityFlow(Diffeomorphism):
-    
-    def forward(self, x: torch.Tensor):
-        return x, torch.zeros(x.shape[0], device=x.device)
-
-    def inverse(self, y: torch.Tensor):
-        return y, torch.zeros(y.shape[0], device=y.device)
