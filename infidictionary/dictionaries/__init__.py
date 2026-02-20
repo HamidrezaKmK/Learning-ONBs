@@ -1,3 +1,3 @@
-from .tent import TentDictionary, RadialTentDictionary
-from .fourier import FourierDictionary, RadialFourierDictionary
+from .box import BoxDictionary
+from .fourier import FourierDictionary
 from .base import InfiDictionary

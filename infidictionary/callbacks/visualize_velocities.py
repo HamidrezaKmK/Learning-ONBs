@@ -5,7 +5,7 @@ import matplotlib as mpl
 from typing import Callable
 import wandb
 from .base import Callback
-from infidictionary.neural_isometries import NeuralIsometry, HalfDensityIsometry
+from infidictionary.neural_isometries import NeuralIsometry, LagrangianIsometry
 from infidictionary.utils import NeuralField
 
 class VisualizeVelocityField(Callback):
@@ -43,7 +43,7 @@ class VisualizeVelocityField(Callback):
         # iterate over the submodules of neural_isometry to find a HalfDensityIsometry
         module_index = 1
         for module in neural_isometry.modules():
-            if isinstance(module, HalfDensityIsometry):
+            if isinstance(module, LagrangianIsometry):
                 hd_isometry = module
                 
                 N = self.density

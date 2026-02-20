@@ -1,7 +1,0 @@
-defaults:
-  - /diffeomorphisms@diffeomorphism: ct_radial
-  - _self_
-
-_target_: infidictionary.neural_isometries.HalfDensityIsometry
-initial_diffeomorphism: 
-  _target_: infidictionary.diffeomorphisms.IdentityFlow

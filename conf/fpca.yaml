@@ -1,9 +1,5 @@
 defaults:
-  - function_generator: fourier_2d # the forward problem
-  - neural_isometry: half_density_kumaraswamy_radial
   - neural_fields@mean_function: mlp
-  - dictionaries@initial_dictionary: fourier_2d
-  - index_sampler: geometric_static
   - hydra: default
   - wandb: disabled # set to enabled for wandb logging
   - _self_
@@ -28,7 +24,5 @@ n_epochs: 500000
 domain_sample_size: 100
 n_functions: 1000
 batch_size: 100
-atom_index_batch_size: 100
 grad_accumulation_steps: 10
-n_reduced_order: null
-coordinatewise_loss_p: 0
+

@@ -9,6 +9,8 @@ from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.datasets import FunctionClassGenerator
 from infidictionary.neural_isometries import NeuralIsometry, IdentityIsometry
 from infidictionary.utils import NeuralField
+from infidictionary.domain_samplers import DomainSampler
+from infidictionary.utils import pairwise_inner_product
 
 def get_reconstructions(
     coords: torch.Tensor, # (N, d)
@@ -23,151 +25,52 @@ def get_reconstructions(
     Get the reconstructions of the given functions using the provided
     neural isometry and dictionary at the specified atom indices (prefixes).
     """
-    atom_indices = torch.arange(prefixes[-1], device=device).long()
-    avg = mean_function(coords).squeeze(-1)  # (N, )
-    functions = functions - avg.unsqueeze(0)  # (B, N)
-    b, all_deformed_functions = neural_isometry.inner_products( 
-        atom_indices=atom_indices,
-        coords=coords,
-        vals=functions,
-        initial_dictionary=dictionary,
-        device=device,
-        return_pullback=True,
+    all_sub_indices = []
+    all_atom_indices = dictionary.get_truncated_indices(prefixes[-1]).to(device)
+    for prefix in prefixes:
+        atom_indices = dictionary.get_truncated_indices(prefix).to(device)
+        # find the indices in all_atom_indices that correspond to atom_indices
+        mask = torch.zeros(all_atom_indices.shape[0], dtype=torch.bool, device=device)
+        for idx in atom_indices:
+            match = (all_atom_indices == idx).all(dim=1)  # find the row that matches idx
+            mask = mask | match  # update the mask to include this index
+        sub_indices = torch.where(mask)[0]  # get the indices of all_atom_indices that correspond to atom_indices
+        all_sub_indices.append(sub_indices)
+    
+    avg = mean_function(coords)  # (N, C)
+    functions = functions - avg.unsqueeze(0)  # (B, N, C)
+    src_coords, src_logabsdet, src_pulled_back = neural_isometry.pullback(
+        tgt_coords=coords,
+        tgt_logabsdet=torch.zeros(coords.shape[0], device=device),
+        tgt_field=functions,
+        start_time=0,
+        end_time=1,
     )
-    all_coeffs = dictionary.gram_solve(atom_indices, b)  # shape (A, B)
-    proj_list = []
-    for prefix_size in prefixes:
-        coeffs = all_coeffs[:prefix_size]
-        deformed_functions = all_deformed_functions[:prefix_size]
-        proj = coeffs.T @ deformed_functions  # shape (B, N)
-        proj_list.append(proj + avg.unsqueeze(0))  # add back the mean
-    return proj_list
-
-class VisualizeReconstruction(Callback):
-    """
-    Visualize len(seeds) reconstruction of functions generated
-    from the given FunctionClassGenerator using the provided dictionary functions
-    and diffeomorphism.
-    """
-    def __init__(
-        self,
-        dictionary: InfiDictionary,
-        f_gen: FunctionClassGenerator,
-        seeds: list[int],
-        frequency: int,
-        density: int,
-    ):
-        self.dictionary = dictionary
-        self.f_gen = f_gen
-        self.seeds = seeds
-        self.frequency = frequency
-        self.density = density
-        if self.dictionary.num_atoms is None:
-            raise ValueError("VisualizeReconstruction requires a dictionary with finite number of atoms.")
-    
-    def __call__(
-        self,
-        epoch: int,
-        neural_isometry: NeuralIsometry,
-        mean_function: NeuralField,
-        wandb_enabled: bool,
-        device: torch.device,
-    ): 
-        if (epoch + 1) % self.frequency != 0 or wandb_enabled is False:
-            return
-        
-        with torch.no_grad():
-            n_cols = 3
-            n_rows = len(self.seeds)
-
-            coords = self.dictionary.sample_from_domain(self.density).to(device)
-            if coords.shape[1] != 2:
-                raise ValueError("VisualizeReconstruction only supports 2D dictionaries.")
-            
-            all_vals = []
-            for i, seed in enumerate(self.seeds):
-                all_vals.append(self.f_gen(coords, seed=seed).to(device))
-            all_vals = torch.stack(all_vals, dim=0)  # (len(seeds), N)
-            reconstructions = get_reconstructions(
-                coords=coords,
-                functions=all_vals,
-                neural_isometry=neural_isometry,
-                mean_function=mean_function,
-                dictionary=self.dictionary,
-                prefixes=[self.dictionary.num_atoms],
-                device=device,
-            )[0] # (len(seeds), N)
-            
-            fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
-            if n_rows == 1:
-                axes = axes.reshape(1, -1)  # make indexing consistent: axes[i, j]
-            
-            for i, seed in enumerate(self.seeds):
-                vals = all_vals[i]  # (N, )
-                proj = reconstructions[i]  # (N, )
-    
-                error = torch.abs(vals - proj)
-                norm2 = torch.mean(error * error).item()
-                wandb.log({f"reconstruction/err_{seed}": norm2}, step=epoch)
-
-                ax0, ax1, ax2 = axes[i, 0], axes[i, 1], axes[i, 2]
-                cmap = "viridis"
-
-                # ---- color scale for (Original, Projected) ----
-                norm_01 = mpl.colors.Normalize(
-                    vmin=vals.flatten().min(), 
-                    vmax=vals.flatten().max(),
-                )
-
-                hb0 = ax0.hexbin(
-                    coords[:, 0].cpu().numpy(),
-                    coords[:, 1].cpu().numpy(),
-                    C=vals.cpu().numpy(),
-                    gridsize=50,
-                    cmap=cmap,
-                    norm=norm_01,
-                )
-                ax0.set_title("Original")
-                ax0.set_ylabel(f"(seed={seed})")
-
-                hb1 = ax1.hexbin(
-                    coords[:, 0].cpu().numpy(),
-                    coords[:, 1].cpu().numpy(),
-                    C=proj.cpu().numpy(),
-                    gridsize=50,
-                    cmap=cmap,
-                    norm=norm_01,
-                )
-                ax1.set_title("Projected")
-
-                sm_01 = mpl.cm.ScalarMappable(norm=norm_01, cmap=cmap)
-                sm_01.set_array([])
-                fig.colorbar(sm_01, ax=[ax0, ax1], fraction=0.03, pad=0.02)
-
-                # ---- color scale for (Error) ----
-                row_C_2 = error.flatten()
-                vmin_2 = torch.quantile(row_C_2, 0.01).item()
-                vmax_2 = torch.quantile(row_C_2, 0.99).item()
-                norm_2 = mpl.colors.Normalize(vmin=vmin_2, vmax=vmax_2)
-
-                hb2 = ax2.hexbin(
-                    coords[:, 0].cpu().numpy(),
-                    coords[:, 1].cpu().numpy(),
-                    C=error.cpu().numpy(),
-                    gridsize=50,
-                    cmap=cmap,
-                    norm=norm_2,
-                )
-                ax2.set_title("Error")
-
-                sm_2 = mpl.cm.ScalarMappable(norm=norm_2, cmap=cmap)
-                sm_2.set_array([])
-                fig.colorbar(sm_2, ax=[ax2], fraction=0.03, pad=0.02)
-
-            wandb.log({f"reconstruction/visualization": wandb.Image(fig)}, step=epoch)
-            plt.close(fig)
-
-
+    dictionary_values = dictionary.get_atoms(
+        src_coords,
+        all_atom_indices,
+    )  # shape (A, N, C)
+    _, _, dictionary_pushforward = neural_isometry.pushforward(
+        src_coords=src_coords,
+        src_logabsdet=src_logabsdet,
+        src_field=dictionary_values,
+        start_time=0,
+        end_time=1,
+    )
+    coefficients = pairwise_inner_product(
+        src_pulled_back,
+        dictionary_values,
+        src_logabsdet,
+    ) # shape (B, A)
+    reconstructions = []
+    for i in range(len(prefixes)):
+        c = coefficients[:, all_sub_indices[i]] # shape (B, A_prefix)
+        dict_values = dictionary_pushforward[all_sub_indices[i], :, :] # shape (A_prefix, N, C)
+        recon = c @ dict_values.view(dict_values.shape[0], -1) # shape (B, N * C)
+        recon = recon.view(functions.shape) # shape (B, N, C)
+        recon = recon + avg.unsqueeze(0) # add back the mean
+        reconstructions.append(recon)
+    return reconstructions
 
 class VisualizeKLExpansionReconstruction(Callback):
     """
@@ -179,6 +82,7 @@ class VisualizeKLExpansionReconstruction(Callback):
         self,
         dictionary: InfiDictionary,
         f_gen: FunctionClassGenerator,
+        domain_sampler: DomainSampler,
         seeds: list[int],
         frequency: int,
         density: int,
@@ -190,8 +94,7 @@ class VisualizeKLExpansionReconstruction(Callback):
         self.frequency = frequency
         self.density = density
         self.truncation_factors = truncation_factors
-        if self.dictionary.num_atoms is not None:
-            raise ValueError("VisualizeKLExpansionReconstruction requires a dictionary with infinite number of atoms.")
+        self.domain_sampler = domain_sampler
     
     def __call__(
         self,
@@ -206,14 +109,14 @@ class VisualizeKLExpansionReconstruction(Callback):
         
         with torch.no_grad():
 
-            coords = self.dictionary.sample_from_domain(self.density).to(device)
+            coords = self.domain_sampler.sample(self.density).to(device)
             if coords.shape[1] != 2:
                 raise ValueError("VisualizeReconstruction only supports 2D dictionaries.")
             
             all_vals = []
             for i, seed in enumerate(self.seeds):
                 all_vals.append(self.f_gen(coords, seed=seed).to(device))
-            all_vals = torch.stack(all_vals, dim=0)  # (len(seeds), N)
+            all_vals = torch.stack(all_vals, dim=0)  # (len(seeds), N, C)
 
             reconstructions = get_reconstructions(
                 coords=coords,
@@ -223,9 +126,9 @@ class VisualizeKLExpansionReconstruction(Callback):
                 dictionary=self.dictionary,
                 prefixes=self.truncation_factors,
                 device=device,
-            ) # list of size len(self.truncation_factors) x (len(seeds), N)
-            reconstructions = torch.stack(reconstructions, dim=0)  # (len(truncation_factors), len(seeds), N)
-            reconstructions = reconstructions.permute(1, 0, 2)  # (len(seeds), len(truncation_factors), N)
+            ) # list of size len(self.truncation_factors) x (len(seeds), N, C)
+            reconstructions = torch.stack(reconstructions, dim=0)  # (len(truncation_factors), len(seeds), N, C)
+            reconstructions = reconstructions.permute(1, 0, 2, 3)  # (len(seeds), len(truncation_factors), N, C)
             
             reconstructions_identity = get_reconstructions(
                 coords=coords,
@@ -235,9 +138,9 @@ class VisualizeKLExpansionReconstruction(Callback):
                 dictionary=self.dictionary,
                 prefixes=self.truncation_factors,
                 device=device,
-            ) # list of size len(self.truncation_factors) x (len(seeds), N)
-            reconstructions_identity = torch.stack(reconstructions_identity, dim=0)  # (len(truncation_factors), len(seeds), N)
-            reconstructions_identity = reconstructions_identity.permute(1, 0, 2)  # (len(seeds), len(truncation_factors), N)
+            ) # list of size len(self.truncation_factors) x (len(seeds), N, C)
+            reconstructions_identity = torch.stack(reconstructions_identity, dim=0)  # (len(truncation_factors), len(seeds), N, C)
+            reconstructions_identity = reconstructions_identity.permute(1, 0, 2, 3)  # (len(seeds), len(truncation_factors), N, C)
             
             n_cols = 1 + len(self.truncation_factors)
             n_rows = 2 * len(self.seeds)
@@ -247,11 +150,13 @@ class VisualizeKLExpansionReconstruction(Callback):
             
             for i, seed in enumerate(self.seeds):
                 vals = all_vals[i]  # (N, )
-                projections = reconstructions[i]  # (len(truncation_factors), N)
-                projections_identity = reconstructions_identity[i]  # (len(truncation_factors), N)
+                projections = reconstructions[i]  # (len(truncation_factors), N, C)
+                projections_identity = reconstructions_identity[i]  # (len(truncation_factors), N, C)
 
-                error = torch.abs(vals - projections) # (len(truncation_factors), N)
-                error_identity = torch.abs(vals - projections_identity) # (len(truncation_factors), N)
+                error = torch.abs(vals - projections) # (len(truncation_factors), N, C)
+                error_identity = torch.abs(vals - projections_identity) # (len(truncation_factors), N, C)
+                error = torch.mean(error, dim=-1) # (len(truncation_factors), N)
+                error_identity = torch.mean(error_identity, dim=-1) # (len(truncation_factors), N)
                 error_ratio = torch.mean(error) / torch.mean(error_identity)
                 wandb.log({f"reconstruction/error_ratio_{seed}": error_ratio}, step=epoch)
                 wandb.log({f"reconstruction/error_{seed}": torch.mean(error).item()}, step=epoch)

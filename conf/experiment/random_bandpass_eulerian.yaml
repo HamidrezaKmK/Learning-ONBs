@@ -1,0 +1,60 @@
+# @package _global_
+# random bandpass learning using a CNF on the radial domain
+defaults:
+  - /domain_samplers@domain_sampler: square_sampler
+  - /function_generator@function_generator: random_bandpass
+  - /neural_isometry@neural_isometry: eulerian
+  - /dictionaries@initial_dictionary: fourier_2d
+  - override /wandb@wandb: disabled
+  - _self_
+
+model_state_kwargs:
+  num_steps: 20
+energy_estimation_kwargs:
+  method: monte_carlo
+  num_samples: 1000
+
+batch_size: 512
+atom_index_batch_size: 512
+grad_accumulation_steps: 1
+
+# training hyperparameters
+n_epochs: 50000
+domain_sample_size: 250
+n_functions: 1000
+
+callbacks:
+  mean_function_visualization:
+    _target_: infidictionary.callbacks.VisualizeMeanFunction
+    initial_dictionary: ${initial_dictionary}
+    domain_sampler: ${domain_sampler}
+    frequency: 200
+    density: 200
+  reconstruction_visualization:
+    _target_: infidictionary.callbacks.VisualizeKLExpansionReconstruction
+    dictionary: ${initial_dictionary}
+    domain_sampler: ${domain_sampler}
+    f_gen: ${function_generator}
+    seeds: [0, 1, 2]
+    frequency: 200
+    density: 200
+    truncation_factors: [1, 2, 3]
+  isometry_check:
+    _target_: infidictionary.callbacks.IsometryCheck
+    dictionary: ${initial_dictionary}
+    domain_sampler: ${domain_sampler}
+    frequency: 200
+    density: 200
+    indices:
+      - [-1, 1]
+      - [0, 0]
+      - [1, -1]
+      - [2, -2]
+      - [3, -3]
+    
+
+# Add tags so that it is easier to filter the experiments in the W&B dashboard
+wandb:
+  tags:
+    experiment: ct_fpca
+    task: reconstruction

@@ -6,6 +6,7 @@ from infidictionary.utils import TimeEvolvingField, norm2, pairwise_inner_produc
 
 class EulerianIsometry(NeuralIsometry):
 
+    # TODO: implement forward mode backpropagation to avoid memory blowup
     def __init__(
         self,
         coords_dim: int,
@@ -53,7 +54,7 @@ class EulerianIsometry(NeuralIsometry):
             f = self._householder_step(t0, coords, logabsdet, f)
         return f
     
-    def reshuffle_time_discretization(self, num_steps: int):
+    def shuffle_model_state(self, num_steps: int):
         if self.training:
             tspan = torch.rand(num_steps)
             # register as buffer

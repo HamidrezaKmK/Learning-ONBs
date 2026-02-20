@@ -1,6 +1,5 @@
 from .base import Callback
-from .reconstruction import VisualizeReconstruction, VisualizeKLExpansionReconstruction
+from .reconstruction import VisualizeKLExpansionReconstruction
 from .isometry_check import IsometryCheck
 from .visualize_velocities import VisualizeVelocityField
 from .mean_function import VisualizeMeanFunction
-from .visualize_householder import VisualizeHouseholderReflections

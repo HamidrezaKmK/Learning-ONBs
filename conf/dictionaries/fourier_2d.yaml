@@ -1,1 +1,4 @@
 _target_: infidictionary.dictionaries.FourierDictionary
+domain_dim: 2
+num_channels: 1
+index_geom_p: 0.3

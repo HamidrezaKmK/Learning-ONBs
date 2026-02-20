@@ -18,8 +18,6 @@ class SemiLagrangianIsometry(NeuralIsometry):
         diffeomorphism: Diffeomorphism,
         gating_function: Callable[[torch.Tensor], torch.Tensor] | None = None, 
         time_tolerance: float = 1e-3,
-        # a function that takes in time and outputs a scalar in [0, 1] that gates between Eulerian and Lagrangian steps. If None, use a learnable gating function.
-        # TODO: find a way to train gating and backpropagate through it using policy gradient tricks
     ):
         super().__init__()
 
@@ -47,8 +45,8 @@ class SemiLagrangianIsometry(NeuralIsometry):
         self.register_buffer("gumbel_samples", torch.tensor([]))
         self.time_tolerance = time_tolerance
     
-    def reshuffle_time_discretization(self, num_steps: int):
-        self.eulerian.reshuffle_time_discretization(num_steps)
+    def shuffle_model_state(self, num_steps: int):
+        self.eulerian.shuffle_model_state(num_steps)
         self.gating_draw_times = torch.tensor([])
         self.gumbel_samples = torch.tensor([])
 

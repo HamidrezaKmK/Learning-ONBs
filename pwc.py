@@ -12,7 +12,7 @@ import wandb
 
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.neural_isometries import NeuralIsometry
-from infidictionary.index_sampler import IndexSampler
+from infidictionary.dictionaries.index_sampler import IndexSampler
 from infidictionary.regularizers import Regularizer
 
 # Add resolver for hydra

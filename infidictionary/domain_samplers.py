@@ -16,6 +16,36 @@ class DomainSampler(ABC):
         """
         raise NotImplementedError("Subclasses must implement this method")
 
+class LineSegmentSampler(DomainSampler):
+    
+    def __init__(
+        self, 
+        stratified: bool = False,
+        add_noise: bool = True,
+        length: float = 1.0,
+    ):
+        super().__init__()
+        self.stratified = stratified
+        self.length = length
+        self.add_noise = add_noise
+
+    def sample(self, n_per_dim: int) -> torch.Tensor:
+        """
+        Sample n_per_dim coordinates uniformly from the line segment [0, length].
+        Returns a tensor of shape (N, 1) for the coordinates.
+        """
+        if self.stratified:
+            linspace = (torch.linspace(0, 1, n_per_dim + 1) + 0.5 / n_per_dim)[:-1]
+            coords = linspace.unsqueeze(-1)
+            if self.add_noise:
+                coords += (torch.rand_like(coords) - 0.5) / n_per_dim
+            coords *= self.length
+            return coords
+        else:
+            N = n_per_dim
+            coords = torch.rand(N, 1) * self.length
+            return coords
+        
 class SquareSampler(DomainSampler):
     
     def __init__(

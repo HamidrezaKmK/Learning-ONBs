@@ -90,7 +90,7 @@ class RandomBandpassGenerator(FunctionClassGenerator):
         if self.mean_seed is not None:
             mean_val = self._call(xy, self.mean_seed)
             ret = ret + mean_val
-        return ret
+        return ret.unsqueeze(-1)
 
 class BasisRandomGenerator(FunctionClassGenerator):
     def __init__(
@@ -120,4 +120,4 @@ class BasisRandomGenerator(FunctionClassGenerator):
             all_e.append(fn_val)
         all_e = torch.stack(all_e, dim=0)
         val = (weights.unsqueeze(1) * all_e).sum(axis=0)
-        return val
+        return val.unsqueeze(-1)

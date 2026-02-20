@@ -7,6 +7,8 @@ from .base import Callback
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.neural_isometries import NeuralIsometry
 from infidictionary.utils import NeuralField
+from infidictionary.domain_samplers import DomainSampler
+from infidictionary.utils import pairwise_inner_product
 
 class IsometryCheck(Callback):
     """
@@ -15,16 +17,16 @@ class IsometryCheck(Callback):
     def __init__(
         self,
         dictionary: InfiDictionary,
+        domain_sampler: DomainSampler,
         frequency: int,
         density: int,
-        n_truncation: int | None = None,
+        indices: list,
     ):
         self.dictionary = dictionary
         self.frequency = frequency
         self.density = density
-        self.n_truncation = n_truncation or self.dictionary.num_atoms
-        if self.n_truncation is None:
-            raise ValueError("n_truncation must be specified if the dictionary has infinite atoms.")
+        self.domain_sampler = domain_sampler
+        self.indices = torch.tensor(indices, dtype=torch.long)
     
     def __call__(
         self,
@@ -42,33 +44,34 @@ class IsometryCheck(Callback):
 
         with torch.no_grad():
             n_cols = 2
-            n_rows = self.n_truncation
+            n_rows = len(self.indices)
 
             fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
             if n_rows == 1:
                 axes = axes.reshape(1, -1)  # make indexing consistent: axes[i, j]
 
-            coords = self.dictionary.sample_from_domain(self.density).to(device)
+            coords = self.domain_sampler.sample(self.density).to(device)
             
-            all_vals_original = self.dictionary.get_atom(
+            src_field = self.dictionary.get_atoms(
                 coords, 
-                torch.arange(self.n_truncation, device=device),
-            ).to(device)
+                self.indices.to(device),
+            ).to(device) # shape (A, N, C)
 
-            all_vals_deformed = neural_isometry.transform(
-                initial_dictionary=self.dictionary,
-                atom_indices=torch.arange(self.n_truncation, device=device),
-                coords=coords,
-                device=device,
-                mode='pullback',
+            src_logabsdet = torch.zeros(coords.shape[0], device=device) # shape (N, )
+            tgt_coords, tgt_logabsdet, tgt_field = neural_isometry.pushforward(
+                src_coords=coords,
+                src_logabsdet=src_logabsdet,
+                src_field=src_field,
+                start_time=0,
+                end_time=1,
             )
             
-            for idx in range(self.n_truncation):
+            for idx in range(len(self.indices)):
                 if coords.shape[1] != 2:
                     raise ValueError("VisualizeReconstruction only supports 2D dictionaries.")
 
-                vals_original = all_vals_original[idx] 
-                vals_deformed = all_vals_deformed[idx]
+                vals_original = src_field[idx] 
+                vals_deformed = tgt_field[idx]
 
                 ax0, ax1 = axes[idx, 0], axes[idx, 1]
                 cmap = "viridis"
@@ -115,10 +118,11 @@ class IsometryCheck(Callback):
 
             # Log overall statistics in one plot as a heatmap
             # compute pairwise inner products
-            inner_products = (all_vals_original @ all_vals_original.T) / all_vals_original.shape[1]
+            inner_products = pairwise_inner_product(src_field, src_field, src_logabsdet) # shape (A, A)
+            inner_products_deformed = pairwise_inner_product(tgt_field, tgt_field, tgt_logabsdet) # shape (A, A)
             inner_products = inner_products.detach().cpu()
-            inner_products_deformed = (all_vals_deformed @ all_vals_deformed.T) / all_vals_deformed.shape[1]
             inner_products_deformed = inner_products_deformed.detach().cpu()
+            
             fig, axes = plt.subplots(figsize=(22, 6), nrows=1, ncols=3)
 
             # heatmap of inner products

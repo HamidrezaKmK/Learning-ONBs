@@ -1,233 +1,134 @@
-
+from typing import Literal
+from sklearn.naive_bayes import abstractmethod
 import torch
 import math
-from typing import Literal
-
+import pytorch_finufft.functional as finufft
 from .base import InfiDictionary
-
-def cos1d(k: torch.Tensor, t: torch.Tensor):
-    """
-    k: (N_idx,) integer tensor
-    t: (N_coords,) float tensor
-    returns: (N_idx, N_coords)
-    """
-    k = k.to(t.dtype)
-    kt = 2.0 * math.pi * k[:, None] * t[None, :]   # (N_idx, N_coords)
-
-    out = math.sqrt(2.0) * torch.cos(kt)
-    mask = (k > 0)[:, None]
-
-    return torch.where(mask, out, torch.ones_like(out))
-
-
-def sin1d(k: torch.Tensor, t: torch.Tensor):
-    """
-    k: (N_idx,) integer tensor
-    t: (N_coords,) float tensor
-    returns: (N_idx, N_coords)
-    """
-    k = k.to(t.dtype)
-    kt = 2.0 * math.pi * k[:, None] * t[None, :]
-
-    out = math.sqrt(2.0) * torch.sin(kt)
-    mask = (k > 0)[:, None]
-
-    return torch.where(mask, out, torch.zeros_like(out))
+from infidictionary.utils import pairwise_inner_product
 
 class FourierDictionary(InfiDictionary):
 
-    def __init__(self):
-        super().__init__(atom_indices=None, num_atoms=None, numerical_gram_n_samples=None, is_orthonormal=True)
+    def __init__(
+        self,
+        domain_dim: int,
+        num_channels: int,
+        index_geom_p: float,
+    ):
+        super().__init__()
+        self.domain_dim = domain_dim
+        self.index_geom_p = index_geom_p
+        self.num_channels = num_channels
+        self.is_orthonormal = True
 
-    _KINDS_4 = ("cc", "cs", "sc", "ss")
-    _KINDS_KX0 = ("cc", "cs")  # kx=0 => fx is constant, only theta varies
-    _KINDS_KY0 = ("cc", "sc")  # ky=0 => ftheta is constant, only r varies
-
-    def idx_to_params(self, idx: int):
-        """
-        Map a single global index to (kx, ky, kind) in the requested order.
-
-        Ordering by rings n=max(kx,ky):
-          n=0: (0,0) once
-          n>=1: (0,n),
-                (1,n),...,(n,n),
-                (n,n-1),...,(n,1),
-                (n,0)
-
-        Multiplicities:
-          (0,n): 2  kinds (cc,cs)
-          (n,0): 2  kinds (cc,sc)
-          else : 4  kinds (cc,cs,sc,ss)
-        """
-        if idx < 0:
-            raise ValueError("idx must be >= 0")
-
-        # n=0 special case
-        if idx == 0:
-            return 0, 0, "cc"
-
-        # For idx>=1, find smallest n>=1 with idx <= 4*n*(n+1)
-        # (since total up to ring n is 1 + 4*n*(n+1))
-        n = math.ceil((-1.0 + math.sqrt(1.0 + idx)) / 2.0)
-        if n < 1:
-            n = 1
-
-        # index where ring n starts
-        ring_start = 1 + 4 * (n - 1) * n  # ring 1 starts at 1, ring 2 starts at 9, ...
-        j = idx - ring_start               # local offset in [0, 8n-1]
-
-        # Segment 1: (0,n) with 2 kinds
-        if j < 2:
-            kind = FourierDictionary._KINDS_KX0[j]
-            return 0, n, kind
-
-        j -= 2
-
-        # Segment 2: (k,n) for k=1..n, each with 4 kinds
-        # total length = 4n
-        if j < 4 * n:
-            k = 1 + (j // 4)                         # kx
-            kind = FourierDictionary._KINDS_4[j % 4]
-            return k, n, kind
-
-        j -= 4 * n
-
-        # Segment 3: (n,ky) for ky=n-1..1, each with 4 kinds
-        # total length = 4*(n-1)
-        if n > 1 and j < 4 * (n - 1):
-            m = j // 4                               # 0..n-2
-            ky = (n - 1) - m
-            kind = FourierDictionary._KINDS_4[j % 4]
-            return n, ky, kind
-
-        j -= 4 * max(n - 1, 0)
-
-        # Segment 4: (n,0) with 2 kinds
-        if j < 2:
-            kind = FourierDictionary._KINDS_KY0[j]
-            return n, 0, kind
-
-        raise IndexError(f"idx={idx} out of range for computed ring n={n}")
-
-    def idxs_to_params_vectorized(self, idx: torch.Tensor) -> torch.Tensor:
-        """
-        idx: (N,) int tensor (global indices)
-        returns: (N,4) long tensor: [kx, ky, kind0, kind1]
-        kind0 = 0 if first char is 'c' else 1
-        kind1 = 0 if second char is 'c' else 1
-        """
-        if idx.ndim != 1:
-            idx = idx.reshape(-1)
-        if (idx < 0).any():
-            raise ValueError("idx must be >= 0")
-
-        device = idx.device
-        idx = idx.to(torch.long)
-
-        N = idx.numel()
-        kx = torch.zeros(N, dtype=torch.long, device=device)
-        ky = torch.zeros(N, dtype=torch.long, device=device)
-        kind0 = torch.zeros(N, dtype=torch.long, device=device)
-        kind1 = torch.zeros(N, dtype=torch.long, device=device)
-
-        # n=0 special case: idx==0 -> (0,0,"cc") => bits (0,0)
-        mask0 = (idx == 0)
-        mask = ~mask0
-        if mask.any():
-            idx1 = idx[mask]
-
-            # n = ceil((-1 + sqrt(1+idx))/2), clamp to >=1
-            idxf = idx1.to(torch.float64)
-            n = torch.ceil((-1.0 + torch.sqrt(1.0 + idxf)) / 2.0).to(torch.long)
-            n = torch.clamp(n, min=1)
-
-            ring_start = 1 + 4 * (n - 1) * n           # start index of ring n
-            j = idx1 - ring_start                       # local offset in [0, 8n-1]
-
-            # Segment 1: j in {0,1}  -> (0,n) kinds: ["cc","cs"]
-            m1 = (j < 2)
-            if m1.any():
-                ky[mask.nonzero().squeeze(1)[m1]] = n[m1]
-                # kind0 stays 0; kind1 is 0 for "cc", 1 for "cs"
-                kind1[mask.nonzero().squeeze(1)[m1]] = j[m1]
-
-            # Segment 2: next 4n -> (k,n), k=1..n, kinds: ["cc","cs","sc","ss"]
-            j2 = j - 2
-            m2 = (j2 >= 0) & (j2 < 4 * n)
-            if m2.any():
-                k = 1 + (j2[m2] // 4)
-                r = (j2[m2] % 4)                        # 0..3
-                out_idx = mask.nonzero().squeeze(1)[m2]
-                kx[out_idx] = k
-                ky[out_idx] = n[m2]
-                kind0[out_idx] = (r >= 2).to(torch.long) # c,c,s,s
-                kind1[out_idx] = (r & 1).to(torch.long)  # c,s,c,s
-
-            # Segment 3: next 4(n-1) -> (n,ky), ky=n-1..1, same 4 kinds
-            j3 = j2 - 4 * n
-            m3 = (n > 1) & (j3 >= 0) & (j3 < 4 * (n - 1))
-            if m3.any():
-                m = (j3[m3] // 4)                       # 0..n-2
-                ky3 = (n[m3] - 1) - m                   # n-1..1
-                r = (j3[m3] % 4)
-                out_idx = mask.nonzero().squeeze(1)[m3]
-                kx[out_idx] = n[m3]
-                ky[out_idx] = ky3
-                kind0[out_idx] = (r >= 2).to(torch.long)
-                kind1[out_idx] = (r & 1).to(torch.long)
-
-            # Segment 4: last 2 -> (n,0) kinds: ["cc","sc"]
-            # local index within seg4:
-            j4 = j3 - 4 * (n - 1)
-            m4 = (j4 >= 0) & (j4 < 2)
-            if m4.any():
-                out_idx = mask.nonzero().squeeze(1)[m4]
-                kx[out_idx] = n[m4]
-                # ky stays 0
-                # kind0: 0 for "cc", 1 for "sc"; kind1 stays 0
-                kind0[out_idx] = j4[m4]
-
-            # sanity (optional): every nonzero idx must fall into exactly one segment
-            # if you want strict checking, uncomment:
-            # covered = m1 | m2 | m3 | m4
-            # if not covered.all():
-            #     bad = idx1[~covered]
-            #     raise IndexError(f"Some idx out of range? e.g. {bad[:10].tolist()}")
-
-        return torch.stack([kx, ky, kind0, kind1], dim=-1)
-
-
-    def _get_atoms(self, xy: torch.Tensor, idx: torch.Tensor):
-        kx_ky_kind = self.idxs_to_params_vectorized(idx)
-        kx, ky, kind = kx_ky_kind[:,0], kx_ky_kind[:,1], kx_ky_kind[:,2]*2 + kx_ky_kind[:,3]
-        kx = kx.to(xy.device)
-        ky = ky.to(xy.device)
-        kind = kind.to(xy.device)
-
-        x, y = xy[:, 0], xy[:, 1]
-        fx_c = cos1d(kx, x); fx_s = sin1d(kx, x)
-        fy_c = cos1d(ky, y); fy_s = sin1d(ky, y)
-        vals = torch.zeros((idx.shape[0], xy.shape[0]), device=xy.device, dtype=xy.dtype)
-
-        if (kind == 0).any():
-            vals[kind == 0] = fx_c[kind == 0] * fy_c[kind == 0]  # "cc"
-        if (kind == 1).any():
-            vals[kind == 1] = fx_c[kind == 1] * fy_s[kind == 1]  # "cs"
-        if (kind == 2).any():
-            vals[kind == 2] = fx_s[kind == 2] * fy_c[kind == 2]  # "sc"
-        if (kind == 3).any():
-            vals[kind == 3] = fx_s[kind == 3] * fy_s[kind == 3]  # "ss"
-
-        return vals  # shape (N_idx, N_coords)
-
-
-class RadialFourierDictionary(FourierDictionary):
+    def sample_indices(self, num_samples: int) -> torch.Tensor:
+        idx = torch.zeros((num_samples, self.domain_dim), dtype=torch.long)
+        for d in range(self.domain_dim):
+            # sample num_samples from a geometric distribution with p = self.index_geom_p
+            geom_samples = torch.distributions.Geometric(self.index_geom_p).sample((num_samples,))
+            # randomly assign half of the samples to be sine and half to be cosine
+            kind_samples = torch.randint(0, 2, (num_samples,))
+            idx[:, d] = torch.where(
+                geom_samples == 0, 
+                geom_samples, 
+                torch.where(
+                    kind_samples == 0, 
+                    geom_samples + 1,
+                    - geom_samples - 1,
+                )
+            )
+        return idx
     
-    def _get_atoms(self, xy: torch.Tensor, idx: torch.Tensor):
-        r = xy[:, 0]**2 + xy[:, 1]**2
-        theta = torch.atan2(xy[:, 1], xy[:, 0]) + math.pi
-        theta = theta / (2 * math.pi)  # normalize to [0, 1]
-        
-        rtheta = torch.stack([r, theta], dim=1)
-        return super()._get_atoms(rtheta, idx)
+    def get_atoms(
+        self, 
+        coords: torch.Tensor, 
+        idx: torch.Tensor, # (A, domain_dim)
+    ):
+        vals = torch.ones((idx.shape[0], coords.shape[0], self.num_channels), device=coords.device, dtype=coords.dtype)
+        for d in range(self.domain_dim):
+            d_idx = idx[:, d]
+            kind = d_idx >= 0 # 1 for cosine, 0 for sine
+            freq = torch.abs(d_idx).float() # (A, )
+            kt = 2.0 * math.pi * freq[:, None] * coords[:, d][None, :]   # (N_idx, N_coords)
+            cos_component = math.sqrt(2.0) * torch.cos(kt)
+            sin_component = math.sqrt(2.0) * torch.sin(kt)
+            component = torch.where(
+                d_idx[:, None] == 0, 
+                torch.ones_like(cos_component),
+                torch.where(kind[:, None] == 0, cos_component, sin_component)
+            ) # (A, N_coords)
+            vals *= component[:, :, None] # (A, N_coords, 1) broadcast to (A, N_coords, C)
+        return vals / math.sqrt(self.num_channels) # shape (A, N_coords)
 
+    def monte_carlo_captured_energy(
+        self, 
+        coords: torch.Tensor, # (N, d)
+        logabsdet: torch.Tensor, # (N, )
+        values: torch.Tensor, # (B, N, C)
+        num_samples: int,
+    ) -> torch.Tensor: # (B, )
+        idx = self.sample_indices(num_samples).to(coords.device) # (A, ...)
+        atoms = self.get_atoms(coords, idx) # (A, N, C)
+        energy = pairwise_inner_product(values, atoms, logabsdet) ** 2 # (B, A)
+        return energy.sum(dim=-1) / num_samples
+    
+    def compute_grid_weights(self, nyquist: int) -> torch.Tensor:
+        single_tensor = self.index_geom_p * (1.0 - self.index_geom_p) ** torch.arange(0, nyquist + 1)
+        single_tensor = single_tensor / (1 - (1 - self.index_geom_p) ** (nyquist + 1))
+
+        # now do a tensor product to get d_dimensional weights
+        weights = torch.ones(*[(nyquist+1) for _ in range(self.domain_dim)], device=single_tensor.device, dtype=single_tensor.dtype) # (nyquist, nyquist, ...)
+        for d in range(self.domain_dim):
+            shape = [1 for _ in range(self.domain_dim)]
+            shape[d] = nyquist + 1
+            weights *= single_tensor.view(shape) # (1, 1, ..., nyquist+1, ..., 1) where the nyquist+1 is in the d-th dimension
+        
+        return weights
+    
+    def nufft_captured_energy(
+        self, 
+        coords: torch.Tensor, # (N, d)
+        logabsdet: torch.Tensor, # (N, )
+        values: torch.Tensor, # (B, N, C)
+        nyquist: int,
+    ) -> torch.Tensor: # (B, )
+        points = coords.transpose(0, 1).contiguous().to(coords.device) # (d, N)
+        values = values.permute(0, 2, 1).contiguous().to(coords.device).to(dtype=torch.complex64)
+        dft = torch.sqrt(torch.tensor(2.0)) * finufft.finufft_type1(
+            points=points,  # Transpose to shape (d, N) as expected by finufft
+            values=values,  # Reshape to (B*C, N)
+            output_shape=(nyquist * 2 + 1, nyquist * 2 + 1),
+            modeord=0,
+        ).permute(0, 2, 3, 1) / points.shape[1] # (B, A, C) where A is the number of frequencies in the grid
+
+        
+        probability_weights = self.compute_grid_weights(nyquist=nyquist).to(coords.device) # (nyquist+1, nyquist+1  )
+        all_probas = torch.zeros((2*nyquist+1, 2*nyquist+1), device=coords.device, dtype=coords.dtype)
+        all_probas[nyquist:, nyquist:] += probability_weights
+        all_probas[nyquist:, :nyquist+1] += torch.flip(probability_weights, dims=[1])
+        all_probas[:nyquist+1, nyquist:] += torch.flip(probability_weights, dims=[0])
+        all_probas[:nyquist+1, :nyquist+1] += torch.flip(probability_weights, dims=[0, 1])
+        all_probas /= 4
+        energy = (dft.abs() ** 2 * all_probas[None, None, :, :]).sum(dim=(1, 2, 3)) # (B, )
+        return energy
+    
+    def estimate_captured_energy( 
+        # TODO: add a nufft based method for this as well!
+        # TODO: check if I need to do the reconstruction trick or not
+        self, 
+        coords: torch.Tensor, # (N, d)
+        logabsdet: torch.Tensor, # (N, )
+        values: torch.Tensor, # (B, N, C)
+        method: Literal['monte_carlo', 'nufft'],
+        *args,
+        **kwargs,
+    ) -> torch.Tensor: # (B, )
+        if method == 'monte_carlo':
+            return self.monte_carlo_captured_energy(coords, logabsdet, values, *args, **kwargs)
+        else:
+            return self.nufft_captured_energy(coords, logabsdet, values, *args, **kwargs)
+
+    def get_truncated_indices(self, num_truncated: int) -> torch.Tensor:
+        idx = torch.arange(-num_truncated + 1, num_truncated)
+        # Added indexing='ij' to the meshgrid call
+        grid = torch.stack(torch.meshgrid(*[idx for _ in range(self.domain_dim)], indexing='ij'), dim=-1).view(-1, self.domain_dim) 
+        return grid

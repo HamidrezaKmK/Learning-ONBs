@@ -7,6 +7,7 @@ from .base import Callback
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.neural_isometries import NeuralIsometry
 from infidictionary.utils import NeuralField
+from infidictionary.domain_samplers import DomainSampler
 
 class VisualizeMeanFunction(Callback):
     """
@@ -16,13 +17,15 @@ class VisualizeMeanFunction(Callback):
     def __init__(
         self,
         initial_dictionary: InfiDictionary,
+        domain_sampler: DomainSampler,
         frequency: int,
         density: int,
     ):
         self.initial_dictionary = initial_dictionary
         self.frequency = frequency
         self.density = density
-    
+        self.domain_sampler = domain_sampler
+
     def __call__(
         self,
         epoch: int,
@@ -35,7 +38,7 @@ class VisualizeMeanFunction(Callback):
             return
         
         with torch.no_grad():
-            coords = self.initial_dictionary.sample_from_domain(self.density).to(device)
+            coords = self.domain_sampler.sample(self.density).to(device)
             vals = mean_function(coords).squeeze(-1).to(device)
             fig, ax = plt.subplots(figsize=(5, 4))
             # do a hexbin

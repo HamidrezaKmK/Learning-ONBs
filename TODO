@@ -5,18 +5,10 @@
     [] Add a proper domain sampler abstraction outside of dictionaries
 
 [] Pullback rather than pushforward
-    [] Add source and target coordinates and densities and revamp the interface of the NeuralIsometry to account for it.
-    [] Fix the velocity field sign bug
-    [] Add initial diffeomorphism too for changing domains
     [] Each dictionary has an interface for inner products, it takes an index sampler and weights different coefficients
     [] Then, it either returns a Monte-carlo estimate of inner product, or performs a transform and uses the weights
-
-
-    [] Fix the pullback pushforward convention I currently have and think of a better abstraction for the transform 
-        (I can return volume values and the coordinates, then I can use the volume values for computing inner products)
     [] Fix the indexing of the current dictionaries I have
     [] Use FFTs (ignoraing aliasing) rather than Monte-carlo on everything
-    [] Move to complex fields
     [] Add Haar wavelet dictionaries
     
 [] Use FFT with aliasing

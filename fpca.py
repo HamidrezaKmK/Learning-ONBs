@@ -13,20 +13,19 @@ import wandb
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.datasets import FunctionClassGenerator
 from infidictionary.neural_isometries import NeuralIsometry
-from infidictionary.index_sampler import IndexSampler
 from infidictionary.utils import NeuralField
+from infidictionary.domain_samplers import DomainSampler
 
 # Add resolver for hydra
 OmegaConf.register_new_resolver("eval", eval)
 # torch.set_default_dtype(torch.float64)
 
-# TODO: add a mean function learner (translation is not implemented here)
 def train(
     neural_isometry: NeuralIsometry,
     mean_function: NeuralField,
     f_gen: FunctionClassGenerator,
     initial_dictionary: InfiDictionary,
-    index_sampler: IndexSampler, # defines the \ell^2 on the coefficient space (energy)
+    domain_sampler: DomainSampler,
     batch_size: int,
     n_epochs: int,
     domain_sample_size: int,
@@ -39,12 +38,9 @@ def train(
     n_functions: int | None,
     wandb_enabled: bool,
     grad_accumulation_steps: int,
-    atom_index_batch_size: int,
-    coordinatewise_loss_p: float,
-):
-    if not initial_dictionary.is_orthonormal and coordinatewise_loss_p > 1e-6:
-        raise ValueError("For coordinatewise training, the initial dictionary must be orthonormal, consider setting coordinatewise_loss_p=0.")
-    
+    energy_estimation_kwargs: dict,
+    model_state_kwargs: dict,
+):  
     neural_isometry = neural_isometry.to(device)
     optim_isometry = isometry_optimizer_callable(neural_isometry.parameters())
     scheduler_isometry = isometry_scheduler_callable(optim_isometry) if isometry_scheduler_callable is not None else None
@@ -60,62 +56,39 @@ def train(
     for epoch_i in pbar:
 
         if epoch_i % grad_accumulation_steps == 0:
-            # TODO: add a domain sampler object
-            # TODO: make this more efficient
-            coords = initial_dictionary.sample_from_domain(domain_sample_size).to(device) # shape (N, d)
+            neural_isometry.shuffle_model_state(**model_state_kwargs)
+            coords = domain_sampler.sample(domain_sample_size).to(device) # shape (N, d)
             energy_history_temp = []
             mean_function_mse_history_temp = []
-
-            # use the same index samples throughout the grad accumulation steps
-            # sample atom_indices as a batch of indices distributed according to a decreasing index distribution
-            atom_indices = index_sampler.sample_indices(atom_index_batch_size, epoch_i, n_epochs)
-            atom_indices = atom_indices.long().cpu()  # shape (A, )
-
-            # for each function compute the inner products with all deformed atoms, thus 
-            # getting a (B, A) matrix of inner products
-            unique_atom_indices, atom_counts = torch.unique(atom_indices, return_counts=True)
-            atom_counts = atom_counts.float().to(device)  # shape (A, )
         
         # pick batch_size (B) number of functions
         seed_batch = torch.randint(0, f_gen.n_functions if n_functions is None else n_functions, (batch_size,))
-        vals = f_gen.get_batch(coords, seeds=seed_batch).to(device)  # shape (B, N)
+        vals = f_gen.get_batch(coords, seeds=seed_batch).to(device)  # shape (B, N, C)
         
         # (1: mean function) compute the mean function and do its backward:
-        avg_vals = mean_function(coords).squeeze(-1)
+        avg_vals = mean_function(coords) # shape (N, C)
         mean_mse = torch.mean((vals - avg_vals.unsqueeze(0)).pow(2))
         (mean_mse / grad_accumulation_steps).backward(retain_graph=False)
         mean_function_mse_history_temp.append(mean_mse.item())
 
         # (2: covariance training) zero-center the data and do KL expansion step:
         # get the vals centered and work with them
-        vals_centered = (vals - avg_vals.unsqueeze(0)).detach()  # shape (B, N)
+        vals_centered = (vals - avg_vals.unsqueeze(0)).detach()  # shape (B, N, C)
+        src_coords, src_logabsdet, vals_pulled_back = neural_isometry.pullback(
+            tgt_coords=coords,
+            tgt_logabsdet=torch.zeros(coords.shape[0], device=coords.device),
+            tgt_field=vals_centered,
+            start_time=0.0,
+            end_time=1.0,
+        )
+        energy = initial_dictionary.estimate_captured_energy(
+            coords=src_coords,
+            logabsdet=src_logabsdet,
+            values=vals_pulled_back,
+            **energy_estimation_kwargs,
+        ).mean()
 
-        coeffs_unique, deformed_functions_unique = neural_isometry.inner_products( 
-            atom_indices=unique_atom_indices,
-            coords=coords,
-            vals=vals_centered,
-            initial_dictionary=initial_dictionary,
-            device=device,
-            return_pullback=True,
-        ) # (A, B), (A, N)
-        
-        # either do a coodinatewise step or a full projection step
-        # TODO: can we potentially unify this? The unique one works better in some cases
-        if torch.rand(1).item() < coordinatewise_loss_p:
-            # project onto every coefficient to get the tensor (A, B, N)
-            coordinatewise_projections = torch.einsum("ab,an->ban", coeffs_unique, deformed_functions_unique)  # shape (B, A, N)
-            diff = vals_centered.unsqueeze(1) - coordinatewise_projections # shape (B, A, N)
-            # per-atom MSE averaged over batch + domain: (A,)
-            per_atom_mse = diff.pow(2).mean(dim=(0, 2))
-            # weighted average over atoms (counts sum = atom_index_batch_size)
-            energy = (per_atom_mse * atom_counts).sum() / atom_counts.sum()
-        else:
-            beta = initial_dictionary.gram_solve(unique_atom_indices, coeffs_unique)  # shape (A, B)
-            proj = torch.matmul(beta.T, deformed_functions_unique)  # shape (B, N)
-            diffs = vals_centered - proj  # shape (B, N)
-            energy = torch.mean(diffs.pow(2))  # scalar
-
-        (energy / grad_accumulation_steps).backward(retain_graph=False)
+        (-energy / grad_accumulation_steps).backward(retain_graph=False)
         energy_history_temp.append(energy.item())
 
         if (epoch_i + 1) % grad_accumulation_steps == 0:
@@ -180,8 +153,8 @@ def main(conf: DictConfig):
     neural_isometry: NeuralIsometry = instantiate(conf.neural_isometry)
     function_generator: FunctionClassGenerator = instantiate(conf.function_generator)  # dataset of datasets
     initial_dictionary: InfiDictionary = instantiate(conf.initial_dictionary)
-    index_sampler: IndexSampler = instantiate(conf.index_sampler)
     mean_function: NeuralField = instantiate(conf.mean_function)
+    domain_sampler: DomainSampler = instantiate(conf.domain_sampler)
 
     if conf.wandb.enabled:
         wandb_run_name = str(conf.wandb.run_name) if conf.wandb.run_name is not None else None
@@ -220,7 +193,7 @@ def main(conf: DictConfig):
         mean_function=mean_function,
         f_gen=function_generator,
         initial_dictionary=initial_dictionary,
-        index_sampler=index_sampler,
+        domain_sampler=domain_sampler,
         batch_size=conf.batch_size,
         n_epochs=conf.n_epochs,
         domain_sample_size=conf.domain_sample_size,
@@ -233,8 +206,8 @@ def main(conf: DictConfig):
         n_functions=conf.get("n_functions", None),
         wandb_enabled=conf.wandb.enabled,
         grad_accumulation_steps=conf.grad_accumulation_steps,
-        atom_index_batch_size=conf.atom_index_batch_size,
-        coordinatewise_loss_p=conf.coordinatewise_loss_p,
+        energy_estimation_kwargs=conf.get("energy_estimation_kwargs", {}),
+        model_state_kwargs=conf.get("model_state_kwargs", {}),
     )
 
     if conf.wandb.enabled:

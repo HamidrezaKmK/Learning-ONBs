@@ -47,22 +47,21 @@ class NeuralIsometry(ABC, torch.nn.Module):
         """
         pass
 
+    def shuffle_model_state(self):
+        return self
+
 class IdentityIsometry(NeuralIsometry):
     """
     A toy neural isometry that does nothing, but is still an isometry. Useful for debugging and testing.
     """
 
-    def __init__(self, domain_sampler: DomainSampler):
-        super().__init__(domain_sampler)
-
-    
     def pushforward(
         self,
         src_coords: torch.Tensor, # (N, d)
         src_logabsdet: torch.Tensor, # (N, )
         src_field: torch.Tensor, # (B, N, c),
-        src_time: float | None = None, # optional time argument for time-dependent isometries
-        tgt_time: float | None = None, # optional time argument for time-dependent isometries
+        start_time: float | None = None, # optional time argument for time-dependent isometries
+        end_time: float | None = None, # optional time argument for time-dependent isometries
     ):
         return src_coords, src_logabsdet, src_field
 
@@ -71,7 +70,7 @@ class IdentityIsometry(NeuralIsometry):
         tgt_coords: torch.Tensor, # (N, d) 
         tgt_logabsdet: torch.Tensor, # (N, )
         tgt_field: torch.Tensor, # (B, N, c),
-        src_time: float | None = None, # optional time argument for time-dependent isometries
-        tgt_time: float | None = None, # optional time argument for time-dependent isometr
+        start_time: float | None = None, # optional time argument for time-dependent isometries
+        end_time: float | None = None, # optional time argument for time-dependent isometries
     ):
         return tgt_coords, tgt_logabsdet, tgt_field
