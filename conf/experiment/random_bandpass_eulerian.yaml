@@ -9,17 +9,20 @@ defaults:
   - _self_
 
 model_state_kwargs:
-  num_steps: 20
+  num_steps: 200
+
 energy_estimation_kwargs:
   method: monte_carlo
-  num_samples: 1000
+  num_samples: 128
+# energy_estimation_kwargs:
+#   method: nufft
+#   nyquist: 256
 
-batch_size: 512
-atom_index_batch_size: 512
-grad_accumulation_steps: 1
+batch_size: 2
+grad_accumulation_steps: 16
 
 # training hyperparameters
-n_epochs: 50000
+n_epochs: 500000
 domain_sample_size: 250
 n_functions: 1000
 

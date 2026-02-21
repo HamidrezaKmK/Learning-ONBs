@@ -3,6 +3,7 @@ import torch
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import wandb
+import plotly.graph_objects as go
 from .base import Callback
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.neural_isometries import NeuralIsometry
@@ -13,7 +14,6 @@ class VisualizeMeanFunction(Callback):
     """
     This callbacks checks numerical isometry of the pullback operator.
     """
-    # TODO: Separate the sample from domain part in this and all others
     def __init__(
         self,
         initial_dictionary: InfiDictionary,
@@ -26,6 +26,8 @@ class VisualizeMeanFunction(Callback):
         self.density = density
         self.domain_sampler = domain_sampler
 
+    
+
     def __call__(
         self,
         epoch: int,
@@ -34,24 +36,44 @@ class VisualizeMeanFunction(Callback):
         wandb_enabled: bool,
         device: torch.device,
     ): 
-        if (epoch + 1) % self.frequency != 0 or wandb_enabled is False:
+        if (epoch + 1) % self.frequency != 0 or not wandb_enabled:
             return
         
         with torch.no_grad():
             coords = self.domain_sampler.sample(self.density).to(device)
-            vals = mean_function(coords).squeeze(-1).to(device)
-            fig, ax = plt.subplots(figsize=(5, 4))
-            # do a hexbin
-            hb = ax.hexbin(
-                coords[:, 0].cpu(), 
-                coords[:, 1].cpu(), 
-                C=vals.cpu(), 
-                gridsize=30, 
-                cmap='viridis', 
+            vals = mean_function(coords).to(device)
+            
+            x = coords[:, 0].cpu().numpy()
+            y = coords[:, 1].cpu().numpy()
+            z = vals[:, 0].cpu().numpy()
+
+            fig = go.Figure(go.Histogram2dContour(
+                x=x, 
+                y=y, 
+                z=z,
+                histfunc="avg",
+                colorscale='Viridis',
+                nbinsx=30,
+                nbinsy=30,
+                colorbar=dict(title='Mean Value')
+            ))
+
+            fig.update_xaxes(
+                scaleanchor="y", 
+                scaleratio=1, 
+                constrain='domain'
             )
-            fig.colorbar(hb, ax=ax, label='Mean Function Value')
-            ax.set_title(f'Mean Function Visualization at Epoch {epoch + 1}')
-            ax.set_xlabel('x')
-            ax.set_ylabel('y')
-            wandb.log({f'mean_function/field': wandb.Image(fig)}, step=epoch)
-            plt.close()
+            fig.update_yaxes(
+                constrain='domain'
+            )
+
+            fig.update_layout(
+                title=f'Mean Function Visualization at Epoch {epoch + 1}',
+                xaxis_title='x',
+                yaxis_title='y',
+                width=600,
+                height=600, # Set width and height equal for a square container
+                template="plotly_white"
+            )
+
+            wandb.log({f'mean_function/field': fig}, step=epoch)

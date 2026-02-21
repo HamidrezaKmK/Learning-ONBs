@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import wandb
 from .base import Callback
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.neural_isometries import NeuralIsometry
 from infidictionary.utils import NeuralField
@@ -38,20 +40,10 @@ class IsometryCheck(Callback):
     ): 
         if (epoch + 1) % self.frequency != 0 or wandb_enabled is False:
             return
-        
-        all_vals_original = []
-        all_vals_deformed = []
 
         with torch.no_grad():
-            n_cols = 2
-            n_rows = len(self.indices)
-
-            fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
-            if n_rows == 1:
-                axes = axes.reshape(1, -1)  # make indexing consistent: axes[i, j]
-
             coords = self.domain_sampler.sample(self.density).to(device)
-            
+            # pushforward logic:
             src_field = self.dictionary.get_atoms(
                 coords, 
                 self.indices.to(device),
@@ -65,84 +57,91 @@ class IsometryCheck(Callback):
                 start_time=0,
                 end_time=1,
             )
-            
+
+            # --- PART 1: Spatial Visualizations (Before vs. After) ---
+            n_rows_spatial = len(self.indices)
+            fig_spatial = make_subplots(
+                rows=n_rows_spatial, cols=2,
+                subplot_titles=("Original", "Deformed") * n_rows_spatial,
+                horizontal_spacing=0.1
+            )
+
+            x_np, y_np = coords[:, 0].cpu().numpy(), coords[:, 1].cpu().numpy()
+
             for idx in range(len(self.indices)):
-                if coords.shape[1] != 2:
-                    raise ValueError("VisualizeReconstruction only supports 2D dictionaries.")
+                v_orig = src_field[idx].cpu().numpy().flatten()
+                v_def = tgt_field[idx].cpu().numpy().flatten()
 
-                vals_original = src_field[idx] 
-                vals_deformed = tgt_field[idx]
+                # Robust scaling using quantiles (as in your original code)
+                vmin_orig = torch.quantile(src_field[idx], 0.01).item()
+                vmax_orig = torch.quantile(src_field[idx], 0.99).item()
+                vmin_def = torch.quantile(tgt_field[idx], 0.01).item()
+                vmax_def = torch.quantile(tgt_field[idx], 0.99).item()
 
-                ax0, ax1 = axes[idx, 0], axes[idx, 1]
-                cmap = "viridis"
-
-                vmin_01 = torch.quantile(vals_original.flatten(), 0.01).item()
-                vmax_01 = torch.quantile(vals_original.flatten(), 0.99).item()
-                norm_01 = mpl.colors.Normalize(vmin=vmin_01, vmax=vmax_01)
-
-                hb0 = ax0.hexbin(
-                    coords[:, 0].cpu().numpy(),
-                    coords[:, 1].cpu().numpy(),
-                    C=vals_original.cpu().numpy(),
-                    gridsize=50,
-                    cmap=cmap,
-                    norm=norm_01,
+                # Original Column
+                fig_spatial.add_trace(
+                    go.Histogram2dContour(
+                        x=x_np, y=y_np, z=v_orig, histfunc="avg",
+                        colorscale='Viridis', zmin=vmin_orig, zmax=vmax_orig,
+                        nbinsx=50, nbinsy=50, showscale=False,
+                    ), row=idx+1, col=1
                 )
-                ax0.set_title("Original")
-                ax0.set_ylabel(f"(idx={idx})")
 
-                sm_01 = mpl.cm.ScalarMappable(norm=norm_01, cmap=cmap)
-                sm_01.set_array([])
-                fig.colorbar(sm_01, ax=ax0, fraction=0.03, pad=0.02)
-
-                vmin_02 = torch.quantile(vals_deformed.flatten(), 0.01).item()
-                vmax_02 = torch.quantile(vals_deformed.flatten(), 0.99).item()
-                norm_02 = mpl.colors.Normalize(vmin=vmin_02, vmax=vmax_02)
-
-                hb1 = ax1.hexbin(
-                    coords[:, 0].cpu().numpy(),
-                    coords[:, 1].cpu().numpy(),
-                    C=vals_deformed.cpu().numpy(),
-                    gridsize=50,
-                    cmap=cmap,
-                    norm=norm_02,
+                # Deformed Column
+                fig_spatial.add_trace(
+                    go.Histogram2dContour(
+                        x=x_np, y=y_np, z=v_def, histfunc="avg",
+                        colorscale='Viridis', zmin=vmin_def, zmax=vmax_def,
+                        nbinsx=50, nbinsy=50, showscale=False,
+                    ), row=idx+1, col=2
                 )
-                ax1.set_title("Deformed")
 
-                sm_02 = mpl.cm.ScalarMappable(norm=norm_02, cmap=cmap)
-                sm_02.set_array([])
-                fig.colorbar(sm_02, ax=ax1, fraction=0.03, pad=0.02)
+                fig_spatial.update_xaxes(scaleanchor=f"y{idx*2 + 1}", scaleratio=1, row=idx+1, col=1)
+                fig_spatial.update_yaxes(scaleanchor=f"x{idx*2 + 1}", scaleratio=1, row=idx+1, col=1)
+                
+                fig_spatial.update_xaxes(scaleanchor=f"y{idx*2 + 2}", scaleratio=1, row=idx+1, col=2)
+                fig_spatial.update_yaxes(scaleanchor=f"x{idx*2 + 2}", scaleratio=1, row=idx+1, col=2)
 
-            wandb.log({f"isometry_check/before_and_after": wandb.Image(fig)}, step=epoch)
-            plt.close(fig)
+            fig_spatial.update_layout(height=400 * n_rows_spatial, width=1000, template="plotly_white")
+            wandb.log({"isometry_check/before_and_after": fig_spatial}, step=epoch)
 
-            # Log overall statistics in one plot as a heatmap
-            # compute pairwise inner products
-            inner_products = pairwise_inner_product(src_field, src_field, src_logabsdet) # shape (A, A)
-            inner_products_deformed = pairwise_inner_product(tgt_field, tgt_field, tgt_logabsdet) # shape (A, A)
-            inner_products = inner_products.detach().cpu()
-            inner_products_deformed = inner_products_deformed.detach().cpu()
-            
-            fig, axes = plt.subplots(figsize=(22, 6), nrows=1, ncols=3)
+            # --- PART 2: Isometry Heatmaps ---
+            inner_orig = pairwise_inner_product(src_field, src_field, src_logabsdet).cpu().numpy()
+            inner_def = pairwise_inner_product(tgt_field, tgt_field, tgt_logabsdet).cpu().numpy()
+            diffs = (inner_orig - inner_def).flatten()
 
-            # heatmap of inner products
-            m = axes[2].imshow(inner_products_deformed)
-            fig.colorbar(m, ax=axes[2], label='Inner Product (Deformed)')
-            axes[2].set_title('Pairwise Inner Products (Deformed)')
-            axes[2].set_xlabel('Function Index')
-            axes[2].set_ylabel('Function Index')
+            fig_iso = make_subplots(
+                rows=1, cols=3,
+                subplot_titles=("Inner Product Diff Dist.", "Original Inner Products", "Deformed Inner Products"),
+                # Adjust spacing so they don't overlap when square
+                horizontal_spacing=0.1 
+            )
 
-            m = axes[1].imshow(inner_products)
-            fig.colorbar(m, ax=axes[1], label='Inner Product')
-            axes[1].set_title('Pairwise Inner Products (Original)')
-            axes[1].set_xlabel('Function Index')
-            axes[1].set_ylabel('Function Index')
+            # 1. Histogram of differences
+            fig_iso.add_trace(go.Histogram(x=diffs, name="Diffs", nbinsx=30), row=1, col=1)
 
-            diffs = inner_products - inner_products_deformed
-            axes[0].hist(diffs.flatten(), bins=30)
-            axes[0].set_title('Differences in Inner Products (Original - Deformed)')
-            axes[0].set_xlabel('Difference')
-            axes[0].set_ylabel('Frequency')
+            # 2. Heatmaps
+            for i, data in enumerate([inner_orig, inner_def]):
+                col_idx = i + 2
+                fig_iso.add_trace(
+                    go.Heatmap(
+                        z=data, 
+                        colorscale='RdBu', 
+                        zmid=0,
+                        showscale=True if i == 1 else False # Only show one colorbar to save space
+                    ), row=1, col=col_idx
+                )
+                
+                # FORCE SQUARE: Anchor the y-axis to the x-axis for this specific subplot
+                # In a 1x3 grid, col 2 is yaxis2/xaxis2, col 3 is yaxis3/xaxis3
+                fig_iso.update_xaxes(scaleanchor=f"y{col_idx}", scaleratio=1, row=1, col=col_idx)
 
-            wandb.log({f"isometry_check/inner_products": wandb.Image(fig)}, step=epoch)
-            plt.close(fig)
+            # Adjust layout: Keep width/height ratio reasonable for squares
+            fig_iso.update_layout(
+                height=500, 
+                width=1200, 
+                title_text="Isometry Verification Heatmaps",
+                template="plotly_white"
+            )
+
+            wandb.log({"isometry_check/inner_products": fig_iso}, step=epoch)
