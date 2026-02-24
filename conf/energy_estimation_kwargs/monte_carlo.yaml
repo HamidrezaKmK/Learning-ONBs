@@ -1,0 +1,2 @@
+method: monte_carlo
+num_samples: 128

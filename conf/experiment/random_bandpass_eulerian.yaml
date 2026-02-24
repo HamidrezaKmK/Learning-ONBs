@@ -3,6 +3,7 @@
 defaults:
   - /domain_samplers@domain_sampler: square_sampler
   - /function_generator@function_generator: random_bandpass
+  - /energy_estimation_kwargs@energy_estimation_kwargs: monte_carlo
   - /neural_isometry@neural_isometry: eulerian
   - /dictionaries@initial_dictionary: fourier_2d
   - override /wandb@wandb: disabled
@@ -11,20 +12,17 @@ defaults:
 model_state_kwargs:
   num_steps: 200
 
-energy_estimation_kwargs:
-  method: monte_carlo
-  num_samples: 128
-# energy_estimation_kwargs:
-#   method: nufft
-#   nyquist: 256
-
-batch_size: 2
-grad_accumulation_steps: 16
+batch_size: 32
+grad_accumulation_steps: 8
 
 # training hyperparameters
 n_epochs: 500000
 domain_sample_size: 250
 n_functions: 1000
+
+pullback_pushforward_kwargs: 
+  start_time: 0.0
+  end_time: 1.0
 
 callbacks:
   mean_function_visualization:
@@ -42,6 +40,7 @@ callbacks:
     frequency: 200
     density: 200
     truncation_factors: [1, 2, 3]
+    pullback_pushforward_kwargs: ${pullback_pushforward_kwargs}
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
     dictionary: ${initial_dictionary}
@@ -59,5 +58,5 @@ callbacks:
 # Add tags so that it is easier to filter the experiments in the W&B dashboard
 wandb:
   tags:
-    experiment: ct_fpca
+    experiment: fpca
     task: reconstruction

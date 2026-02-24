@@ -28,13 +28,9 @@ class FourierDictionary(InfiDictionary):
             # randomly assign half of the samples to be sine and half to be cosine
             kind_samples = torch.randint(0, 2, (num_samples,))
             idx[:, d] = torch.where(
-                geom_samples == 0, 
-                geom_samples, 
-                torch.where(
-                    kind_samples == 0, 
-                    geom_samples + 1,
-                    - geom_samples - 1,
-                )
+                kind_samples == 0, 
+                geom_samples,
+                - geom_samples,
             )
         return idx
     
@@ -71,7 +67,7 @@ class FourierDictionary(InfiDictionary):
         energy = pairwise_inner_product(values, atoms, logabsdet) ** 2 # (B, A)
         return energy.sum(dim=-1) / num_samples
     
-    def compute_grid_weights(self, nyquist: int) -> torch.Tensor:
+    def compute_grid_probas(self, nyquist: int) -> torch.Tensor:
         single_tensor = self.index_geom_p * (1.0 - self.index_geom_p) ** torch.arange(0, nyquist + 1)
         single_tensor = single_tensor / (1 - (1 - self.index_geom_p) ** (nyquist + 1))
 
@@ -82,7 +78,14 @@ class FourierDictionary(InfiDictionary):
             shape[d] = nyquist + 1
             weights *= single_tensor.view(shape) # (1, 1, ..., nyquist+1, ..., 1) where the nyquist+1 is in the d-th dimension
         
-        return weights
+        all_probas = torch.zeros((2*nyquist+1, 2*nyquist+1))
+        all_probas[nyquist:, nyquist:] += weights
+        all_probas[nyquist:, :nyquist+1] += torch.flip(weights, dims=[1])
+        all_probas[:nyquist+1, nyquist:] += torch.flip(weights, dims=[0])
+        all_probas[:nyquist+1, :nyquist+1] += torch.flip(weights, dims=[0, 1])
+        all_probas /= 4
+
+        return all_probas
     
     def nufft_captured_energy(
         self, 
@@ -90,29 +93,24 @@ class FourierDictionary(InfiDictionary):
         logabsdet: torch.Tensor, # (N, )
         values: torch.Tensor, # (B, N, C)
         nyquist: int,
+        return_dft: bool = False,
     ) -> torch.Tensor: # (B, )
-        points = coords.transpose(0, 1).contiguous().to(coords.device) # (d, N)
+        points = coords.transpose(0, 1).contiguous().to(coords.device).to(dtype=torch.float32)# (d, N)
         values = values.permute(0, 2, 1).contiguous().to(coords.device).to(dtype=torch.complex64)
-        dft = torch.sqrt(torch.tensor(2.0)) * finufft.finufft_type1(
+        # normalize values
+        values = values / math.sqrt(nyquist) # (B, C, N)
+        dft = finufft.finufft_type1(
             points=points,  # Transpose to shape (d, N) as expected by finufft
             values=values,  # Reshape to (B*C, N)
             output_shape=(nyquist * 2 + 1, nyquist * 2 + 1),
             modeord=0,
         ).permute(0, 2, 3, 1) / points.shape[1] # (B, A, C) where A is the number of frequencies in the grid
-
-        
-        probability_weights = self.compute_grid_weights(nyquist=nyquist).to(coords.device) # (nyquist+1, nyquist+1  )
-        all_probas = torch.zeros((2*nyquist+1, 2*nyquist+1), device=coords.device, dtype=coords.dtype)
-        all_probas[nyquist:, nyquist:] += probability_weights
-        all_probas[nyquist:, :nyquist+1] += torch.flip(probability_weights, dims=[1])
-        all_probas[:nyquist+1, nyquist:] += torch.flip(probability_weights, dims=[0])
-        all_probas[:nyquist+1, :nyquist+1] += torch.flip(probability_weights, dims=[0, 1])
-        all_probas /= 4
+        all_probas = self.compute_grid_probas(nyquist=nyquist).to(coords.device) # (2 * nyquist + 1, 2 * nyquist + 1 )
         energy = (dft.abs() ** 2 * all_probas[None, None, :, :]).sum(dim=(1, 2, 3)) # (B, )
-        return energy
+        # energy_normalized = energy / nyquist
+        return energy if not return_dft else (energy, dft, all_probas)
     
     def estimate_captured_energy( 
-        # TODO: add a nufft based method for this as well!
         # TODO: check if I need to do the reconstruction trick or not
         self, 
         coords: torch.Tensor, # (N, d)
@@ -129,6 +127,10 @@ class FourierDictionary(InfiDictionary):
 
     def get_truncated_indices(self, num_truncated: int) -> torch.Tensor:
         idx = torch.arange(-num_truncated + 1, num_truncated)
-        # Added indexing='ij' to the meshgrid call
-        grid = torch.stack(torch.meshgrid(*[idx for _ in range(self.domain_dim)], indexing='ij'), dim=-1).view(-1, self.domain_dim) 
+        grid = torch.stack(
+            torch.meshgrid(*[idx for _ in range(self.domain_dim)], indexing='ij'), 
+            dim=-1,
+        ).view(-1, self.domain_dim) 
         return grid
+
+    # TODO: add a nufft based reconstruction scheme maybe?

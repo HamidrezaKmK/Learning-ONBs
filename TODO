@@ -1,20 +1,9 @@
-
-[] Immediate:
-    [] Rename KL expansion to PCA
-    [] Rename PWC to basis_discovery
-    [] Add a proper domain sampler abstraction outside of dictionaries
-
-[] Pullback rather than pushforward
-    [] Each dictionary has an interface for inner products, it takes an index sampler and weights different coefficients
-    [] Then, it either returns a Monte-carlo estimate of inner product, or performs a transform and uses the weights
-    [] Fix the indexing of the current dictionaries I have
-    [] Use FFTs (ignoraing aliasing) rather than Monte-carlo on everything
-    [] Add Haar wavelet dictionaries
-    
-[] Use FFT with aliasing
-[] Retry the pullback/pushforward idea for inner products
-[] Is there a simulation free training for the half-density transfrom?
-[] Add wavelet dictionaries
-
+[] Test the reconstruction API and move reconstruction to somewhere else (e.g. utils)
+[] Add a simple experiment where the goal is to learn the identity map
+[] Figure out the issues with NUFFT, why doesn't the nufft captured energy share 
+    the same scale as the Monte-Carlo captured energy?
+[] Add CelebA dataset and update the dataset API to account for real-world examples
+[] Add Haar wavelet dictionaries
+[] For the Monte-carlo methods, try a mix of pushforward pullback rather than just pushforward
 [] Ablate the stratified sampling for the grid integrals
-
+[] Implement the Adjoint method of the Cayley ODE solver

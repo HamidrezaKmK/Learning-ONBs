@@ -57,6 +57,7 @@ class BoxDictionary(InfiDictionary):
         energy = pairwise_inner_product(values, atoms, logabsdet) ** 2 # (B, A)
         return energy.sum(dim=-1) / num_samples
     
-    def get_truncated_indices(self, num_truncated):
-        # TODO: this is wrong!
-        return self.sample_indices(num_truncated)
+    def get_truncated_indices(self, num_truncated: int):
+        num_truncated = min(num_truncated, self.resolution)
+        grids = [torch.arange(num_truncated) for _ in range(self.domain_dim)]
+        return torch.cartesian_prod(*grids)

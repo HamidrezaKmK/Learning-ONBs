@@ -29,7 +29,7 @@ class VisualizeVelocityField(Callback):
         if len(timesteps) != 9:
             raise ValueError("VisualizeVelocityField requires exactly 9 timesteps.")
 
-    
+    # TODO: adapt this to plotly
     def __call__(
         self,
         epoch: int,

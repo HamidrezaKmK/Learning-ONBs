@@ -20,6 +20,28 @@ from infidictionary.domain_samplers import DomainSampler
 OmegaConf.register_new_resolver("eval", eval)
 # torch.set_default_dtype(torch.float64)
 
+def get_grad_norm(
+    model: torch.nn.Module,
+):
+    # visualize norm of the gradients of the parameters
+    all_grads = []
+    for param in model.parameters():
+        if param.grad is not None:
+            all_grads.append(param.grad.view(-1))
+    all_grads = torch.cat(all_grads)
+    grad_norm = torch.norm(all_grads).item()
+    return grad_norm
+
+def get_param_norm(
+    model: torch.nn.Module,
+):
+    all_params = []
+    for param in model.parameters():
+        all_params.append(param.view(-1))
+    all_params = torch.cat(all_params)
+    param_norm = torch.norm(all_params).item()
+    return param_norm
+
 def train(
     neural_isometry: NeuralIsometry,
     mean_function: NeuralField,
@@ -40,6 +62,7 @@ def train(
     grad_accumulation_steps: int,
     energy_estimation_kwargs: dict,
     model_state_kwargs: dict,
+    pullback_pushforward_kwargs: dict,
 ):  
     neural_isometry = neural_isometry.to(device)
     optim_isometry = isometry_optimizer_callable(neural_isometry.parameters())
@@ -78,8 +101,7 @@ def train(
             tgt_coords=coords,
             tgt_logabsdet=torch.zeros(coords.shape[0], device=coords.device),
             tgt_field=vals_centered,
-            start_time=0.0,
-            end_time=1.0,
+            **pullback_pushforward_kwargs,
         )
         energy = initial_dictionary.estimate_captured_energy(
             coords=src_coords,
@@ -99,21 +121,10 @@ def train(
                 wandb.log({"train/energy": energy_item}, step=epoch_i)
                 wandb.log({"train/mean_function_mse": mean_mse_item}, step=epoch_i)
                 wandb.log({"train/iteration": epoch_i}, step=epoch_i)
-                # visualize norm of the gradients of the parameters
-                all_grads = []
-                for param in neural_isometry.parameters():
-                    if param.grad is not None:
-                        all_grads.append(param.grad.view(-1))
-                all_grads = torch.cat(all_grads)
-                grad_norm = torch.norm(all_grads).item()
-                wandb.log({"train/grad_norm": grad_norm}, step=epoch_i)
-                # visualize the magnitude of the parameters
-                all_params = []
-                for param in neural_isometry.parameters():
-                    all_params.append(param.view(-1))
-                all_params = torch.cat(all_params)
-                param_norm = torch.norm(all_params).item()
-                wandb.log({"train/param_norm": param_norm}, step=epoch_i)
+                wandb.log({"train/grad_norm_isometry": get_grad_norm(neural_isometry)}, step=epoch_i)
+                wandb.log({"train/param_norm_isometry": get_param_norm(neural_isometry)}, step=epoch_i)
+                wandb.log({"train/grad_norm_mean_function": get_grad_norm(mean_function)}, step=epoch_i)
+                wandb.log({"train/param_norm_mean_function": get_param_norm(mean_function)}, step=epoch_i)
                 # visualize the average learning rate of the optimizer
                 avg_lr1 = sum(group['lr'] for group in optim_mean_function.param_groups) / len(optim_mean_function.param_groups)
                 wandb.log({"train/lr_mean_function": avg_lr1}, step=epoch_i)
@@ -208,6 +219,7 @@ def main(conf: DictConfig):
         grad_accumulation_steps=conf.grad_accumulation_steps,
         energy_estimation_kwargs=conf.get("energy_estimation_kwargs", {}),
         model_state_kwargs=conf.get("model_state_kwargs", {}),
+        pullback_pushforward_kwargs=conf.get("pullback_pushforward_kwargs", {}),
     )
 
     if conf.wandb.enabled:

@@ -1,10 +1,6 @@
 # Learning Basis Functions on Function Spaces
 
-(TODO: revamp the entire thing)
-
-This project is aimed at learning basis functions on function spaces using diffeomorphic transformations. For more details on the theory of the method please look at the Overleaf document.
-
-The code is implemented in Python and leverages PyTorch for automatic differentiation and optimization.
+This is the repo related to my work on learning infinite basis functions on function space and parameterizing infinite-dimensional rotations. For more details on the theory of the method please look at the Overleaf document.
 
 ## Setup
 
@@ -17,33 +13,46 @@ conda activate infidictionary
 
 ## Notebooks
 
-The codebase comes with a set of Jupyter notebooks, all stored in the [`notebooks/`](./notebooks/) directory that act as a starting point for understanding different parts of the project. Here is a brief explanation of the notebooks: 
+The codebase includes a suite of Jupyter notebooks located in the [`notebooks/`](./notebooks/) directory. These serve as the primary entry point for understanding the different components of the repository. Below is a guide to the essential notebooks:
 
-1. [Examples Dictionary](./notebooks/examples_dictionaries.ipynb): This notebook constructs different basis functions on different domains and is a good visualization of the types of domains and function spaces we are dealing with.
-2. [Reconstruction](./notebooks/reconstruction.ipynb): This notebook contains an example low-dimensional function space that is constructed by taking linear combinations of trigonometric functions with random phase and frequencies.
-3. [Normalizing Flow](./notebooks/normalizing_flow.ipynb): This notebook is our first exploration of parameterizing a change of basis via diffeomorphisms. We parameterize diffeomorphisms using normalizing flows (e.g., neural spline flows) and study how they warp a previously defined basis. The main goal is to familiarize the reader with the transformation operator in practice and to empirically validate the theoretical results from the write-up.
-4. [Continuous Time Flows](./notebooks/ct_flows.ipynb): Once the first class of diffeomirphisms is covered, we go over the continuous time flows that are defined through ordinary differential equations.
+1. **[Bases Intro](./notebooks/infinite_bases.ipynb):** Introduces the `infidictionary` API for generating analytical basis functions. The primary objective here is to use isometric deformations and rotations of these simple bases (e.g., Fourier) to represent complex bases within function spaces, in this notebook, we show how to sample and visualize the basic simple bases.
+
+2. **[Domain Samplers](./notebooks/domain_samplers.ipynb):** Provides the API for generating points across various domains, supporting both stochastic (e.g., independent and identically distributed, stratified) and deterministic (regular grid) sampling strategies. Beyond that, this notebook also contains information about isometries that are primarily used to map between different geometries, such as applying the Shirley-Chiu or Polar transform to change between a disk domain and a square domain.
+
+3. **[Neural Isometries](./notebooks/isometries/):** The notebooks in this directory form the core of our method. Here, we implement various deformations and isometries, including change-of-domain mappings (e.g., transforming a Fourier basis on a square to a sphere), Lagrangian continuous-time flows, Eulerian low-rank parameterizations, and mixed approaches. To navigate these concepts, we recommend following this natural progression:
+   
+   * **(i) [Eulerian Isometries](./notebooks/isometries/eulerian_transform.ipynb)**
+     * Contains foundational experiments for working with the isometric transform API.
+     * Focuses on fully Eulerian isometries, specifically those that discretize to Householder reflections using a skew-adjoint low-rank parameterization.
+   
+   * **(ii) [Normalizing Flows](./notebooks/isometries/normalizing_flow.ipynb)**
+     * Defines isometries through a single diffeomorphism using the isometric change-of-variable trick, rather than an ODE.
+     * In this notebook we explore complex mappings constructed via normalizing flows, including neural spline flows.
+   
+   * **(iii) [Lagrangian Isometries](./notebooks/isometries/ct_flows.ipynb)**
+     * Constructs isometries using continuous-time flows based on the Lie derivative formulation.
+   
+   * **(iv) [Semi-Lagrangian Isometries](./notebooks/isometries/semi_lagrangian.ipynb)**
+     * The culmination of the preceding methods, mixing the Eulerian and Lagrangian formulations.
+     * Introduces a parameterized neural gating mechanism that dynamically determines the balance at any given point between the Lagrangian component, using the Lie derivative generator and the Eulerian component, using the low-rank skew-adjoint generator.
+
+   * **(v) [Deforming Datasets](./notebooks/isometries/examples.ipynb)**
+     * Visualizing the deformations applied to some of the datasets.
 
 # Running Scripts
 
 We use a combination of [Weights & Biases](https://docs.wandb.ai/models/quickstart) for logging our experiments and [Hydra](https://hydra.cc/) for tracking our configurations. Please read their corresponding tutorials for setting up.
 
-## Reconstruction
+## Functional PCA
 
-The `reconstruction.py` script is the first script that actually optimizes a diffeomorphism for the tasks of reconstruction. Here are a few experiment templates:
+The `fpca.py` script tries to fit a basis that captures the first and second order characteristics of a functional dataset (refer to the Overleaf for more information). Here are some example usages:
 
 ```bash
-python reconstruction.py +experiment=kumaraswamy_sanity_check # (1)
-python reconstruction.py +experiment=spline_sanity_check # (2)
-python reconstruction.py +experiment=ct_radial_sanity_check # (3)
-python reconstruction.py +experiment=spline_radial_random_bandpass #(4)
-python reconstruction.py +experiment=ct_radial_random_bandpass # (5)
+python fpca.py +experiment=sanity_check # try to fit the identity transform
+python fpca.py +experiment=eulerian_example # TODO
+python fpca.py +experiment=lagrangian_example # TODO
 ```
 
-1. A very simple sanity check where a Kumaraswamy diffeomorphism is trained to match a dataset generated from a random combination of the initial basis. The optimal solution to this problem is the identity diffeomorphism.
-2. Another sanity check similar to (1) where a spline flow is trained instead of a Kumaraswamy map. This is to sanity check the spline flow.
-3. Similar to (1) and (2) but with a continuous-time normalizing flow (CNF) instead. The optimal map would have zero velocity fields, i.e., the identity flow map. Another change compared to (1) and (2) is that here a basis on the unit disk is used.
-4. In this experiment a spline flow is trained to match a synthetic dataset of trigonomic functions (the one described in the reconstruction notebook) on the radial basis.
-5. Similar to (4) but rather than using a spline flow we use a CNF.
+## Fourier-er
 
-**Note:** For the reconstruction code to properly work, the batch size typically needs to be set to a large value.
+TODO

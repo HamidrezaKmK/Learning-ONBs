@@ -124,15 +124,20 @@ def pairwise_inner_product(
     logabsdet: torch.Tensor | None = None, # (N, )
 ) -> torch.Tensor:
     logabsdet = logabsdet if logabsdet is not None else torch.zeros(f1.shape[1], device=f1.device, dtype=f1.dtype)
+    first_unsqueezed = False
+    second_unsqueezed = False
     if f1.dim() == 2:
         f1 = f1.unsqueeze(0)  # (1, N, C)
+        first_unsqueezed = True
     if f2.dim() == 2:
         f2 = f2.unsqueeze(0)  # (1, N, C)
+        second_unsqueezed = True
     ret = torch.einsum("anc, bnc->ab", f1 * torch.exp(logabsdet)[None, :, None], f2) # (A, B)
-    ret = ret.squeeze() / f1.shape[1] # (A, B) or (A,) or (B,) or scalar
-    # if scaler make it (1, )
-    if ret.dim() == 0:
-        ret = ret.unsqueeze(0)
+    ret = ret / f1.shape[1] # (A, B) or (A,) or (B,) or scalar
+    if first_unsqueezed:
+        ret = ret.squeeze(0)
+    if second_unsqueezed:
+        ret = ret.squeeze(-1)
     return ret
 
 def norm2(
