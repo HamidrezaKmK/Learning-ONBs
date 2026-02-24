@@ -64,9 +64,12 @@ class FourierDictionary(InfiDictionary):
     ) -> torch.Tensor: # (B, )
         # TODO: reuse the unique operation
         idx = self.sample_indices(num_samples).to(coords.device) # (A, ...)
-        atoms = self.get_atoms(coords, idx) # (A, N, C)
-        energy = pairwise_inner_product(values, atoms, logabsdet) ** 2 # (B, A)
-        return energy.sum(dim=-1) / num_samples
+        idx_unique, idx_counts = torch.unique(idx, return_counts=True, dim=0)
+        atoms = self.get_atoms(coords, idx_unique) # (A_unique, N, C)
+        coefficients = pairwise_inner_product(values, atoms, logabsdet) # (B, A_unique)
+        energy = coefficients ** 2 * idx_counts[None, :] # (B, A_unique)
+        avg_energy = energy.sum(dim=-1) / num_samples # (B, )
+        return avg_energy
     
     def compute_grid_probas(self, nyquist: int) -> torch.Tensor:
         single_tensor = self.index_geom_p * (1.0 - self.index_geom_p) ** torch.arange(0, nyquist + 1)

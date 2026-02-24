@@ -40,7 +40,7 @@ class IsometryCheck(Callback):
     ): 
         if (epoch + 1) % self.frequency != 0 or wandb_enabled is False:
             return
-
+        neural_isometry.eval()
         with torch.no_grad():
             coords = self.domain_sampler.sample(self.density).to(device)
             # pushforward logic:
@@ -145,3 +145,5 @@ class IsometryCheck(Callback):
             )
 
             wandb.log({"isometry_check/inner_products": fig_iso}, step=epoch)
+        neural_isometry.train()
+        

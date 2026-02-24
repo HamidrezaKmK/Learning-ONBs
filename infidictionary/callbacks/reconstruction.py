@@ -52,6 +52,8 @@ class VisualizeKLExpansionReconstruction(Callback):
         if (epoch + 1) % self.frequency != 0 or not wandb_enabled:
             return
         
+        neural_isometry.eval()
+        mean_function.eval()
         with torch.no_grad():
             coords = self.domain_sampler.sample(self.density).to(device)
             
@@ -184,3 +186,6 @@ class VisualizeKLExpansionReconstruction(Callback):
             )
 
             wandb.log({f"reconstruction/0_visualization": fig}, step=epoch)
+
+        neural_isometry.train()
+        mean_function.train()

@@ -38,7 +38,7 @@ class VisualizeMeanFunction(Callback):
     ): 
         if (epoch + 1) % self.frequency != 0 or not wandb_enabled:
             return
-        
+        mean_function.eval()
         with torch.no_grad():
             coords = self.domain_sampler.sample(self.density).to(device)
             vals = mean_function(coords).to(device)
@@ -77,3 +77,4 @@ class VisualizeMeanFunction(Callback):
             )
 
             wandb.log({f'mean_function/field': fig}, step=epoch)
+        mean_function.train()
