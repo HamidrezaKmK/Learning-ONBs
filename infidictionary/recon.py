@@ -17,7 +17,8 @@ def get_reconstructions(
     neural isometry and dictionary at the specified atom indices (prefixes).
     """
     device = coords.device
-    func_centered = functions - mean_function(coords).unsqueeze(0)  # (B, N, C)
+    mean_function_eval = mean_function(coords) # (N, C)
+    func_centered = functions - mean_function_eval.unsqueeze(0)  # (B, N, C)
     src_coords, src_logabsdet, src_field = neural_isometry.pullback(
         tgt_coords=coords,
         tgt_logabsdet=torch.zeros(coords.shape[0], device=device),
@@ -36,4 +37,4 @@ def get_reconstructions(
         src_field=recon_pullback,
         **transform_kwargs,
     )
-    return recon
+    return recon + mean_function_eval.unsqueeze(0) # (B, N, C)

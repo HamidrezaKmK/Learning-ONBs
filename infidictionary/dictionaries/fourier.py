@@ -62,6 +62,7 @@ class FourierDictionary(InfiDictionary):
         values: torch.Tensor, # (B, N, C)
         num_samples: int,
     ) -> torch.Tensor: # (B, )
+        # TODO: reuse the unique operation
         idx = self.sample_indices(num_samples).to(coords.device) # (A, ...)
         atoms = self.get_atoms(coords, idx) # (A, N, C)
         energy = pairwise_inner_product(values, atoms, logabsdet) ** 2 # (B, A)
