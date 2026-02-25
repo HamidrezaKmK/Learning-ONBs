@@ -162,7 +162,7 @@ def train(
 def main(conf: DictConfig):
 
     neural_isometry: NeuralIsometry = instantiate(conf.neural_isometry)
-    function_generator: FunctionClassGenerator = instantiate(conf.function_generator)  # dataset of datasets
+    function_generator: FunctionClassGenerator = instantiate(conf.function_generator)
     initial_dictionary: InfiDictionary = instantiate(conf.initial_dictionary)
     mean_function: NeuralField = instantiate(conf.mean_function)
     domain_sampler: DomainSampler = instantiate(conf.domain_sampler)

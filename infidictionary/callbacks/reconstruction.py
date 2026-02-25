@@ -31,6 +31,7 @@ class VisualizeKLExpansionReconstruction(Callback):
         density: int,
         truncation_factors: list[int],
         pullback_pushforward_kwargs,
+        identity_isometry: NeuralIsometry, 
     ):
         self.dictionary = dictionary
         self.f_gen = f_gen
@@ -40,6 +41,7 @@ class VisualizeKLExpansionReconstruction(Callback):
         self.truncation_factors = truncation_factors
         self.domain_sampler = domain_sampler
         self.pullback_pushforward_kwargs = pullback_pushforward_kwargs
+        self.identity_isometry = identity_isometry
     
     def __call__(
         self,
@@ -79,7 +81,7 @@ class VisualizeKLExpansionReconstruction(Callback):
                 recon_iden = get_reconstructions(
                     coords=coords,
                     functions=all_vals,
-                    neural_isometry=IdentityIsometry(),
+                    neural_isometry=self.identity_isometry,
                     mean_function=mean_function,
                     dictionary=self.dictionary,
                     truncation_factor=trunc,

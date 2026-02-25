@@ -1,3 +1,0 @@
-_target_: infidictionary.neural_isometries.HouseholderIsometry
-domain_dim: 2
-n_reflections: 200

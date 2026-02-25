@@ -39,7 +39,6 @@ class InfiDictionary(ABC):
     def get_reconstructions(
         self,
         coords: torch.Tensor, # (N, d)
-        logabsdet: torch.Tensor, # (N, )
         functions: torch.Tensor, # (B, N, C)
         truncation_factor: int,
     ):
@@ -58,7 +57,6 @@ class InfiDictionary(ABC):
         c = pairwise_inner_product(
             functions,
             dictionary_values,
-            logabsdet,
         ) # shape (B, A)
         recon = c @ dictionary_values.view(dictionary_values.shape[0], -1) # shape (B, N * C)
         recon = recon.view(functions.shape) # shape (B, N, C)

@@ -57,7 +57,7 @@ class IsometryCheck(Callback):
                 start_time=0,
                 end_time=1,
             )
-
+            
             # --- PART 1: Spatial Visualizations (Before vs. After) ---
             n_rows_spatial = len(self.indices)
             fig_spatial = make_subplots(
@@ -67,6 +67,7 @@ class IsometryCheck(Callback):
             )
 
             x_np, y_np = coords[:, 0].cpu().numpy(), coords[:, 1].cpu().numpy()
+            x_tgt_np, y_tgt_np = tgt_coords[:, 0].cpu().numpy(), tgt_coords[:, 1].cpu().numpy()
 
             for idx in range(len(self.indices)):
                 v_orig = src_field[idx].cpu().numpy().flatten()
@@ -90,7 +91,7 @@ class IsometryCheck(Callback):
                 # Deformed Column
                 fig_spatial.add_trace(
                     go.Histogram2dContour(
-                        x=x_np, y=y_np, z=v_def, histfunc="avg",
+                        x=x_tgt_np, y=y_tgt_np, z=v_def, histfunc="avg",
                         colorscale='Viridis', zmin=vmin_def, zmax=vmax_def,
                         nbinsx=50, nbinsy=50, showscale=False,
                     ), row=idx+1, col=2

@@ -38,7 +38,7 @@ class EulerianIsometry(NeuralIsometry):
         v = v / torch.sqrt(norm2(v, logabsdet)).unsqueeze(-1) # (N, C)
         inner_products = pairwise_inner_product(values, v, logabsdet) # (B, )
         interim = torch.einsum("b,nc->bnc", inner_products, v) # (B, N, C)
-        values = values - 2 *  interim # (B, N, C)
+        values = values - 2 * interim # (B, N, C)
 
         return values
         

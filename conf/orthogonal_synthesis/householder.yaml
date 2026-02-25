@@ -1,4 +1,0 @@
-_target_: infidictionary.linear_synthesis.HouseholderSynthesis
-n_householder: 100
-eps: 0.000000000001
-_partial_: true

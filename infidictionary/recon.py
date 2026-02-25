@@ -27,7 +27,7 @@ def get_reconstructions(
     )
     recon_pullback = dictionary.get_reconstructions(
         coords=src_coords,
-        logabsdet=src_logabsdet,
+        # logabsdet=src_logabsdet,
         functions=src_field,
         truncation_factor=truncation_factor,
     ) # (B, N, C)

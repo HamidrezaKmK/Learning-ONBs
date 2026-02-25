@@ -1,0 +1,27 @@
+_target_: infidictionary.neural_isometries.GeneralizedIsometry
+
+first_change_of_domain:
+  _target_: infidictionary.neural_isometries.lagrangian.LagrangianIsometry
+  diffeomorphism:
+    _target_: infidictionary.diffeomorphisms.ShirlyChiu
+
+ode_isometry:
+  _target_: infidictionary.neural_isometries.EulerianIsometry
+  coords_dim: 2
+  channels_dim: 1
+  scalar_field_partial:
+    _target_: infidictionary.utils.TimeEvolvingField
+    _partial_: true
+    base_field_partial:
+      _target_: infidictionary.utils.MLPNeuralField
+      _partial_: true
+      hidden_dims:
+        a: 16
+        b: 32
+        c: 64
+        d: 32
+      activation:
+        _target_: torch.nn.ReLU
+        _partial_: true
+
+last_change_of_domain: null

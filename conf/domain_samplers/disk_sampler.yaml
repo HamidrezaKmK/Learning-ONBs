@@ -1,0 +1,3 @@
+_target_: infidictionary.domain_samplers.DiskSampler
+stratified: True
+add_noise: True
