@@ -1,7 +1,9 @@
+import datetime
 import math
+import os
 from typing import Any, Callable
 import matplotlib
-matplotlib.use("Agg") 
+matplotlib.use("Agg")
 import hydra
 import torch
 from hydra.utils import instantiate
@@ -10,6 +12,7 @@ from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 import wandb
 
+from infidictionary.checkpointing import Checkpointer
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.datasets import FunctionClassGenerator
 from infidictionary.neural_isometries import NeuralIsometry
@@ -42,6 +45,7 @@ def get_param_norm(
     param_norm = torch.norm(all_params).item()
     return param_norm
 
+
 def train(
     neural_isometry: NeuralIsometry,
     mean_function: NeuralField,
@@ -52,10 +56,10 @@ def train(
     n_epochs: int,
     domain_sample_size: int,
     device: torch.device,
-    mean_function_optimizer_callable: Callable[[Any,], torch.optim.Optimizer],
-    mean_function_scheduler_callable: Callable[[torch.optim.Optimizer,], torch.optim.lr_scheduler._LRScheduler],
-    isometry_optimizer_callable: Callable[[Any,], torch.optim.Optimizer],
-    isometry_scheduler_callable: Callable[[torch.optim.Optimizer,], torch.optim.lr_scheduler._LRScheduler],
+    optim_isometry: torch.optim.Optimizer,
+    scheduler_isometry: torch.optim.lr_scheduler._LRScheduler | None,
+    optim_mean_function: torch.optim.Optimizer,
+    scheduler_mean_function: torch.optim.lr_scheduler._LRScheduler | None,
     callbacks: list,
     n_functions: int | None,
     wandb_enabled: bool,
@@ -63,31 +67,37 @@ def train(
     energy_estimation_kwargs: dict,
     model_state_kwargs: dict,
     pullback_pushforward_kwargs: dict,
-):  
+    checkpointer: Checkpointer | None,
+    checkpoint: dict | None,
+):
     neural_isometry = neural_isometry.to(device)
-    optim_isometry = isometry_optimizer_callable(neural_isometry.parameters())
-    scheduler_isometry = isometry_scheduler_callable(optim_isometry) if isometry_scheduler_callable is not None else None
     optim_isometry.zero_grad()
 
     mean_function = mean_function.to(device)
-    optim_mean_function = mean_function_optimizer_callable(mean_function.parameters())
-    scheduler_mean_function = mean_function_scheduler_callable(optim_mean_function) if mean_function_scheduler_callable is not None else None
     optim_mean_function.zero_grad()
-    
+
+    start_epoch = 0
+    best_energy = -math.inf
+
+    if checkpoint is not None and checkpointer is not None:
+        start_epoch, best_energy = checkpointer.restore(checkpoint)
+
     pbar = tqdm(range(n_epochs))
     
     for epoch_i in pbar:
-
+        if epoch_i < start_epoch:
+            continue
+        
         if epoch_i % grad_accumulation_steps == 0:
             neural_isometry.shuffle_model_state(**model_state_kwargs)
             coords = domain_sampler.sample(domain_sample_size).to(device) # shape (N, d)
             energy_history_temp = []
             mean_function_mse_history_temp = []
-        
+
         # pick batch_size (B) number of functions
         seed_batch = torch.randint(0, f_gen.n_functions if n_functions is None else n_functions, (batch_size,))
         vals = f_gen.get_batch(coords, seeds=seed_batch).to(device)  # shape (B, N, C)
-        
+
         # (1: mean function) compute the mean function and do its backward:
         avg_vals = mean_function(coords) # shape (N, C)
         mean_mse = torch.mean((vals - avg_vals.unsqueeze(0)).pow(2))
@@ -116,7 +126,7 @@ def train(
         if (epoch_i + 1) % grad_accumulation_steps == 0:
             energy_item = sum(energy_history_temp) / len(energy_history_temp)
             mean_mse_item = sum(mean_function_mse_history_temp) / len(mean_function_mse_history_temp)
-            
+
             if wandb_enabled:
                 wandb.log({"train/energy": energy_item}, step=epoch_i)
                 wandb.log({"train/mean_function_mse": mean_mse_item}, step=epoch_i)
@@ -147,8 +157,11 @@ def train(
                     scheduler_mean_function.step(mean_mse_item)
                 else:
                     scheduler_mean_function.step()
-            
-        
+
+            if checkpointer is not None:
+                optimizer_step = (epoch_i + 1) // grad_accumulation_steps
+                checkpointer.step(optimizer_step=optimizer_step, epoch=epoch_i, metric=energy_item)
+
         for callback in callbacks:
             callback(
                 epoch=epoch_i,
@@ -167,6 +180,18 @@ def main(conf: DictConfig):
     mean_function: NeuralField = instantiate(conf.mean_function)
     domain_sampler: DomainSampler = instantiate(conf.domain_sampler)
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # load model and optimizer state if resuming training
+    checkpoint, wandb_run_id = None, None
+    if conf.resume_training.enabled and conf.resume_training.checkpoint_path is not None:
+        checkpoint = torch.load(conf.resume_training.checkpoint_path, weights_only=False, map_location=device)
+        run_name = checkpoint.get("run_name", "")
+        if run_name and run_name.startswith("wandb-"):
+            wandb_run_id = run_name[len("wandb-"):]
+    else:
+        run_name = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    
     if conf.wandb.enabled:
         wandb_run_name = str(conf.wandb.run_name) if conf.wandb.run_name is not None else None
         tags = [f"{key}:{value}" for key, value in conf.wandb.tags.items()] if "tags" in conf.wandb else []
@@ -177,49 +202,85 @@ def main(conf: DictConfig):
             tags=tags,
             # compatible with hydra
             settings=wandb.Settings(start_method="thread"),
-            name=wandb_run_name
+            name=wandb_run_name,
+            id=wandb_run_id,
+            resume="must" if wandb_run_id is not None else None,
         )
-        
+        run_name = f"wandb-{wandb.run.id}"
+    elif wandb_run_id is not None:
+        raise ValueError("You are resuming a wandb run without specifying wandb=enabled!")
+    
+    # instantiate the callbacks
     if "callbacks" not in conf:
         callbacks = []
     else:
         callbacks = [instantiate(callback) for callback in conf.callbacks.values()]
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    # instantiate the optimizer and schedulers
     mean_function_optimizer_callable = instantiate(conf.mean_function_optimizer_callable)
     if conf.get("mean_function_scheduler_callable", None):
         mean_function_scheduler_callable = instantiate(conf.mean_function_scheduler_callable)
     else:
         mean_function_scheduler_callable = None
-    
+
     isometry_optimizer_callable = instantiate(conf.isometry_optimizer_callable)
     if conf.get("isometry_scheduler_callable", None):
         isometry_scheduler_callable = instantiate(conf.isometry_scheduler_callable)
     else:
         isometry_scheduler_callable = None
-        
+    optim_isometry = isometry_optimizer_callable(neural_isometry.parameters())
+    scheduler_isometry = isometry_scheduler_callable(optim_isometry) if isometry_scheduler_callable is not None else None
+    
+    optim_mean_function = mean_function_optimizer_callable(mean_function.parameters())
+    scheduler_mean_function = mean_function_scheduler_callable(optim_mean_function) if mean_function_scheduler_callable is not None else None
+    
+
+    # checkpoints
+    ckpt_cfg = conf.get("checkpointing", {})
+    checkpoint_dir = ckpt_cfg.get("checkpoint_dir", None)
+    checkpoint_dir = os.path.join(checkpoint_dir, run_name)
+    checkpoint_every_n_steps = ckpt_cfg.get("checkpoint_every_n_steps", None)
+    checkpoint_window_size = ckpt_cfg.get("checkpoint_window_size", 3)
+    checkpointer = Checkpointer(
+        checkpoint_dir=checkpoint_dir,
+        models={"neural_isometry": neural_isometry, "mean_function": mean_function},
+        optimizers={"isometry": optim_isometry, "mean_function": optim_mean_function},
+        schedulers={"isometry": scheduler_isometry, "mean_function": scheduler_mean_function},
+        checkpoint_every_n_steps=checkpoint_every_n_steps,
+        checkpoint_window_size=checkpoint_window_size,
+        run_name=run_name,
+        config=OmegaConf.to_container(conf, resolve=True),
+    ) if checkpoint_dir is not None else None
+    
     train(
         neural_isometry=neural_isometry,
         mean_function=mean_function,
-        f_gen=function_generator,
         initial_dictionary=initial_dictionary,
-        domain_sampler=domain_sampler,
-        batch_size=conf.batch_size,
-        n_epochs=conf.n_epochs,
-        domain_sample_size=conf.domain_sample_size,
-        device=device,
-        mean_function_optimizer_callable=mean_function_optimizer_callable,
-        mean_function_scheduler_callable=mean_function_scheduler_callable,
-        isometry_optimizer_callable=isometry_optimizer_callable,
-        isometry_scheduler_callable=isometry_scheduler_callable,
-        callbacks=callbacks,
-        n_functions=conf.get("n_functions", None),
-        wandb_enabled=conf.wandb.enabled,
-        grad_accumulation_steps=conf.grad_accumulation_steps,
         energy_estimation_kwargs=conf.get("energy_estimation_kwargs", {}),
         model_state_kwargs=conf.get("model_state_kwargs", {}),
         pullback_pushforward_kwargs=conf.get("pullback_pushforward_kwargs", {}),
+        # the function generator
+        f_gen=function_generator,
+        domain_sampler=domain_sampler,
+        n_functions=conf.get("n_functions", None),
+        # domain size, batches, epoch sizes
+        batch_size=conf.batch_size,
+        n_epochs=conf.n_epochs,
+        domain_sample_size=conf.domain_sample_size,
+        grad_accumulation_steps=conf.grad_accumulation_steps,
+        device=device,
+        # optimizer and scheduler
+        optim_isometry=optim_isometry,
+        scheduler_isometry=scheduler_isometry,
+        optim_mean_function=optim_mean_function,
+        scheduler_mean_function=scheduler_mean_function,
+        # callbacks
+        callbacks=callbacks,
+        # run name and W&B
+        wandb_enabled=conf.wandb.enabled,
+        # checkpointing arguments
+        checkpointer=checkpointer,
+        checkpoint=checkpoint,
     )
 
     if conf.wandb.enabled:

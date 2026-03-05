@@ -1,10 +1,40 @@
-from .base import Diffeomorphism, IdentityFlow, ChainDiffeomorphism, InverseDiffeomorphism
+"""
+Analytical (parameter-free) diffeomorphisms between the unit square and the unit disk.
+
+These are closed-form maps that convert between ``[0, 1]^2`` and the unit disk in ℝ².
+Because they have no learnable parameters, they serve as fixed coordinate-change
+building blocks — primarily used by ``DiskFlow`` (in ``disk_flows.py``) to conjugate
+a square-based normalizing flow into a disk-based one.
+
+Overview
+--------
+``PolarTransform``
+    Area-preserving map ``[0, 1]^2 ↔ disk`` via a square-root radius and linear angle.
+    Simple and fast but introduces mild angular distortion near the boundary.
+
+``ShirlyChiu``
+    Low-distortion map ``[0, 1]^2 ↔ disk`` via the Shirley–Chiu concentric mapping.
+    Sectors of the square map to equal-area sectors of the disk, reducing distortion
+    compared to the polar approach.
+"""
+
+from .base import Diffeomorphism
 import torch
 import math
-from typing import Literal
-from .normalizing_flows import CubeFlow
+
 
 class PolarTransform(Diffeomorphism):
+    """Area-preserving diffeomorphism between ``[0, 1]^2`` and the unit disk.
+
+    The mapping uses a square-root radius to preserve area element:
+
+    * ``u ∈ [0, 1]`` → radius ``r = √u``  (so that ``r²`` is uniform, preserving area)
+    * ``v ∈ [0, 1]`` → angle ``θ = 2πv − π``  (linearly mapped to ``[−π, π]``)
+    * Cartesian output: ``(x, y) = (r cos θ, r sin θ)``
+
+    The Jacobian determinant of this map is the constant ``π``, so
+    ``logabsdet = log π`` for :meth:`forward` and ``−log π`` for :meth:`inverse`.
+    """
 
     def __init__(self):
         super().__init__()
@@ -12,9 +42,15 @@ class PolarTransform(Diffeomorphism):
         self.log_pi = torch.tensor(math.log(math.pi))
 
     def forward(self, u_square: torch.Tensor):
-        """
-        Maps from Unit Square [0, 1]^2 -> Unit Disk
-        (Generative direction: Latent -> Data)
+        """Map from the unit square ``[0, 1]^2`` to the unit disk.
+
+        Args:
+            u_square: Tensor of shape ``(N, 2)`` with values in ``[0, 1]``.
+                Column 0 is the radius-like variable; column 1 is the angle-like variable.
+
+        Returns:
+            Tuple ``(xy, logabsdet)`` where ``xy`` has shape ``(N, 2)`` with points
+            inside the unit disk and ``logabsdet`` has shape ``(N,)`` filled with ``log π``.
         """
         # u_square: (N, 2) in [0, 1]
         u = u_square[:, 0] # Radius-like variable
@@ -22,23 +58,30 @@ class PolarTransform(Diffeomorphism):
 
         # 1. Apply Square Root to radius to preserve area
         # r^2 ~ Uniform => r ~ sqrt(Uniform)
-        r = torch.sqrt(u) 
-        
+        r = torch.sqrt(u)
+
         # 2. Map v to [-pi, pi] or [0, 2pi]
         theta = 2 * self.pi * v - self.pi
 
         # 3. Polar to Cartesian
         x = r * torch.cos(theta)
         y = r * torch.sin(theta)
-        
+
         xy = torch.stack([x, y], dim=1)
         logabsdet = torch.full((u_square.shape[0],), self.log_pi, device=u_square.device, dtype=u_square.dtype)
         return xy, logabsdet
 
     def inverse(self, xy_disk: torch.Tensor):
-        """
-        Maps from Unit Disk -> Unit Square [0, 1]^2
-        (Normalizing direction: Data -> Latent)
+        """Map from the unit disk back to the unit square ``[0, 1]^2``.
+
+        Args:
+            xy_disk: Tensor of shape ``(N, 2)`` with Cartesian coordinates inside
+                the unit disk.
+
+        Returns:
+            Tuple ``(u_square, logabsdet)`` where ``u_square`` has shape ``(N, 2)``
+            with values in ``[0, 1]^2`` and ``logabsdet`` has shape ``(N,)`` filled
+            with ``−log π``.
         """
         x = xy_disk[:, 0]
         y = xy_disk[:, 1]
@@ -51,16 +94,30 @@ class PolarTransform(Diffeomorphism):
         # 2. Inverse of the volume preserving map
         # u = r^2 (No sqrt here! This is the key fix)
         u = r_squared
-        
+
         # 3. Normalize theta to [0, 1]
         v = (theta + self.pi) / (2 * self.pi)
 
         u_square = torch.stack([u, v], dim=1)
         logabsdet = torch.full((xy_disk.shape[0],), -self.log_pi, device=xy_disk.device, dtype=xy_disk.dtype)
-        
+
         return u_square, logabsdet # logabsdet is zero since this is an isometry
 
 class ShirlyChiu(Diffeomorphism):
+    """Low-distortion diffeomorphism between ``[0, 1]^2`` and the unit disk.
+
+    Uses the Shirley–Chiu *concentric* mapping, which partitions the canonical square
+    ``[−1, 1]^2`` into four sectors (East, North, West, South) and maps each sector to
+    the corresponding quarter of the disk while preserving area.  This reduces the
+    angular shear that the simpler polar transform introduces near the corners.
+
+    The Jacobian determinant is the constant ``π`` (same as :class:`PolarTransform`),
+    so ``logabsdet = log π`` for :meth:`forward` and ``−log π`` for :meth:`inverse`.
+
+    Reference:
+        Shirley & Chiu, "A Low Distortion Map Between Disk and Square", 1997.
+    """
+
     def __init__(
         self,
     ):
@@ -73,9 +130,19 @@ class ShirlyChiu(Diffeomorphism):
         self.log_pi = torch.tensor(math.log(math.pi))
 
     def forward(self, xy: torch.Tensor):
-        """
-        Input: x, y in [0, 1]
-        Output: u, v in Unit Disk
+        """Map from the unit square ``[0, 1]^2`` to the unit disk.
+
+        Internally the input is rescaled to the canonical square ``[−1, 1]^2``, then
+        the concentric mapping assigns each point to one of four sectors (East, North,
+        West, South) and maps it to the corresponding disk sector.
+
+        Args:
+            xy: Tensor of shape ``(N, 2)`` with values in ``[0, 1]``.
+
+        Returns:
+            Tuple ``(uv, logabsdet)`` where ``uv`` has shape ``(N, 2)`` with Cartesian
+            coordinates inside the unit disk and ``logabsdet`` has shape ``(N,)``
+            filled with ``log π``.
         """
         x, y = xy[:, 0], xy[:, 1]
         # 1. Map [0, 1] -> [-1, 1] (Canonical Square)
@@ -125,13 +192,22 @@ class ShirlyChiu(Diffeomorphism):
         # 5. Convert to Cartesian on Disk
         u = r * torch.cos(phi)
         v = r * torch.sin(phi)
-        
+
         return torch.stack([u, v], dim=1), torch.full((u.shape[0],), self.log_pi, device=u.device, dtype=u.dtype)  # logabsdet is zero since this is an isometry
 
     def inverse(self, uv: torch.Tensor):
-        """
-        Input: u, v in Unit Disk
-        Output: x, y in [0, 1]
+        """Map from the unit disk back to the unit square ``[0, 1]^2``.
+
+        Converts Cartesian disk coordinates to polar ``(r, φ)``, classifies the angle
+        into one of four sectors, inverts the concentric mapping, then rescales from
+        ``[−1, 1]^2`` to ``[0, 1]^2``.
+
+        Args:
+            uv: Tensor of shape ``(N, 2)`` with Cartesian coordinates inside the unit disk.
+
+        Returns:
+            Tuple ``(xy, logabsdet)`` where ``xy`` has shape ``(N, 2)`` with values in
+            ``[0, 1]^2`` and ``logabsdet`` has shape ``(N,)`` filled with ``−log π``.
         """
         u, v = uv[:, 0], uv[:, 1]
         # 1. Cartesian -> Polar
@@ -188,29 +264,3 @@ class ShirlyChiu(Diffeomorphism):
         x = (a + 1) / 2
         y = (b + 1) / 2
         return torch.stack([x, y], dim=1), torch.full((u.shape[0],), -self.log_pi, device=u.device, dtype=u.dtype) # logabsdet is zero since this is an isometry
-    
-class DiskFlow(Diffeomorphism):
-
-    def __init__(
-        self,
-        cubeflow: CubeFlow | None = None,
-        method: Literal['shirley_chiu', 'polar'] = 'shirley_chiu',
-    ):
-        super().__init__()
-        polar_cls = PolarTransform if method == 'polar' else ShirlyChiu
-        self.register_module(
-            "_diffeomorphism",
-            ChainDiffeomorphism(
-                [
-                    InverseDiffeomorphism(polar_cls()),
-                    cubeflow if cubeflow is not None else IdentityFlow(),
-                    polar_cls()
-                ]
-            )
-        )
-    
-    def forward(self, x: torch.Tensor):
-        return self._diffeomorphism.forward(x)
-    
-    def inverse(self, y: torch.Tensor):
-        return self._diffeomorphism.inverse(y)

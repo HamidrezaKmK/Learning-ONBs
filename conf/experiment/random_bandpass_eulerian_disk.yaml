@@ -1,5 +1,4 @@
 # @package _global_
-# random bandpass learning using a CNF on the radial domain
 defaults:
   - /domain_samplers@domain_sampler: disk_sampler
   - /function_generator@function_generator: random_bandpass
@@ -19,7 +18,7 @@ batch_size: 128
 grad_accumulation_steps: 1
 
 # training hyperparameters
-n_epochs: 500000
+n_epochs: 50000
 domain_sample_size: 32
 n_functions: 1000
 
@@ -32,7 +31,7 @@ callbacks:
     _target_: infidictionary.callbacks.VisualizeMeanFunction
     initial_dictionary: ${initial_dictionary}
     domain_sampler: ${domain_sampler}
-    frequency: 200
+    frequency: 500
     density: 200
   reconstruction_visualization:
     _target_: infidictionary.callbacks.VisualizeKLExpansionReconstruction
@@ -48,9 +47,8 @@ callbacks:
       ode_isometry: 
         _target_: infidictionary.neural_isometries.IdentityIsometry
       last_change_of_domain: null
-
     seeds: [0, 1, 2]
-    frequency: 10
+    frequency: 500
     density: 200
     truncation_factors: [1, 2, 3]
     pullback_pushforward_kwargs: ${pullback_pushforward_kwargs}
@@ -61,7 +59,7 @@ callbacks:
       _target_: infidictionary.domain_samplers.SquareSampler
       stratified: True
       add_noise: True
-    frequency: 200
+    frequency: 500
     density: 200
     indices:
       - [-1, 1]

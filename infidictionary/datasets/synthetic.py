@@ -96,28 +96,25 @@ class BasisRandomGenerator(FunctionClassGenerator):
     def __init__(
         self,
         dictionary: InfiDictionary,
+        atom_indices: List,
     ):
         self.dictionary = dictionary
+        self.atom_indices = torch.tensor(atom_indices, dtype=torch.long)
     
-    def __call__(self, xy: torch.Tensor, seed: int):
-        device = xy.device
+    def __call__(self, coords: torch.Tensor, seed: int):
+        device = coords.device
 
-        if xy.ndim != 2 or xy.shape[1] != 2:
-            raise ValueError("xy must have shape (N, 2)")
         rng = torch.Generator().manual_seed(seed)
 
-        # sample random weights and combine
-        num_dictionary_fns = self.dictionary.num_atoms
-        if num_dictionary_fns is None:
-            raise ValueError("dictionaryRandomGenerator requires finite dictionary.")
         
-        weights = torch.randn(size=(num_dictionary_fns,), generator=rng) / math.sqrt(num_dictionary_fns)
+        n_atoms = len(self.atom_indices)
+        weights = torch.randn(size=(n_atoms,), generator=rng) / math.sqrt(n_atoms)
         weights = weights.to(device)
-        # return a weighted combination of dictionary functions
-        all_e = []
-        for idx in range(num_dictionary_fns):
-            fn_val = self.dictionary.get_atom(xy, idx)
-            all_e.append(fn_val)
-        all_e = torch.stack(all_e, dim=0)
-        val = (weights.unsqueeze(1) * all_e).sum(axis=0)
-        return val.unsqueeze(-1)
+        
+        all_atoms = self.dictionary.get_atoms(
+            coords,
+            self.atom_indices.to(device),
+        ) # (n_atoms, N, c)
+        # combine atoms with weights
+        combined_atoms = torch.sum(weights[:, None, None] * all_atoms, dim=0) # (N, c)
+        return combined_atoms

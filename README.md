@@ -48,9 +48,14 @@ We use a combination of [Weights & Biases](https://docs.wandb.ai/models/quicksta
 The `fpca.py` script tries to fit a basis that captures the first and second order characteristics of a functional dataset (refer to the Overleaf for more information). Here are some example usages:
 
 ```bash
-python fpca.py +experiment=sanity_check # try to fit the identity transform
-python fpca.py +experiment=eulerian_example # TODO
-python fpca.py +experiment=lagrangian_example # TODO
+python fpca.py +experiment=sanity_check # TODO: try to fit the identity transform
+python fpca.py +experiment=random_bandpass_eulerian wandb=enabled wandb.run_name=random_bandpass_eulerian
+python fpca.py +experiment=random_bandpass_eulerian_disk wandb=enabled wandb.run_name=random_bandpass_eulerian_disk
+```
+
+**Resuming an Experiment**: To resume an experiment try running the following:
+```bash
+python fpca.py +experiment=random_bandpass_eulerian resume_training.enabled=true resume_training.checkpoint_path=outputs/checkpoints/best.pt
 ```
 
 ## Fourier-er

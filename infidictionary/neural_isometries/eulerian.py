@@ -21,7 +21,7 @@ class EulerianIsometry(NeuralIsometry):
         )
         self.coords_dim = coords_dim
         self.channels_dim = channels_dim
-        self.register_buffer("tspan", torch.tensor([]))
+        self.register_buffer("tspan", torch.tensor([]), persistent=False)
 
     def _householder_step(
         self,

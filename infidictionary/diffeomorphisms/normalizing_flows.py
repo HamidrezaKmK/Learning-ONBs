@@ -1,3 +1,27 @@
+"""
+Normalizing-flow diffeomorphisms that map the unit hypercube to itself.
+
+All classes here produce diffeomorphisms on ``[0, 1]^d``, making them suitable for
+domains with a natural hypercube structure (e.g. the unit square).
+
+Overview
+--------
+``LogitTransform``
+    Coordinate-wise logit with a learnable softness parameter α.  Maps (0,1) ↔ ℝ.
+    Used internally to "open up" the bounded cube before applying unconstrained flows.
+
+``CubeFlow``
+    Abstract base for ``[0,1]^d`` → ``[0,1]^d`` diffeomorphisms.
+
+``UnitCubeNeuralSplineFlow``
+    Full learnable diffeomorphism on ``[0,1]^d`` built from
+    LogitTransform → rational-quadratic neural spline coupling layers → LogitTransform⁻¹.
+
+``UnitSquareKumaraswamy``
+    Lightweight, closed-form diffeomorphism on ``[0,1]^2`` using coordinate-wise
+    Kumaraswamy warps.  Has a stable analytic inverse and log-det.
+"""
+
 from typing import Literal
 import math
 import torch
@@ -8,19 +32,32 @@ from nflows.nn.nets import ResidualNet
 
 from .base import Diffeomorphism, IdentityFlow, ChainDiffeomorphism, InverseDiffeomorphism
 
+
 class LogitTransform(Transform):
-    """
-    This transform models a coordinate-wise logit transform as follows: 
+    """Coordinate-wise logit transform with a learnable softness parameter α.
 
-    f(x) = logit(alpha + (1-2 alpha)x) = log(alpha + (1-2 alpha)x) - log(1 - alpha - (1-2 alpha)x)
+    The forward map is:
 
-    This maps values from [0, 1] to [-log ((1 - alpha)/alpha), log((1 - alpha) / alpha)] which
-    is [-infty, infty] when alpha -> 0 and [0, 0] when alpha -> 0.5.
+    .. math::
+
+        f(x) = \\operatorname{logit}(\\alpha + (1 - 2\\alpha)\\, x)
+
+    which maps :math:`x \\in [0, 1]` to :math:`\\mathbb{R}`, with α controlling how
+    aggressively the boundaries are compressed.  As α → 0 the map approaches the
+    standard logit; as α → 0.5 it collapses to a constant.
+
+    α is parameterized as ``sigmoid(_alpha) * 0.5 * alpha_scale`` so that it stays in
+    ``(0, 0.5)`` regardless of the raw unconstrained parameter ``_alpha``.
+
+    Args:
+        alpha: Initial upper bound for α (the learnable parameter is initialized so
+            that α ≈ alpha / 2 at construction time).
     """
+
     @property
     def alpha(self):
         return torch.nn.functional.sigmoid(self._alpha) * 0.5 * self.alpha_scale
-    
+
     def __init__(self, alpha=0.0005):
         super().__init__()
         self.alpha_scale = alpha * 2
@@ -33,6 +70,15 @@ class LogitTransform(Transform):
         return torch.log(x) - torch.log1p(-x)
 
     def forward(self, inputs, context=None):
+        """Apply the logit transform: ``[0,1]^d`` → ℝ^d.
+
+        Args:
+            inputs: Tensor of shape ``(N, d)`` with values in ``[0, 1]``.
+            context: Unused; present for API compatibility with ``nflows``.
+
+        Returns:
+            Tuple ``(y, logdets)`` where ``y`` is in ℝ^d and ``logdets`` has shape ``(N,)``.
+        """
         dims = list(range(1, inputs.ndim))
         pre_logit = self.alpha + (1.0 - 2.0*self.alpha) * inputs
         y = self._stable_logit(pre_logit)
@@ -46,8 +92,18 @@ class LogitTransform(Transform):
         return y, logdets
 
     def inverse(self, inputs, context=None):
+        """Apply the inverse logit (sigmoid) transform: ℝ^d → ``(0,1)^d``.
+
+        Args:
+            inputs: Tensor of shape ``(N, d)`` with unconstrained real values.
+            context: Unused; present for API compatibility with ``nflows``.
+
+        Returns:
+            Tuple ``(x, logdets)`` where ``x`` is in ``(0,1)^d`` and ``logdets``
+            has shape ``(N,)``.
+        """
         dims = list(range(1, inputs.ndim))
-        sigm = torch.sigmoid(inputs)                
+        sigm = torch.sigmoid(inputs)
         x = (sigm - self.alpha) / (1.0 - 2.0*self.alpha)
 
         logdets = torch.sum(
@@ -55,19 +111,45 @@ class LogitTransform(Transform):
             dim=dims
         )
         return x, logdets
-    
+
+
 class CubeFlow(Diffeomorphism):
+    """Abstract base class for diffeomorphisms that map ``[0, 1]^d`` to itself.
+
+    Subclasses implement the concrete forward and inverse maps.  The unit-cube
+    constraint is important: it ensures the diffeomorphism respects the boundary
+    of the domain so that samples drawn from the domain stay in the domain after
+    the map is applied.
+
+    Args:
+        d: Dimensionality of the unit hypercube.
+    """
+
     def __init__(self, d):
         super().__init__()
         self.d = d
 
+
 class UnitCubeNeuralSplineFlow(CubeFlow):
+    """Learnable diffeomorphism on ``[0, 1]^d`` built from rational-quadratic neural splines.
+
+    The full pipeline is:
+
+    1. **LogitTransform** — maps ``[0,1]^d`` → ℝ^d (opens up the bounded domain).
+    2. **Rational-quadratic spline coupling layers** — alternating masked coupling
+       transforms with ActNorm, parameterized by ``ResidualNet`` sub-networks.
+    3. **LogitTransform⁻¹ (sigmoid)** — maps ℝ^d → ``(0,1)^d``.
+
+    Both forward and inverse accumulate log-absolute-determinants from all three stages.
+
+    Args:
+        d: Dimensionality of the unit cube.
+        hidden_features: Width of the residual networks inside each coupling layer.
+        num_layers: Number of coupling-layer + ActNorm pairs.
+        num_blocks: Number of residual blocks in each coupling-layer network.
+        alpha: Softness parameter for the LogitTransform boundary handling.
     """
-    This is a diffeomorphism designed to map between [0, 1]^d and itself.
-    First off, an inverse sigmoid (LogitTransform) is applied to map inputs from (0, 1) to R.
-    then, a series of neural spline flow coupling layers are applied to transform the data on R^d,
-    and finally, a sigmoid with learnable temperature is applied to map back to (0, 1)^d.
-    """
+
     def __init__(self, d, hidden_features=64, num_layers=5, num_blocks=2, alpha=0.0005):
         super().__init__(d=d)
         layers = []
@@ -91,14 +173,30 @@ class UnitCubeNeuralSplineFlow(CubeFlow):
             layers.append(ActNorm(features=d))
         self.transform = CompositeTransform(layers)
         self.logit = LogitTransform(alpha=alpha)
-        
+
     def forward(self, x):
+        """Map ``x ∈ [0,1]^d`` to ``w ∈ (0,1)^d`` through logit → spline → sigmoid.
+
+        Args:
+            x: Tensor of shape ``(N, d)`` with values in ``[0, 1]``.
+
+        Returns:
+            Tuple ``(w, logabsdet)`` where ``logabsdet`` has shape ``(N,)``.
+        """
         y, logabsdet1 = self.logit.forward(x)
         z, logabsdet2 = self.transform.forward(y)
         w, logabsdet3 = self.logit.inverse(z)
         return w, logabsdet1 + logabsdet2 + logabsdet3
 
     def inverse(self, w):
+        """Map ``w ∈ (0,1)^d`` back to ``x ∈ [0,1]^d`` through logit → spline⁻¹ → sigmoid.
+
+        Args:
+            w: Tensor of shape ``(N, d)`` with values in ``(0, 1)``.
+
+        Returns:
+            Tuple ``(x, logabsdet)`` where ``logabsdet`` has shape ``(N,)``.
+        """
         z, logabsdet1 = self.logit.forward(w)
         y, logabsdet2 = self.transform.inverse(z)
         x, logabsdet3 = self.logit.inverse(y)
@@ -106,18 +204,39 @@ class UnitCubeNeuralSplineFlow(CubeFlow):
 
 
 class UnitSquareKumaraswamy(CubeFlow):
-    """
-    Extremely simple, numerically stable diffeomorphism [0,1]^2 -> [0,1]^2.
-    Coordinatewise monotone Kumaraswamy warps with closed-form inverse.
+    """Closed-form, coordinate-wise diffeomorphism on ``[0, 1]^2`` via Kumaraswamy warps.
 
-    Forward (per coord):
-      x_eps = eps + (1-2eps)*x
-      y = 1 - (1 - x_eps**a)**b
+    Each coordinate is independently transformed by a Kumaraswamy CDF with learnable
+    shape parameters ``a`` and ``b``.  The Kumaraswamy distribution has a tractable
+    closed-form inverse CDF, making both forward and inverse analytically stable.
 
-    Inverse (per coord):
-      x_eps = (1 - (1-y)**(1/b))**(1/a)
-      x = (x_eps - eps) / (1-2eps)
+    Forward (per coordinate ``i``):
+
+    .. math::
+
+        x_\\varepsilon = \\varepsilon + (1 - 2\\varepsilon)\\, x_i
+
+        y_i = 1 - (1 - x_\\varepsilon^{a_i})^{b_i}
+
+    Inverse (per coordinate ``i``):
+
+    .. math::
+
+        x_\\varepsilon = \\bigl(1 - (1 - y_i)^{1/b_i}\\bigr)^{1/a_i}
+
+        x_i = \\frac{x_\\varepsilon - \\varepsilon}{1 - 2\\varepsilon}
+
+    The boundary-softening factor ``ε`` keeps inputs away from 0 and 1, improving
+    numerical stability of the power operations.
+
+    Args:
+        d: Dimensionality (must be 2; enforced in forward/inverse).
+        eps: Boundary softening margin.  Maps ``[0,1]`` to ``[eps, 1-eps]`` before
+            applying the warp.
+        a_min: Minimum value for the ``a`` shape parameter (added after softplus).
+        b_min: Minimum value for the ``b`` shape parameter (added after softplus).
     """
+
     def __init__(self, d: int, eps: float = 1e-6, a_min: float = 1e-3, b_min: float = 1e-3):
         super().__init__(d=d)
         if not (0.0 < eps < 0.5):
@@ -133,6 +252,7 @@ class UnitSquareKumaraswamy(CubeFlow):
         self.b_raw = nn.Parameter(torch.tensor([init_raw, init_raw], dtype=torch.float32))
 
     def _ab(self):
+        """Return positive shape parameters ``(a, b)`` via softplus + minimum offset."""
         a = F.softplus(self.a_raw) + self.a_min  # > 0
         b = F.softplus(self.b_raw) + self.b_min  # > 0
         return a, b
@@ -145,9 +265,17 @@ class UnitSquareKumaraswamy(CubeFlow):
         return (x_eps - self.eps) / (1.0 - 2.0*self.eps)
 
     def forward(self, x: torch.Tensor):
-        """
-        x: (N,2) in [0,1]
-        returns y: (N,2) in (0,1), logabsdet: (N,)
+        """Apply the Kumaraswamy warp: ``[0,1]^2`` → ``(0,1)^2``.
+
+        Args:
+            x: Tensor of shape ``(N, 2)`` with values in ``[0, 1]``.
+
+        Returns:
+            Tuple ``(y, logabsdet)`` where ``y`` is in ``(0,1)^2`` and
+            ``logabsdet`` has shape ``(N,)``.
+
+        Raises:
+            ValueError: If ``x.shape[-1] != 2``.
         """
         if x.shape[-1] != 2:
             raise ValueError("Expected x with last dim = 2.")
@@ -176,9 +304,20 @@ class UnitSquareKumaraswamy(CubeFlow):
         return y, logabsdet
 
     def inverse(self, y: torch.Tensor):
-        """
-        y: (N,2) in [0,1]
-        returns x: (N,2) in (0,1), logabsdet: (N,)
+        """Apply the inverse Kumaraswamy warp: ``(0,1)^2`` → ``[0,1]^2``.
+
+        The inverse log-det is computed by evaluating the forward log-det at the
+        recovered ``x`` and negating it, which is numerically consistent.
+
+        Args:
+            y: Tensor of shape ``(N, 2)`` with values in ``[0, 1]``.
+
+        Returns:
+            Tuple ``(x, logabsdet)`` where ``x`` is in ``[0,1]^2`` and
+            ``logabsdet`` has shape ``(N,)``.
+
+        Raises:
+            ValueError: If ``y.shape[-1] != 2``.
         """
         if y.shape[-1] != 2:
             raise ValueError("Expected y with last dim = 2.")

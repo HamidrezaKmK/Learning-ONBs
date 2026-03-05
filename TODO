@@ -1,11 +1,14 @@
-[] Try to get on-par results as before on the disk example
-[] Debug the disk dataset reconstruction
 [] Add a model checkpointing mechanism
-[] Play around with the discretization size
 [] Add a simple experiment where the goal is to learn the identity map
+[] Run the identity map with a Lagrangian isometry
+[] Run something with the mixed isometry
+
+[] Refactor the PWC experiment and run the fourierer stuff
 [] Figure out the issues with NUFFT, why doesn't the nufft captured energy share 
     the same scale as the Monte-Carlo captured energy?
 [] Add CelebA dataset and update the dataset API to account for real-world examples
+[] Use the Cayley ODE solver method
+[] merge the refactor changes
 [] Add Haar wavelet dictionaries
 [] For the Monte-carlo methods, try a mix of pushforward pullback rather than just pushforward
 [] Ablate the stratified sampling for the grid integrals
