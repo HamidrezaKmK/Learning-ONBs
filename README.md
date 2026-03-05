@@ -55,7 +55,7 @@ python fpca.py +experiment=random_bandpass_eulerian_disk wandb=enabled wandb.run
 
 **Resuming an Experiment**: To resume an experiment try running the following:
 ```bash
-python fpca.py +experiment=random_bandpass_eulerian resume_training.enabled=true resume_training.checkpoint_path=outputs/checkpoints/best.pt
+python fpca.py +experiment=random_bandpass_eulerian resume_training.enabled=true resume_training.checkpoint_path=<path-to-checkpoint>
 ```
 
 ## Fourier-er

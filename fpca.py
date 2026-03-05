@@ -256,9 +256,9 @@ def main(conf: DictConfig):
         neural_isometry=neural_isometry,
         mean_function=mean_function,
         initial_dictionary=initial_dictionary,
-        energy_estimation_kwargs=conf.get("energy_estimation_kwargs", {}),
-        model_state_kwargs=conf.get("model_state_kwargs", {}),
-        pullback_pushforward_kwargs=conf.get("pullback_pushforward_kwargs", {}),
+        energy_estimation_kwargs=conf.get("energy_estimation_kwargs", {}) or {},
+        model_state_kwargs=conf.get("model_state_kwargs", {}) or {},
+        pullback_pushforward_kwargs=conf.get("pullback_pushforward_kwargs", {}) or {},
         # the function generator
         f_gen=function_generator,
         domain_sampler=domain_sampler,

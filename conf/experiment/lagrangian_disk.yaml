@@ -1,15 +1,17 @@
 # @package _global_
 defaults:
-  - /domain_samplers@domain_sampler: square_sampler
+  - /domain_samplers@domain_sampler: disk_sampler
   - /function_generator@function_generator: random_bandpass
   - /energy_estimation_kwargs@energy_estimation_kwargs: monte_carlo
-  - /neural_isometry@neural_isometry: eulerian
+  - /neural_isometry@neural_isometry: lagrangian_disk
   - /dictionaries@initial_dictionary: fourier_2d
   - override /wandb@wandb: disabled
   - _self_
 
-model_state_kwargs:
-  num_steps: 200
+function_generator:
+  radial: True
+
+model_state_kwargs: null
 
 batch_size: 128
 grad_accumulation_steps: 1
@@ -24,6 +26,13 @@ pullback_pushforward_kwargs:
   end_time: 1.0
 
 callbacks:
+  velocity_field_visualization:
+    _target_: infidictionary.callbacks.VisualizeVelocityField
+    domain_sampler: ${domain_sampler}
+    timesteps: [0, 0.1, 0.2, 0.4, 0.5, 0.6, 0.8, 0.9, 1.0]
+    frequency: 500
+    density: 20
+    viz_magnitude: 10.0
   mean_function_visualization:
     _target_: infidictionary.callbacks.VisualizeMeanFunction
     initial_dictionary: ${initial_dictionary}
@@ -35,17 +44,27 @@ callbacks:
     dictionary: ${initial_dictionary}
     domain_sampler: ${domain_sampler}
     f_gen: ${function_generator}
+    identity_isometry:
+      _target_: infidictionary.neural_isometries.GeneralizedIsometry
+      first_change_of_domain:
+        _target_: infidictionary.neural_isometries.lagrangian.LagrangianIsometry
+        diffeomorphism:
+          _target_: infidictionary.diffeomorphisms.ShirlyChiu
+      ode_isometry: 
+        _target_: infidictionary.neural_isometries.IdentityIsometry
+      last_change_of_domain: null
     seeds: [0, 1, 2]
     frequency: 500
     density: 200
     truncation_factors: [1, 2, 3]
     pullback_pushforward_kwargs: ${pullback_pushforward_kwargs}
-    identity_isometry:
-      _target_: infidictionary.neural_isometries.IdentityIsometry
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
     dictionary: ${initial_dictionary}
-    domain_sampler: ${domain_sampler}
+    domain_sampler:
+      _target_: infidictionary.domain_samplers.SquareSampler
+      stratified: True
+      add_noise: True
     frequency: 500
     density: 200
     indices:
@@ -54,7 +73,6 @@ callbacks:
       - [1, -1]
       - [2, -2]
       - [3, -3]
-    
 
 # Add tags so that it is easier to filter the experiments in the W&B dashboard
 wandb:
