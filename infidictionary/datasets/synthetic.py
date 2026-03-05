@@ -6,6 +6,7 @@ from typing import List
 from abc import ABC, abstractmethod
 
 from infidictionary.dictionaries.base import InfiDictionary
+from infidictionary.diffeomorphisms import Diffeomorphism
 
 class FunctionClassGenerator(ABC):
     
@@ -97,10 +98,12 @@ class BasisRandomGenerator(FunctionClassGenerator):
         self,
         dictionary: InfiDictionary,
         atom_indices: List,
+        diffeomorphism: Diffeomorphism | None,
     ):
         self.dictionary = dictionary
         self.atom_indices = torch.tensor(atom_indices, dtype=torch.long)
-    
+        self.diffeomorphism = diffeomorphism 
+        
     def __call__(self, coords: torch.Tensor, seed: int):
         device = coords.device
 
@@ -111,10 +114,15 @@ class BasisRandomGenerator(FunctionClassGenerator):
         weights = torch.randn(size=(n_atoms,), generator=rng) / math.sqrt(n_atoms)
         weights = weights.to(device)
         
+        if self.diffeomorphism:
+            coords, _ = self.diffeomorphism.inverse(coords)
+            
         all_atoms = self.dictionary.get_atoms(
             coords,
             self.atom_indices.to(device),
         ) # (n_atoms, N, c)
+        
+        
         # combine atoms with weights
         combined_atoms = torch.sum(weights[:, None, None] * all_atoms, dim=0) # (N, c)
         return combined_atoms
