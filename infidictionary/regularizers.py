@@ -6,88 +6,79 @@ import numpy as np
 
 class Regularizer(ABC):
     @abstractmethod
-    def compute_energy(self, coords: torch.Tensor, F: torch.Tensor) -> torch.Tensor:
+    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            coords: (N, d) spatial coordinates.
+            values: (A, N, C) atom values at those coordinates.
+        Returns:
+            Per-atom energy, shape (A,).
+        """
         pass
 
 class EntropyRegularizer(Regularizer):
     def __init__(self, sigma: float = 0.01):
         self.sigma = sigma
 
-    def compute_energy(self, coords: torch.Tensor, F: torch.Tensor) -> torch.Tensor:
-        # F is (A, N)
-        # We want to estimate p(x) for each row
-        
-        # 1. Calculate pairwise differences between all values in a single signal
-        # (A, N, 1) - (A, 1, N) -> (A, N, N)
-        val_diffs = F.unsqueeze(-1) - F.unsqueeze(-2)
-        
-        # 2. Gaussian Kernel to estimate density
-        # This acts like a "soft histogram"
-        kde = torch.exp(-val_diffs.pow(2) / (2 * self.sigma**2))
-        
-        # 3. Density p(x) is the mean of the kernel values
-        p_x = kde.mean(dim=-1) + 1e-8 # (A, N)
-        
-        # 4. Entropy H(x) = - sum(p(x) * log(p(x)))
-        # Since we are sampling x from the signal itself, we approximate the integral via mean
-        entropy = -torch.mean(torch.log(p_x), dim=-1)
-        
+    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+        # values: (A, N, C)
+        # pairwise squared L2 distances in value space: (A, N, N)
+        val_diffs = values.unsqueeze(2) - values.unsqueeze(1)  # (A, N, N, C)
+        val_norms_sq = val_diffs.pow(2).sum(dim=-1)  # (A, N, N)
+
+        kde = torch.exp(-val_norms_sq / (2 * self.sigma**2))  # (A, N, N)
+        p_x = kde.mean(dim=-1) + 1e-8  # (A, N)
+
+        entropy = -torch.mean(torch.log(p_x), dim=-1)  # (A,)
         return entropy
 
 class TVRegularizer(Regularizer):
     def __init__(
-        self, 
+        self,
         sigma: float = 0.1,
-        neighbourhood_r: float = 0.1
-
+        neighbourhood_r: float = 0.1,
     ):
         self.sigma = sigma
         self.neighbourhood_r = neighbourhood_r
 
-
-    def compute_energy(self, coords: torch.Tensor, F: torch.Tensor) -> torch.Tensor:
-        
+    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+        # values: (A, N, C)
         distances = torch.cdist(coords, coords)
         weights = torch.where(
-            distances < self.neighbourhood_r, 
-            torch.exp(-distances.pow(2) / (2 * self.sigma ** 2)), 
+            distances < self.neighbourhood_r,
+            torch.exp(-distances.pow(2) / (2 * self.sigma ** 2)),
             torch.zeros_like(distances)
         )
-        weights.fill_diagonal_(0)
+        weights.fill_diagonal_(0)  # (N, N)
 
-        # F is (A, N)
-        # We want to compute the total variation of each signal
-        
-        # 1. Calculate pairwise differences between all values in a single signal
-        # (A, N, 1) - (A, 1, N) -> (A, N, N)
-        val_diffs = F.unsqueeze(-1) - F.unsqueeze(-2)
-        
+        val_diffs = values.unsqueeze(2) - values.unsqueeze(1)  # (A, N, N, C)
+        val_norms = val_diffs.norm(dim=-1)  # (A, N, N)
 
-        energy = torch.mean(weights * torch.abs(val_diffs), dim=(1, 2))
-        
+        energy = torch.mean(weights[None] * val_norms, dim=(1, 2))  # (A,)
         return energy
 
 class GraphLaplacianRegularizer(Regularizer):
     def __init__(
         self,
         sigma: float = 0.1,
-        neighbourhood_r: float = 0.1
+        neighbourhood_r: float = 0.1,
     ):
         self.sigma = sigma
         self.neighbourhood_r = neighbourhood_r
 
-    def compute_energy(self, coords: torch.Tensor, F: torch.Tensor) -> torch.Tensor:
+    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+        # values: (A, N, C)
         distances = torch.cdist(coords, coords)
         weights = torch.where(
-            distances < self.neighbourhood_r, 
-            torch.exp(-distances.pow(2) / (2 * self.sigma ** 2)), 
+            distances < self.neighbourhood_r,
+            torch.exp(-distances.pow(2) / (2 * self.sigma ** 2)),
             torch.zeros_like(distances)
         )
         weights.fill_diagonal_(0)
 
-        laplacian = torch.diag(weights.sum(dim=1)) -  weights
-        energy = torch.einsum("ij,jk,ik->i", F, laplacian, F) / laplacian.shape[0] # shape (A, )
-
+        laplacian = torch.diag(weights.sum(dim=1)) - weights  # (N, N)
+        # sum Rayleigh quotients across channels
+        energy = torch.einsum("anc,nm,amc->a", values, laplacian, values) / laplacian.shape[0]  # (A,)
         return energy
 
 
@@ -169,16 +160,13 @@ class FouriererRegularizer(Regularizer):
 
         return samples.view(-1)  # (N,)
 
-    def compute_energy(self, coords: torch.Tensor, F: torch.Tensor) -> torch.Tensor:
-        # F is (A, N)
-        # We want to compute the fidelity of each signal to the image values at the corresponding coordinates
-        
-        # 1. Sample the image at the given coordinates
+    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+        # values: (A, N, C)
+        # Sample the image at the given coordinates
         sampled_vals = self.sample_image_irregular(self.img.to(coords.device), coords, coords="unit")  # (N,)
 
-        # 2. Compute fidelity as mean squared error between each signal and the sampled values
-        fidelity = torch.mean((F - sampled_vals.unsqueeze(0)) ** 2, dim=1)  # shape (A, )
-
+        # MSE between each atom and the image values, averaged over N and C
+        fidelity = torch.mean((values - sampled_vals[None, :, None]) ** 2, dim=(1, 2))  # (A,)
         return fidelity
 
     def get_joseph(self, coords: torch.Tensor) -> torch.Tensor:

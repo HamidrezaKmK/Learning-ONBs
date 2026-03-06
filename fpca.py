@@ -18,32 +18,11 @@ from infidictionary.datasets import FunctionClassGenerator
 from infidictionary.neural_isometries import NeuralIsometry
 from infidictionary.utils import NeuralField
 from infidictionary.domain_samplers import DomainSampler
+from training_utils import get_grad_norm, get_param_norm, get_avg_lr, step_scheduler
 
 # Add resolver for hydra
 OmegaConf.register_new_resolver("eval", eval)
 # torch.set_default_dtype(torch.float64)
-
-def get_grad_norm(
-    model: torch.nn.Module,
-):
-    # visualize norm of the gradients of the parameters
-    all_grads = []
-    for param in model.parameters():
-        if param.grad is not None:
-            all_grads.append(param.grad.view(-1))
-    all_grads = torch.cat(all_grads)
-    grad_norm = torch.norm(all_grads).item()
-    return grad_norm
-
-def get_param_norm(
-    model: torch.nn.Module,
-):
-    all_params = []
-    for param in model.parameters():
-        all_params.append(param.view(-1))
-    all_params = torch.cat(all_params)
-    param_norm = torch.norm(all_params).item()
-    return param_norm
 
 
 def train(
@@ -135,10 +114,8 @@ def train(
             wandb.log({"train/grad_norm_mean_function": get_grad_norm(mean_function)}, step=epoch_i)
             wandb.log({"train/param_norm_mean_function": get_param_norm(mean_function)}, step=epoch_i)
             # visualize the average learning rate of the optimizer
-            avg_lr1 = sum(group['lr'] for group in optim_mean_function.param_groups) / len(optim_mean_function.param_groups)
-            wandb.log({"train/lr_mean_function": avg_lr1}, step=epoch_i)
-            avg_lr2 = sum(group['lr'] for group in optim_isometry.param_groups) / len(optim_isometry.param_groups)
-            wandb.log({"train/avg_lr_isometry": avg_lr2}, step=epoch_i)
+            wandb.log({"train/lr_mean_function": get_avg_lr(optim_mean_function)}, step=epoch_i)
+            wandb.log({"train/avg_lr_isometry": get_avg_lr(optim_isometry)}, step=epoch_i)
 
         pbar.set_postfix({'energy': energy_item, 'mean_function_mse': mean_mse_item})
         optim_isometry.step()
@@ -146,16 +123,8 @@ def train(
         optim_isometry.zero_grad()
         optim_mean_function.zero_grad()
 
-        if scheduler_isometry is not None:
-            if isinstance(scheduler_isometry, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                scheduler_isometry.step(energy_item)
-            else:
-                scheduler_isometry.step()
-        if scheduler_mean_function is not None:
-            if isinstance(scheduler_mean_function, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                scheduler_mean_function.step(mean_mse_item)
-            else:
-                scheduler_mean_function.step()
+        step_scheduler(scheduler_isometry, energy_item)
+        step_scheduler(scheduler_mean_function, mean_mse_item)
 
         if checkpointer is not None:
             checkpointer.step(optimizer_step=epoch_i + 1, epoch=epoch_i, metric=energy_item)
