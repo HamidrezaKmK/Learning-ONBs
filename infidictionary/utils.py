@@ -103,7 +103,7 @@ class TimeEvolvingField(NeuralField):
         output_dim: int = 1,
     ):
         super().__init__(input_dim=coords_dim, output_dim=output_dim)
-        self.time_embedding = SinusoidalTimeEmbedding() # TODO: fix this!
+        self.time_embedding = SinusoidalTimeEmbedding()
         self.time_evolving_field = base_field_partial(
             input_dim=self.time_embedding.out_dim + coords_dim,
             output_dim=output_dim,

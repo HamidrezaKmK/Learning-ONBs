@@ -1,6 +1,4 @@
 [] Refactor the PWC experiment and run the fourierer stuff
-[] Figure out the issues with NUFFT, why doesn't the nufft captured energy share 
-    the same scale as the Monte-Carlo captured energy?
 [] Add CelebA dataset and update the dataset API to account for real-world examples
 [] Use the Cayley ODE solver method
 

@@ -2,10 +2,8 @@
 defaults:
   - /domain_samplers@domain_sampler: disk_sampler
   - /function_generator@function_generator: random_bandpass
-  - /energy_estimation_kwargs@energy_estimation_kwargs: monte_carlo
   - /neural_isometry@neural_isometry: eulerian_disk
-  - /dictionaries@initial_dictionary: fourier_2d
-  - override /wandb@wandb: disabled
+  - /callbacks@_global_: disk
   - _self_
 
 function_generator:
@@ -14,62 +12,4 @@ function_generator:
 model_state_kwargs:
   num_steps: 200
 
-batch_size: 128
-grad_accumulation_steps: 1
-
-# training hyperparameters
 n_epochs: 500000
-domain_sample_size: 32
-n_functions: 1000
-
-pullback_pushforward_kwargs: 
-  start_time: 0.0
-  end_time: 1.0
-
-callbacks:
-  mean_function_visualization:
-    _target_: infidictionary.callbacks.VisualizeMeanFunction
-    initial_dictionary: ${initial_dictionary}
-    domain_sampler: ${domain_sampler}
-    frequency: 500
-    density: 200
-  reconstruction_visualization:
-    _target_: infidictionary.callbacks.VisualizeKLExpansionReconstruction
-    dictionary: ${initial_dictionary}
-    domain_sampler: ${domain_sampler}
-    f_gen: ${function_generator}
-    identity_isometry:
-      _target_: infidictionary.neural_isometries.GeneralizedIsometry
-      first_change_of_domain:
-        _target_: infidictionary.neural_isometries.lagrangian.LagrangianIsometry
-        diffeomorphism:
-          _target_: infidictionary.diffeomorphisms.ShirlyChiu
-      ode_isometry: 
-        _target_: infidictionary.neural_isometries.IdentityIsometry
-      last_change_of_domain: null
-    seeds: [0, 1, 2]
-    frequency: 500
-    density: 200
-    truncation_factors: [1, 2, 3]
-    pullback_pushforward_kwargs: ${pullback_pushforward_kwargs}
-  isometry_check:
-    _target_: infidictionary.callbacks.IsometryCheck
-    dictionary: ${initial_dictionary}
-    domain_sampler:
-      _target_: infidictionary.domain_samplers.SquareSampler
-      stratified: True
-      add_noise: True
-    frequency: 500
-    density: 200
-    indices:
-      - [-1, 1]
-      - [0, 0]
-      - [1, -1]
-      - [2, -2]
-      - [3, -3]
-
-# Add tags so that it is easier to filter the experiments in the W&B dashboard
-wandb:
-  tags:
-    experiment: fpca
-    task: reconstruction

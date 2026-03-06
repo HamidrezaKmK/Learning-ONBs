@@ -1,0 +1,14 @@
+# Callbacks for disk-domain experiments that include the velocity field visualization.
+# Extends disk.yaml, adding only the velocity field callback.
+defaults:
+  - disk
+  - _self_
+
+callbacks:
+  velocity_field_visualization:
+    _target_: infidictionary.callbacks.VisualizeVelocityField
+    domain_sampler: ${domain_sampler}
+    timesteps: [0, 0.1, 0.2, 0.4, 0.5, 0.6, 0.8, 0.9, 1.0]
+    frequency: 500
+    density: 20
+    viz_magnitude: 10.0

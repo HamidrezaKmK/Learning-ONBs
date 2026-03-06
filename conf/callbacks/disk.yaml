@@ -1,0 +1,25 @@
+# Callbacks for disk-domain experiments (no velocity field visualization).
+# Extends square.yaml, overriding only the two disk-specific fields:
+#   - identity_isometry: wraps a ShirlyChiu coordinate change for the baseline
+#   - isometry_check.domain_sampler: hardcoded SquareSampler (isometry check
+#     operates in the square latent space regardless of the experiment domain)
+defaults:
+  - square
+  - _self_
+
+callbacks:
+  reconstruction_visualization:
+    identity_isometry:
+      _target_: infidictionary.neural_isometries.GeneralizedIsometry
+      first_change_of_domain:
+        _target_: infidictionary.neural_isometries.lagrangian.LagrangianIsometry
+        diffeomorphism:
+          _target_: infidictionary.diffeomorphisms.ShirlyChiu
+      ode_isometry:
+        _target_: infidictionary.neural_isometries.IdentityIsometry
+      last_change_of_domain: null
+  isometry_check:
+    domain_sampler:
+      _target_: infidictionary.domain_samplers.SquareSampler
+      stratified: True
+      add_noise: True

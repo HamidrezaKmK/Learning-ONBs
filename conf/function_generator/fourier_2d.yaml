@@ -10,3 +10,4 @@ atom_indices:
   - [0, 1]
   - [-1, 0]
   - [0, -1]
+diffeomorphism: null

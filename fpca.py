@@ -83,84 +83,82 @@ def train(
         start_epoch, best_energy = checkpointer.restore(checkpoint)
 
     pbar = tqdm(range(n_epochs))
-    
+
     for epoch_i in pbar:
         if epoch_i < start_epoch:
             continue
-        
-        if epoch_i % grad_accumulation_steps == 0:
-            neural_isometry.shuffle_model_state(**model_state_kwargs)
-            coords = domain_sampler.sample(domain_sample_size).to(device) # shape (N, d)
-            energy_history_temp = []
-            mean_function_mse_history_temp = []
 
-        # pick batch_size (B) number of functions
-        seed_batch = torch.randint(0, f_gen.n_functions if n_functions is None else n_functions, (batch_size,))
-        vals = f_gen.get_batch(coords, seeds=seed_batch).to(device)  # shape (B, N, C)
+        neural_isometry.shuffle_model_state(**model_state_kwargs)
+        coords = domain_sampler.sample(domain_sample_size).to(device) # shape (N, d)
+        energy_history_temp = []
+        mean_function_mse_history_temp = []
 
-        # (1: mean function) compute the mean function and do its backward:
-        avg_vals = mean_function(coords) # shape (N, C)
-        mean_mse = torch.mean((vals - avg_vals.unsqueeze(0)).pow(2))
-        (mean_mse / grad_accumulation_steps).backward(retain_graph=False)
-        mean_function_mse_history_temp.append(mean_mse.item())
+        for _ in range(grad_accumulation_steps):
+            # pick batch_size (B) number of functions
+            seed_batch = torch.randint(0, f_gen.n_functions if n_functions is None else n_functions, (batch_size,))
+            vals = f_gen.get_batch(coords, seeds=seed_batch).to(device)  # shape (B, N, C)
 
-        # (2: covariance training) zero-center the data and do KL expansion step:
-        # get the vals centered and work with them
-        vals_centered = (vals - avg_vals.unsqueeze(0)).detach()  # shape (B, N, C)
-        src_coords, src_logabsdet, vals_pulled_back = neural_isometry.pullback(
-            tgt_coords=coords,
-            tgt_logabsdet=torch.zeros(coords.shape[0], device=coords.device),
-            tgt_field=vals_centered,
-            **pullback_pushforward_kwargs,
-        )
-        energy = initial_dictionary.estimate_captured_energy(
-            coords=src_coords,
-            logabsdet=src_logabsdet,
-            values=vals_pulled_back,
-            **energy_estimation_kwargs,
-        ).mean()
+            # (1: mean function) compute the mean function and do its backward:
+            avg_vals = mean_function(coords) # shape (N, C)
+            mean_mse = torch.mean((vals - avg_vals.unsqueeze(0)).pow(2))
+            (mean_mse / grad_accumulation_steps).backward(retain_graph=False)
+            mean_function_mse_history_temp.append(mean_mse.item())
 
-        (-energy / grad_accumulation_steps).backward(retain_graph=False)
-        energy_history_temp.append(energy.item())
+            # (2: covariance training) zero-center the data and do KL expansion step:
+            # get the vals centered and work with them
+            vals_centered = (vals - avg_vals.unsqueeze(0)).detach()  # shape (B, N, C)
+            src_coords, src_logabsdet, vals_pulled_back = neural_isometry.pullback(
+                tgt_coords=coords,
+                tgt_logabsdet=torch.zeros(coords.shape[0], device=coords.device),
+                tgt_field=vals_centered,
+                **pullback_pushforward_kwargs,
+            )
+            energy = initial_dictionary.estimate_captured_energy(
+                coords=src_coords,
+                logabsdet=src_logabsdet,
+                values=vals_pulled_back,
+                **energy_estimation_kwargs,
+            ).mean()
 
-        if (epoch_i + 1) % grad_accumulation_steps == 0:
-            energy_item = sum(energy_history_temp) / len(energy_history_temp)
-            mean_mse_item = sum(mean_function_mse_history_temp) / len(mean_function_mse_history_temp)
+            (-energy / grad_accumulation_steps).backward(retain_graph=False)
+            energy_history_temp.append(energy.item())
 
-            if wandb_enabled:
-                wandb.log({"train/energy": energy_item}, step=epoch_i)
-                wandb.log({"train/mean_function_mse": mean_mse_item}, step=epoch_i)
-                wandb.log({"train/iteration": epoch_i}, step=epoch_i)
-                wandb.log({"train/grad_norm_isometry": get_grad_norm(neural_isometry)}, step=epoch_i)
-                wandb.log({"train/param_norm_isometry": get_param_norm(neural_isometry)}, step=epoch_i)
-                wandb.log({"train/grad_norm_mean_function": get_grad_norm(mean_function)}, step=epoch_i)
-                wandb.log({"train/param_norm_mean_function": get_param_norm(mean_function)}, step=epoch_i)
-                # visualize the average learning rate of the optimizer
-                avg_lr1 = sum(group['lr'] for group in optim_mean_function.param_groups) / len(optim_mean_function.param_groups)
-                wandb.log({"train/lr_mean_function": avg_lr1}, step=epoch_i)
-                avg_lr2 = sum(group['lr'] for group in optim_isometry.param_groups) / len(optim_isometry.param_groups)
-                wandb.log({"train/avg_lr_isometry": avg_lr2}, step=epoch_i)
+        energy_item = sum(energy_history_temp) / len(energy_history_temp)
+        mean_mse_item = sum(mean_function_mse_history_temp) / len(mean_function_mse_history_temp)
 
-            pbar.set_postfix({'energy': energy_item, 'mean_function_mse': mean_mse_item})
-            optim_isometry.step()
-            optim_mean_function.step()
-            optim_isometry.zero_grad()
-            optim_mean_function.zero_grad()
+        if wandb_enabled:
+            wandb.log({"train/energy": energy_item}, step=epoch_i)
+            wandb.log({"train/mean_function_mse": mean_mse_item}, step=epoch_i)
+            wandb.log({"train/iteration": epoch_i}, step=epoch_i)
+            wandb.log({"train/grad_norm_isometry": get_grad_norm(neural_isometry)}, step=epoch_i)
+            wandb.log({"train/param_norm_isometry": get_param_norm(neural_isometry)}, step=epoch_i)
+            wandb.log({"train/grad_norm_mean_function": get_grad_norm(mean_function)}, step=epoch_i)
+            wandb.log({"train/param_norm_mean_function": get_param_norm(mean_function)}, step=epoch_i)
+            # visualize the average learning rate of the optimizer
+            avg_lr1 = sum(group['lr'] for group in optim_mean_function.param_groups) / len(optim_mean_function.param_groups)
+            wandb.log({"train/lr_mean_function": avg_lr1}, step=epoch_i)
+            avg_lr2 = sum(group['lr'] for group in optim_isometry.param_groups) / len(optim_isometry.param_groups)
+            wandb.log({"train/avg_lr_isometry": avg_lr2}, step=epoch_i)
 
-            if scheduler_isometry is not None:
-                if isinstance(scheduler_isometry, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    scheduler_isometry.step(energy_item)
-                else:
-                    scheduler_isometry.step()
-            if scheduler_mean_function is not None:
-                if isinstance(scheduler_mean_function, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    scheduler_mean_function.step(mean_mse_item)
-                else:
-                    scheduler_mean_function.step()
+        pbar.set_postfix({'energy': energy_item, 'mean_function_mse': mean_mse_item})
+        optim_isometry.step()
+        optim_mean_function.step()
+        optim_isometry.zero_grad()
+        optim_mean_function.zero_grad()
 
-            if checkpointer is not None:
-                optimizer_step = (epoch_i + 1) // grad_accumulation_steps
-                checkpointer.step(optimizer_step=optimizer_step, epoch=epoch_i, metric=energy_item)
+        if scheduler_isometry is not None:
+            if isinstance(scheduler_isometry, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler_isometry.step(energy_item)
+            else:
+                scheduler_isometry.step()
+        if scheduler_mean_function is not None:
+            if isinstance(scheduler_mean_function, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler_mean_function.step(mean_mse_item)
+            else:
+                scheduler_mean_function.step()
+
+        if checkpointer is not None:
+            checkpointer.step(optimizer_step=epoch_i + 1, epoch=epoch_i, metric=energy_item)
 
         for callback in callbacks:
             callback(
