@@ -1,11 +1,10 @@
 
 import torch
-import matplotlib.pyplot as plt
-import matplotlib as mpl
 import wandb
 from .base import Callback
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from .plot_utils import make_trace
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.neural_isometries import NeuralIsometry
 from infidictionary.utils import NeuralField
@@ -70,10 +69,10 @@ class IsometryCheck(Callback):
             x_tgt_np, y_tgt_np = tgt_coords[:, 0].cpu().numpy(), tgt_coords[:, 1].cpu().numpy()
 
             for idx in range(len(self.indices)):
-                v_orig = src_field[idx].cpu().numpy().flatten()
-                v_def = tgt_field[idx].cpu().numpy().flatten()
+                v_orig = src_field[idx].cpu().numpy()  # (N, C)
+                v_def = tgt_field[idx].cpu().numpy()   # (N, C)
 
-                # Robust scaling using quantiles (as in your original code)
+                # Robust scaling using quantiles (used by C=1 path in make_trace)
                 vmin_orig = torch.quantile(src_field[idx], 0.01).item()
                 vmax_orig = torch.quantile(src_field[idx], 0.99).item()
                 vmin_def = torch.quantile(tgt_field[idx], 0.01).item()
@@ -81,20 +80,14 @@ class IsometryCheck(Callback):
 
                 # Original Column
                 fig_spatial.add_trace(
-                    go.Histogram2dContour(
-                        x=x_np, y=y_np, z=v_orig, histfunc="avg",
-                        colorscale='Viridis', zmin=vmin_orig, zmax=vmax_orig,
-                        nbinsx=50, nbinsy=50, showscale=False,
-                    ), row=idx+1, col=1
+                    make_trace(x_np, y_np, v_orig, vmin_orig, vmax_orig),
+                    row=idx+1, col=1
                 )
 
                 # Deformed Column
                 fig_spatial.add_trace(
-                    go.Histogram2dContour(
-                        x=x_tgt_np, y=y_tgt_np, z=v_def, histfunc="avg",
-                        colorscale='Viridis', zmin=vmin_def, zmax=vmax_def,
-                        nbinsx=50, nbinsy=50, showscale=False,
-                    ), row=idx+1, col=2
+                    make_trace(x_tgt_np, y_tgt_np, v_def, vmin_def, vmax_def),
+                    row=idx+1, col=2
                 )
 
                 fig_spatial.update_xaxes(scaleanchor=f"y{idx*2 + 1}", scaleratio=1, row=idx+1, col=1)

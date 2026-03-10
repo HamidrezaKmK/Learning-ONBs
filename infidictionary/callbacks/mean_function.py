@@ -1,10 +1,9 @@
 
 import torch
-import matplotlib.pyplot as plt
-import matplotlib as mpl
 import wandb
 import plotly.graph_objects as go
 from .base import Callback
+from .plot_utils import make_trace
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.neural_isometries import NeuralIsometry
 from infidictionary.utils import NeuralField
@@ -26,7 +25,7 @@ class VisualizeMeanFunction(Callback):
         self.density = density
         self.domain_sampler = domain_sampler
 
-    
+
 
     def __call__(
         self,
@@ -35,32 +34,23 @@ class VisualizeMeanFunction(Callback):
         mean_function: NeuralField,
         wandb_enabled: bool,
         device: torch.device,
-    ): 
+    ):
         if (epoch + 1) % self.frequency != 0 or not wandb_enabled:
             return
         mean_function.eval()
         with torch.no_grad():
             coords = self.domain_sampler.sample(self.density).to(device)
             vals = mean_function(coords).to(device)
-            
+
             x = coords[:, 0].cpu().numpy()
             y = coords[:, 1].cpu().numpy()
-            z = vals[:, 0].cpu().numpy()
+            data = vals.cpu().numpy()  # (N, C)
 
-            fig = go.Figure(go.Histogram2dContour(
-                x=x, 
-                y=y, 
-                z=z,
-                histfunc="avg",
-                colorscale='Viridis',
-                nbinsx=30,
-                nbinsy=30,
-                colorbar=dict(title='Mean Value')
-            ))
+            fig = go.Figure(make_trace(x, y, data))
 
             fig.update_xaxes(
-                scaleanchor="y", 
-                scaleratio=1, 
+                scaleanchor="y",
+                scaleratio=1,
                 constrain='domain'
             )
             fig.update_yaxes(

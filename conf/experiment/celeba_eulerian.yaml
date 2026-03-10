@@ -1,0 +1,28 @@
+# @package _global_
+defaults:
+  - /domain_samplers@domain_sampler: square_sampler   # used by callbacks
+  - /function_generator@function_generator: celeba
+  - /neural_isometry@neural_isometry: eulerian
+  - /callbacks@_global_: celeba
+  - _self_
+
+# ── 3-channel overrides ───────────────────────────────────────────────────────
+
+# Eulerian isometry must match the signal channel count
+neural_isometry:
+  channels_dim: 3
+
+# Fourier dictionary atoms are 3-channel (one per RGB channel)
+initial_dictionary:
+  num_channels: 3
+
+# Mean function outputs one value per RGB channel
+mean_function:
+  output_dim: 3
+
+# ── Training hyperparameters ──────────────────────────────────────────────────
+
+model_state_kwargs:
+  num_steps: 200
+
+n_epochs: 500000

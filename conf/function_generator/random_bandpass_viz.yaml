@@ -1,5 +1,5 @@
 _target_: infidictionary.datasets.RandomBandpassGenerator
-domain_sample_size: 32
+domain_sample_size: 200
 n_functions: 1000
 omega_lo: 5
 omega_hi: 10

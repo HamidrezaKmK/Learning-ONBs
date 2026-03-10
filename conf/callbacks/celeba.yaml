@@ -1,22 +1,27 @@
-# Base callbacks for square-domain experiments.
-# identity_isometry is IdentityIsometry; isometry_check reuses ${domain_sampler}.
+# Callbacks for CelebA experiments (3-channel RGB signals).
 callbacks:
-  mean_function_visualization:
-    _target_: infidictionary.callbacks.VisualizeMeanFunction
-    initial_dictionary: ${initial_dictionary}
-    domain_sampler: ${domain_sampler}
-    frequency: 500
-    density: 200
   reconstruction_visualization:
     _target_: infidictionary.callbacks.VisualizeKLExpansionReconstruction
     dictionary: ${initial_dictionary}
-    f_gen: ${function_generator}
+    f_gen:
+      _target_: infidictionary.datasets.CelebADataset
+      resolution: 128
+      n_images: 1000
+      drop_fraction: 0.0
+      dataset_name: mattymchen/celeba-hq
+      device: cpu
     seeds: [0, 1, 2]
     frequency: 500
     truncation_factors: [1, 2, 3]
     pullback_pushforward_kwargs: ${pullback_pushforward_kwargs}
     identity_isometry:
       _target_: infidictionary.neural_isometries.IdentityIsometry
+  mean_function_visualization:
+    _target_: infidictionary.callbacks.VisualizeMeanFunction
+    initial_dictionary: ${initial_dictionary}
+    domain_sampler: ${domain_sampler}
+    frequency: 500
+    density: 200
   isometry_check:
     _target_: infidictionary.callbacks.IsometryCheck
     dictionary: ${initial_dictionary}

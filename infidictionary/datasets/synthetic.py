@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from infidictionary.datasets.base import IrregularDataset
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.diffeomorphisms import Diffeomorphism
-from infidictionary.domain_samplers import DomainSampler
+from infidictionary.domain_samplers import DomainSampler, SquareSampler, DiskSampler
 
 
 class FunctionClassGenerator(IrregularDataset, ABC):
@@ -24,20 +24,30 @@ class FunctionClassGenerator(IrregularDataset, ABC):
         self.n_functions = n_functions
 
     @abstractmethod
-    def __call__(self, coords: torch.Tensor, seed: int) -> torch.Tensor:
+    def _eval(self, coords: torch.Tensor, seed: int) -> torch.Tensor:
         raise NotImplementedError("FunctionClassGenerator is an abstract base class.")
+
+    def __call__(self, seed: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample coordinates and evaluate the function at the given seed.
+
+        Returns:
+            coords: (N, d) sampled coordinates
+            vals:   (N, C) function values at those coordinates
+        """
+        coords = self.domain_sampler.sample(self.domain_sample_size)
+        vals = self._eval(coords, seed)
+        return coords, vals
 
     def get_batch(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         seeds = torch.randint(0, self.n_functions, (batch_size,))
         coords = self.domain_sampler.sample(self.domain_sample_size)
-        all_vals = [self(coords, seed.item()) for seed in seeds]
+        all_vals = [self._eval(coords, seed.item()) for seed in seeds]
         return coords, torch.stack(all_vals, dim=0)
 
 
 class RandomBandpassGenerator(FunctionClassGenerator):
     def __init__(
         self,
-        domain_sampler: DomainSampler,
         domain_sample_size: int,
         l_sin: int,
         l_cos: int,
@@ -52,6 +62,7 @@ class RandomBandpassGenerator(FunctionClassGenerator):
         seed: int = 42,
         mean_seed: int | None = None,
     ):
+        domain_sampler = DiskSampler() if radial else SquareSampler()
         super().__init__(domain_sampler, domain_sample_size, n_functions)
         self.l_sin = l_sin
         self.l_cos = l_cos
@@ -104,7 +115,7 @@ class RandomBandpassGenerator(FunctionClassGenerator):
         val = (weights.unsqueeze(1) * all_e).sum(axis=0)  # (N,)
         return val
 
-    def __call__(self, xy: torch.Tensor, seed: int):
+    def _eval(self, xy: torch.Tensor, seed: int):
         ret = self._call(xy, seed)
         if self.mean_seed is not None:
             mean_val = self._call(xy, self.mean_seed)
@@ -126,7 +137,7 @@ class BasisRandomGenerator(FunctionClassGenerator):
         self.atom_indices = torch.tensor(atom_indices, dtype=torch.long)
         self.diffeomorphism = diffeomorphism
 
-    def __call__(self, coords: torch.Tensor, seed: int):
+    def _eval(self, coords: torch.Tensor, seed: int):
         device = coords.device
 
         rng = torch.Generator().manual_seed(seed)

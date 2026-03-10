@@ -63,6 +63,7 @@ class CelebADataset(IrregularDataset):
             img = next(it)["image"]
             t = to_tensor(img)       # (3, H, W)
             t = t.permute(1, 2, 0)  # (H, W, 3)
+            t = t.flip(0)           # flip vertically so image is upright
             signals.append(t.reshape(N, 3))
 
         self.images = torch.stack(signals, dim=0).to(self.device)  # (n_images, N, 3)
@@ -91,3 +92,16 @@ class CelebADataset(IrregularDataset):
         images = self.images[img_idx][:, keep_idx, :]  # (B, N', 3)
 
         return coords, images
+
+    def __call__(self, seed: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return full-grid coords and RGB values for image at index `seed` (mod n_images).
+
+        Implements the same interface as FunctionClassGenerator.__call__ so that
+        callbacks like VisualizeKLExpansionReconstruction work with CelebADataset.
+
+        Returns:
+            coords: (N, 2)  full pixel-grid coordinates in [0, 1]²
+            vals:   (N, 3)  RGB values for the selected image
+        """
+        idx = seed % self.n_images
+        return self._full_coords, self.images[idx]
