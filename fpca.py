@@ -40,6 +40,7 @@ def train(
     callbacks: list,
     wandb_enabled: bool,
     grad_accumulation_steps: int,
+    n_epochs_mean_function: int | None,
     energy_estimation_kwargs: dict,
     model_state_kwargs: dict,
     pullback_pushforward_kwargs: dict,
@@ -68,6 +69,8 @@ def train(
         energy_history_temp = []
         mean_function_mse_history_temp = []
 
+        mean_function_frozen = n_epochs_mean_function is not None and epoch_i >= n_epochs_mean_function
+
         for _ in range(grad_accumulation_steps):
             coords, vals = f_gen.get_batch(batch_size)
             coords = coords.to(device)  # shape (N, d)
@@ -76,7 +79,8 @@ def train(
             # (1: mean function) compute the mean function and do its backward:
             avg_vals = mean_function(coords) # shape (N, C)
             mean_mse = torch.mean((vals - avg_vals.unsqueeze(0)).pow(2))
-            (mean_mse / grad_accumulation_steps).backward(retain_graph=False)
+            if not mean_function_frozen:
+                (mean_mse / grad_accumulation_steps).backward(retain_graph=False)
             mean_function_mse_history_temp.append(mean_mse.item())
 
             # (2: covariance training) zero-center the data and do KL expansion step:
@@ -115,12 +119,14 @@ def train(
 
         pbar.set_postfix({'energy': energy_item, 'mean_function_mse': mean_mse_item})
         optim_isometry.step()
-        optim_mean_function.step()
+        if not mean_function_frozen:
+            optim_mean_function.step()
         optim_isometry.zero_grad()
         optim_mean_function.zero_grad()
 
         step_scheduler(scheduler_isometry, energy_item)
-        step_scheduler(scheduler_mean_function, mean_mse_item)
+        if not mean_function_frozen:
+            step_scheduler(scheduler_mean_function, mean_mse_item)
 
         if checkpointer is not None:
             checkpointer.step(optimizer_step=epoch_i + 1, epoch=epoch_i, metric=energy_item)
@@ -224,6 +230,7 @@ def main(conf: DictConfig):
         f_gen=function_generator,
         batch_size=conf.batch_size,
         n_epochs=conf.n_epochs,
+        n_epochs_mean_function=conf.get("n_epochs_mean_function", None),
         grad_accumulation_steps=conf.grad_accumulation_steps,
         device=device,
         optim_isometry=optim_isometry,

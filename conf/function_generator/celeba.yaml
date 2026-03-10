@@ -1,6 +1,6 @@
 _target_: infidictionary.datasets.CelebADataset
 resolution: 128
-n_images: 1000
+n_images: 32
 drop_fraction: 0.75
 dataset_name: mattymchen/celeba-hq
 device: cpu
