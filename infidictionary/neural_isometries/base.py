@@ -47,6 +47,11 @@ class NeuralIsometry(ABC, torch.nn.Module):
         """
         pass
 
+    def train(self, mode: bool = True):
+        result = super().train(mode)
+        self.shuffle_model_state()
+        return result
+
     def shuffle_model_state(self):
         return self
 

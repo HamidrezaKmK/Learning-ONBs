@@ -5,26 +5,43 @@ from typing import List
 
 from abc import ABC, abstractmethod
 
+from infidictionary.datasets.base import IrregularDataset
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.diffeomorphisms import Diffeomorphism
+from infidictionary.domain_samplers import DomainSampler
 
-class FunctionClassGenerator(ABC):
-    
+
+class FunctionClassGenerator(IrregularDataset, ABC):
+
+    def __init__(
+        self,
+        domain_sampler: DomainSampler,
+        domain_sample_size: int,
+        n_functions: int = 1000,
+    ):
+        self.domain_sampler = domain_sampler
+        self.domain_sample_size = domain_sample_size
+        self.n_functions = n_functions
+
     @abstractmethod
-    def __call__(self, coords: torch.Tensor, seed: int):
+    def __call__(self, coords: torch.Tensor, seed: int) -> torch.Tensor:
         raise NotImplementedError("FunctionClassGenerator is an abstract base class.")
 
-    def get_batch(self, coords: torch.Tensor, seeds: torch.Tensor):
-        all_vals = []
-        for seed in seeds:
-            all_vals.append(self.__call__(coords, seed.item()))
-        return torch.stack(all_vals, dim=0)
+    def get_batch(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+        seeds = torch.randint(0, self.n_functions, (batch_size,))
+        coords = self.domain_sampler.sample(self.domain_sample_size)
+        all_vals = [self(coords, seed.item()) for seed in seeds]
+        return coords, torch.stack(all_vals, dim=0)
+
 
 class RandomBandpassGenerator(FunctionClassGenerator):
     def __init__(
         self,
+        domain_sampler: DomainSampler,
+        domain_sample_size: int,
         l_sin: int,
         l_cos: int,
+        n_functions: int = 1000,
         radial: bool = False,
         omega_lo: float = 5.,
         omega_hi: float = 10.,
@@ -35,6 +52,7 @@ class RandomBandpassGenerator(FunctionClassGenerator):
         seed: int = 42,
         mean_seed: int | None = None,
     ):
+        super().__init__(domain_sampler, domain_sample_size, n_functions)
         self.l_sin = l_sin
         self.l_cos = l_cos
         omega_lo = omega_lo
@@ -62,17 +80,17 @@ class RandomBandpassGenerator(FunctionClassGenerator):
             theta = torch.atan2(xy[:, 1], xy[:, 0])  # (N,)
             theta = (theta + math.pi) / (2.0 * math.pi)  # scale theta to [0,1]
             xy = torch.stack([r, theta], dim=1)  # (N, 2)
-        
+
         rng_global = torch.Generator().manual_seed(self.global_seed)
         rng = torch.Generator().manual_seed(
             seed + torch.randint(0, 10000, (1,), generator=rng_global).item()
         )
-    
+
         # evaluate dictionary functions
         inner_product_cos = torch.einsum("ij,kj->ik", self.omega_cos.to(device), xy)  # (l_X, N)
         inner_product_cos = inner_product_cos + self.phase_cos.to(device).unsqueeze(1)  # (l_X, N)
         e_cos = torch.cos(inner_product_cos) * self.r_cos.to(device).unsqueeze(1)  # (l_X, N)
-        
+
         inner_product_sin = torch.einsum("ij,kj->ik", self.omega_sin.to(device), xy)  # (l_Y, N)
         inner_product_sin = inner_product_sin + self.phase_sin.to(device).unsqueeze(1)  # (l_Y, N)
         e_sin = torch.sin(inner_product_sin) * self.r_sin.to(device).unsqueeze(1)  # (l_Y, N)
@@ -85,7 +103,7 @@ class RandomBandpassGenerator(FunctionClassGenerator):
 
         val = (weights.unsqueeze(1) * all_e).sum(axis=0)  # (N,)
         return val
-    
+
     def __call__(self, xy: torch.Tensor, seed: int):
         ret = self._call(xy, seed)
         if self.mean_seed is not None:
@@ -96,33 +114,35 @@ class RandomBandpassGenerator(FunctionClassGenerator):
 class BasisRandomGenerator(FunctionClassGenerator):
     def __init__(
         self,
+        domain_sampler: DomainSampler,
+        domain_sample_size: int,
         dictionary: InfiDictionary,
         atom_indices: List,
         diffeomorphism: Diffeomorphism | None,
+        n_functions: int = 1000,
     ):
+        super().__init__(domain_sampler, domain_sample_size, n_functions)
         self.dictionary = dictionary
         self.atom_indices = torch.tensor(atom_indices, dtype=torch.long)
-        self.diffeomorphism = diffeomorphism 
-        
+        self.diffeomorphism = diffeomorphism
+
     def __call__(self, coords: torch.Tensor, seed: int):
         device = coords.device
 
         rng = torch.Generator().manual_seed(seed)
 
-        
         n_atoms = len(self.atom_indices)
         weights = torch.randn(size=(n_atoms,), generator=rng) / math.sqrt(n_atoms)
         weights = weights.to(device)
-        
+
         if self.diffeomorphism:
             coords, _ = self.diffeomorphism.inverse(coords)
-            
+
         all_atoms = self.dictionary.get_atoms(
             coords,
             self.atom_indices.to(device),
         ) # (n_atoms, N, c)
-        
-        
+
         # combine atoms with weights
         combined_atoms = torch.sum(weights[:, None, None] * all_atoms, dim=0) # (N, c)
         return combined_atoms

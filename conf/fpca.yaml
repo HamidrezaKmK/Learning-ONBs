@@ -32,8 +32,6 @@ wandb:
 
 # training hyperparameters
 n_epochs: 500000
-domain_sample_size: 32
-n_functions: 1000
 batch_size: 128
 grad_accumulation_steps: 1
 

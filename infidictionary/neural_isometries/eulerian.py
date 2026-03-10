@@ -21,6 +21,7 @@ class EulerianIsometry(NeuralIsometry):
         )
         self.coords_dim = coords_dim
         self.channels_dim = channels_dim
+        self._num_steps = 0
         self.register_buffer("tspan", torch.tensor([]), persistent=False)
 
     def _householder_step(
@@ -54,13 +55,16 @@ class EulerianIsometry(NeuralIsometry):
             f = self._householder_step(t0, coords, logabsdet, f)
         return f
     
-    def shuffle_model_state(self, num_steps: int):
+    def shuffle_model_state(self, num_steps: int | None = None):
+        if num_steps is not None:
+            self._num_steps = num_steps
+        if self._num_steps == 0:
+            raise ValueError("Run shuffle_model_state at least once with num_steps larger than 0 before this!")
         if self.training:
-            tspan = torch.rand(num_steps)
-            # register as buffer
+            tspan = torch.rand(self._num_steps)
             self.tspan = torch.sort(tspan)[0]
         else:
-            self.tspan = torch.linspace(0, 1, num_steps)
+            self.tspan = torch.linspace(0, 1, self._num_steps)
     
     def pushforward(
         self,

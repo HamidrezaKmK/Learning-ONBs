@@ -1,4 +1,12 @@
 _target_: infidictionary.datasets.RandomBandpassGenerator
+domain_sampler:
+  _target_: infidictionary.domain_samplers.SquareSampler
+  stratified: true
+  add_noise: true
+  height: 1.0
+  width: 1.0
+domain_sample_size: 32
+n_functions: 1000
 omega_lo: 5
 omega_hi: 10
 r_lo: 0.5

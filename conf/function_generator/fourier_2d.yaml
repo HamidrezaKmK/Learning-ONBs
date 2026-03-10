@@ -1,5 +1,13 @@
 _target_: infidictionary.datasets.BasisRandomGenerator
-dictionary: 
+domain_sampler:
+  _target_: infidictionary.domain_samplers.SquareSampler
+  stratified: true
+  add_noise: true
+  height: 1.0
+  width: 1.0
+domain_sample_size: 32
+n_functions: 1000
+dictionary:
   _target_: infidictionary.dictionaries.FourierDictionary
   domain_dim: 2
   num_channels: 1

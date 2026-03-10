@@ -14,7 +14,7 @@ import wandb
 
 from infidictionary.checkpointing import Checkpointer
 from infidictionary.dictionaries.base import InfiDictionary
-from infidictionary.datasets import FunctionClassGenerator
+from infidictionary.datasets import IrregularDataset
 from infidictionary.neural_isometries import NeuralIsometry
 from infidictionary.utils import NeuralField
 from infidictionary.domain_samplers import DomainSampler
@@ -28,19 +28,16 @@ OmegaConf.register_new_resolver("eval", eval)
 def train(
     neural_isometry: NeuralIsometry,
     mean_function: NeuralField,
-    f_gen: FunctionClassGenerator,
+    f_gen: IrregularDataset,
     initial_dictionary: InfiDictionary,
-    domain_sampler: DomainSampler,
     batch_size: int,
     n_epochs: int,
-    domain_sample_size: int,
     device: torch.device,
     optim_isometry: torch.optim.Optimizer,
     scheduler_isometry: torch.optim.lr_scheduler._LRScheduler | None,
     optim_mean_function: torch.optim.Optimizer,
     scheduler_mean_function: torch.optim.lr_scheduler._LRScheduler | None,
     callbacks: list,
-    n_functions: int | None,
     wandb_enabled: bool,
     grad_accumulation_steps: int,
     energy_estimation_kwargs: dict,
@@ -68,14 +65,13 @@ def train(
             continue
 
         neural_isometry.shuffle_model_state(**model_state_kwargs)
-        coords = domain_sampler.sample(domain_sample_size).to(device) # shape (N, d)
         energy_history_temp = []
         mean_function_mse_history_temp = []
 
         for _ in range(grad_accumulation_steps):
-            # pick batch_size (B) number of functions
-            seed_batch = torch.randint(0, f_gen.n_functions if n_functions is None else n_functions, (batch_size,))
-            vals = f_gen.get_batch(coords, seeds=seed_batch).to(device)  # shape (B, N, C)
+            coords, vals = f_gen.get_batch(batch_size)
+            coords = coords.to(device)  # shape (N, d)
+            vals = vals.to(device)      # shape (B, N, C)
 
             # (1: mean function) compute the mean function and do its backward:
             avg_vals = mean_function(coords) # shape (N, C)
@@ -142,7 +138,7 @@ def train(
 def main(conf: DictConfig):
 
     neural_isometry: NeuralIsometry = instantiate(conf.neural_isometry)
-    function_generator: FunctionClassGenerator = instantiate(conf.function_generator)
+    function_generator: IrregularDataset = instantiate(conf.function_generator)
     initial_dictionary: InfiDictionary = instantiate(conf.initial_dictionary)
     mean_function: NeuralField = instantiate(conf.mean_function)
     domain_sampler: DomainSampler = instantiate(conf.domain_sampler)
@@ -158,7 +154,7 @@ def main(conf: DictConfig):
             wandb_run_id = run_name[len("wandb-"):]
     else:
         run_name = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    
+
     if conf.wandb.enabled:
         wandb_run_name = str(conf.wandb.run_name) if conf.wandb.run_name is not None else None
         tags = [f"{key}:{value}" for key, value in conf.wandb.tags.items()] if "tags" in conf.wandb else []
@@ -176,7 +172,7 @@ def main(conf: DictConfig):
         run_name = f"wandb-{wandb.run.id}"
     elif wandb_run_id is not None:
         raise ValueError("You are resuming a wandb run without specifying wandb=enabled!")
-    
+
     # instantiate the callbacks
     if "callbacks" not in conf:
         callbacks = []
@@ -197,10 +193,9 @@ def main(conf: DictConfig):
         isometry_scheduler_callable = None
     optim_isometry = isometry_optimizer_callable(neural_isometry.parameters())
     scheduler_isometry = isometry_scheduler_callable(optim_isometry) if isometry_scheduler_callable is not None else None
-    
+
     optim_mean_function = mean_function_optimizer_callable(mean_function.parameters())
     scheduler_mean_function = mean_function_scheduler_callable(optim_mean_function) if mean_function_scheduler_callable is not None else None
-    
 
     # checkpoints
     ckpt_cfg = conf.get("checkpointing", {})
@@ -218,7 +213,7 @@ def main(conf: DictConfig):
         run_name=run_name,
         config=OmegaConf.to_container(conf, resolve=True),
     ) if checkpoint_dir is not None else None
-    
+
     train(
         neural_isometry=neural_isometry,
         mean_function=mean_function,
@@ -226,26 +221,17 @@ def main(conf: DictConfig):
         energy_estimation_kwargs=conf.get("energy_estimation_kwargs", {}) or {},
         model_state_kwargs=conf.get("model_state_kwargs", {}) or {},
         pullback_pushforward_kwargs=conf.get("pullback_pushforward_kwargs", {}) or {},
-        # the function generator
         f_gen=function_generator,
-        domain_sampler=domain_sampler,
-        n_functions=conf.get("n_functions", None),
-        # domain size, batches, epoch sizes
         batch_size=conf.batch_size,
         n_epochs=conf.n_epochs,
-        domain_sample_size=conf.domain_sample_size,
         grad_accumulation_steps=conf.grad_accumulation_steps,
         device=device,
-        # optimizer and scheduler
         optim_isometry=optim_isometry,
         scheduler_isometry=scheduler_isometry,
         optim_mean_function=optim_mean_function,
         scheduler_mean_function=scheduler_mean_function,
-        # callbacks
         callbacks=callbacks,
-        # run name and W&B
         wandb_enabled=conf.wandb.enabled,
-        # checkpointing arguments
         checkpointer=checkpointer,
         checkpoint=checkpoint,
     )
