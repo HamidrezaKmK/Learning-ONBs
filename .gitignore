@@ -16,3 +16,4 @@ venv/
 *.Rhistory
 .vscode
 outputs/
+scripts/

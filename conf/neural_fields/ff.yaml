@@ -1,0 +1,11 @@
+_target_: infidictionary.utils.FFNeuralField
+input_dim: 2
+output_dim: 1
+n_features: 64
+sigma: 10.0
+hidden_dims:
+  - 256
+  - 256
+activation:
+  _target_: torch.nn.ReLU
+  _partial_: true

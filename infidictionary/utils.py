@@ -61,6 +61,20 @@ class FFNeuralField(NeuralField):
         return self.net(z)
 
 
+class HybridNeuralField(NeuralField):
+    """Hybrid neural field: sum of an MLP branch (raw coords) and an FF branch (Fourier features)."""
+    def __init__(self, input_dim, output_dim, n_features=64, sigma=10.0,
+                 ff_hidden_dims=(256, 256), mlp_hidden_dims=(256, 256), activation=nn.ReLU):
+        super().__init__(input_dim=input_dim, output_dim=output_dim)
+        mlp_hidden_dict = {i: d for i, d in enumerate(mlp_hidden_dims)}
+        self.mlp_branch = MLPNeuralField(input_dim, output_dim, hidden_dims=mlp_hidden_dict, activation=activation)
+        self.ff_branch = FFNeuralField(input_dim, output_dim, n_features=n_features, sigma=sigma,
+                                       hidden_dims=ff_hidden_dims, activation=activation)
+
+    def forward(self, coords):
+        return self.mlp_branch(coords) + self.ff_branch(coords)
+
+
 class TimeEmbedding(nn.Module, ABC):
     @property
     @abstractmethod

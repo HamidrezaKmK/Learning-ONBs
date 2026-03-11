@@ -1,5 +1,5 @@
 defaults:
-  - neural_fields@mean_function: mlp
+  - neural_fields@mean_function: ff
   - hydra: default
   - wandb: disabled # set to enabled for wandb logging
   - /energy_estimation_kwargs@energy_estimation_kwargs: monte_carlo

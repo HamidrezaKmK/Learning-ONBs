@@ -1,4 +1,5 @@
-[] Add CelebA dataset and update the dataset API to account for real-world examples
+[] Remove all sources of stochasticity: grid + everything
+[] Try Zipf distribution rather than the geometric for the Fourier dictionary thing
 [] Use the Cayley ODE solver method
 
 [] merge the refactor changes
@@ -6,3 +7,5 @@
 [] For the Monte-carlo methods, try a mix of pushforward pullback rather than just pushforward
 [] Ablate the stratified sampling for the grid integrals
 [] Implement the Adjoint method of the Cayley ODE solver
+
+Important runs:
