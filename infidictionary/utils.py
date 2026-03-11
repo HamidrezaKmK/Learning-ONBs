@@ -3,6 +3,7 @@ from torch import nn
 from typing import Callable, Dict, Any
 from abc import ABC, abstractmethod
 import math
+import functools
 
 class NeuralField(nn.Module, ABC):
     def __init__(self, input_dim: int, output_dim: int):
@@ -108,6 +109,129 @@ class SinusoidalTimeEmbedding(TimeEmbedding):
         emb = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)  # (B, 1, 2*num_freqs)
 
         return emb.view(t.size(0), -1)       # (B, 2 * num_freqs)
+
+class FactoredTimeEvolvingField(NeuralField):
+    """v(t, x) = spatial_bn(spatial_mlp(x)) @ W(t),
+    where W(t) = reshape(time_mlp(t)) / norm_denominator.
+
+    The two networks are completely separate:
+      - spatial_mlp: x (or FourierFeatures(x)) → g(x) ∈ ℝᴰ, wide MLP.
+      - time_mlp:    sinusoidal_emb(t) → vec(W) ∈ ℝᴰˣᶜ.
+
+    BatchNorm1d(affine=False) on the spatial output drives Σ_g → I via running
+    buffers (independent of t because spatial_mlp takes only x).
+
+    Two normalisation modes for W, selected by `norm_mode`:
+      "instantaneous"  — divide by the current ‖W_raw‖_F.  Exact unit Frobenius
+                         norm at every step, but gradient can be large when the
+                         norm is transiently small.
+      "running_ema"    — divide by a running EMA of ‖W_raw‖_F, updated without
+                         gradients (like BN's running variance).  The denominator
+                         is smooth and bounded away from zero, giving stable
+                         gradients at the cost of approximate normalisation.
+
+    At convergence: E_x[‖v(t,x)‖²] = tr(Wᵀ Σ_g W) ≈ ‖W‖²_F ≈ 1 for every t.
+
+    Args:
+        coords_dim:           coordinate dimension d.
+        output_dim:           output channels C.
+        spatial_hidden_dims:  widths of hidden layers in the spatial MLP.
+        time_hidden_dims:     widths of hidden layers in the time MLP.
+        feature_dim:          output width D of the spatial MLP.
+        use_fourier_features: pass FourierFeatures(x) into the spatial MLP instead of x.
+        n_fourier_features:   number of Fourier feature pairs (spatial input = 2×this).
+        fourier_sigma:        bandwidth of random Fourier features.
+        n_time_freqs:         sinusoidal frequency count for the time embedding.
+        norm_mode:            "instantaneous" or "running_ema".
+        norm_momentum:        EMA momentum (only used when norm_mode="running_ema").
+        activation:           activation constructor (default nn.ReLU).
+    """
+    def __init__(
+        self,
+        coords_dim: int,
+        output_dim: int,
+        spatial_hidden_dims: tuple = (256, 256, 256, 256),
+        time_hidden_dims: tuple = (256, 256),
+        feature_dim: int = 256,
+        use_fourier_features: bool = True,
+        n_fourier_features: int = 64,
+        fourier_sigma: float = 10.0,
+        n_time_freqs: int = 8,
+        norm_mode: str = "running_ema",
+        norm_momentum: float = 0.1,
+        activation=nn.ReLU,
+    ):
+        super().__init__(input_dim=coords_dim, output_dim=output_dim)
+        assert norm_mode in ("instantaneous", "running_ema"), \
+            f"norm_mode must be 'instantaneous' or 'running_ema', got '{norm_mode}'"
+        D, C = feature_dim, output_dim
+        self.norm_mode = norm_mode
+        self.norm_momentum = norm_momentum
+        self.time_embedding = SinusoidalTimeEmbedding(n_time_freqs)
+
+        # ── Spatial MLP ───────────────────────────────────────────────────────
+        if use_fourier_features:
+            self.ff = FourierFeatures(coords_dim, n_fourier_features, fourier_sigma)
+            spatial_in = 2 * n_fourier_features
+        else:
+            self.ff = None
+            spatial_in = coords_dim
+
+        spatial_layers = []
+        prev = spatial_in
+        for h in spatial_hidden_dims:
+            spatial_layers += [nn.Linear(prev, h), activation()]
+            prev = h
+        spatial_layers += [nn.Linear(prev, D)]
+        self.spatial_mlp = nn.Sequential(*spatial_layers)
+
+        # affine=False: no learnable γ/β — BN running buffers track E_x[g_c]
+        # and Var_x(g_c) purely over the spatial distribution, independent of t.
+        self.spatial_bn = nn.BatchNorm1d(D, affine=False)
+
+        # ── Time MLP ──────────────────────────────────────────────────────────
+        time_in = self.time_embedding.out_dim
+        time_layers = []
+        prev = time_in
+        for h in time_hidden_dims:
+            time_layers += [nn.Linear(prev, h), activation()]
+            prev = h
+        time_layers += [nn.Linear(prev, D * C)]
+        self.time_mlp = nn.Sequential(*time_layers)
+
+        self._D = D
+        self._C = C
+
+        # Running EMA of ‖W_raw‖_F (used only when norm_mode="running_ema").
+        # Initialised to 1 so the network starts with approximately unit-norm W.
+        self.register_buffer('running_W_norm', torch.ones(1))
+
+    def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        # t: (N,) — all identical at each Householder step
+        # x: (N, d)
+
+        # Spatial features; BN running buffers keep Σ_g ≈ I
+        x_in = self.ff(x) if self.ff is not None else x
+        g = self.spatial_bn(self.spatial_mlp(x_in))             # (N, D)
+
+        # Time weight matrix; all N share the same t, so one W per forward call
+        t_emb = self.time_embedding(t[0:1])                      # (1, D_t)
+        W_raw = self.time_mlp(t_emb).reshape(self._D, self._C)  # (D, C)
+
+        if self.norm_mode == "instantaneous":
+            # Exact unit Frobenius norm; gradient can spike when norm is small
+            W = W_raw / (W_raw.norm() + 1e-8)
+        else:
+            # Update running EMA without gradients (stable denominator)
+            if self.training:
+                with torch.no_grad():
+                    self.running_W_norm.mul_(1 - self.norm_momentum).add_(
+                        W_raw.norm() * self.norm_momentum
+                    )
+            W = W_raw / (self.running_W_norm + 1e-8)
+
+        return g @ W                                             # (N, C)
+
 
 class TimeEvolvingField(NeuralField):
     def __init__(
