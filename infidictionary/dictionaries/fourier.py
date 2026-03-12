@@ -1,6 +1,8 @@
 from sklearn.naive_bayes import abstractmethod
 import torch
 import math
+import scipy.stats
+import scipy.special
 import pytorch_finufft.functional as finufft
 from .base import InfiDictionary
 from infidictionary.utils import pairwise_inner_product
@@ -18,36 +20,97 @@ class FourierDictionary(InfiDictionary):
     The resulting atoms form an orthonormal basis of ``L^2([0,1]^d, R^C)``
     (with channel-wise normalization by ``1/sqrt(C)``).
 
-    Atom indices are sampled from a geometric distribution over frequencies,
-    controlled by ``index_geom_p``, with the cosine/sine sign chosen uniformly
-    at random.
+    Atom indices are sampled from either a Geometric or Zeta (Riemann zeta)
+    distribution over frequency magnitudes, with cosine/sine sign chosen
+    uniformly at random.
+
+    For Geometric: ``P(|k_d|=m) = p*(1-p)^m``.
+    For Zeta:      ``P(|k_d|=m) = (m+1)^{-a} / ζ(a)``  (infinite support, a > 1).
 
     Args:
         domain_dim: Spatial dimension ``d`` of the domain.
         num_channels: Number of output channels ``C``.
-        index_geom_p: Success probability of the Geometric distribution used
-            to sample frequency magnitudes.  Larger values concentrate mass on
-            lower frequencies.
+        distribution_type: Either ``"geometric"`` or ``"zeta"``.
+        distribution_kwargs: Parameters for the chosen distribution.
+            For ``"geometric"``: ``{"p": float}`` — success probability.
+            For ``"zeta"``: ``{"a": float}`` — power-law exponent (must be > 1).
     """
 
     def __init__(
         self,
         domain_dim: int,
         num_channels: int,
-        index_geom_p: float,
+        distribution_type: str,
+        distribution_kwargs: dict,
     ):
         super().__init__()
         self.domain_dim = domain_dim
-        self.index_geom_p = index_geom_p
         self.num_channels = num_channels
+        self.distribution_type = distribution_type
+        self.distribution_kwargs = distribution_kwargs
         self.is_orthonormal = True
 
-    def sample_indices(self, num_samples: int) -> torch.Tensor:
-        """Sample Fourier atom indices from the geometric prior.
+    # ── Distribution helpers ───────────────────────────────────────────────
 
-        For each dimension, the frequency magnitude is drawn from a Geometric
-        distribution with parameter ``index_geom_p``, and the sign (cosine vs.
-        sine) is chosen uniformly: positive index → cosine, negative → sine.
+    def _sample_1d_magnitudes(self, num_samples: int) -> torch.Tensor:
+        """Sample frequency magnitudes (non-negative integers) for one dimension."""
+        if self.distribution_type == "geometric":
+            p = self.distribution_kwargs["p"]
+            return torch.distributions.Geometric(p).sample((num_samples,)).long()
+        elif self.distribution_type == "zeta":
+            a = self.distribution_kwargs["a"]
+            # scipy.stats.zipf(a) is the Zeta distribution; rvs() returns 1,2,3,...
+            # subtract 1 to shift support to 0,1,2,...
+            samples = scipy.stats.zipf(a).rvs(num_samples) - 1
+            return torch.from_numpy(samples).long()
+        else:
+            raise ValueError(f"Unknown distribution_type: {self.distribution_type!r}")
+
+    def _1d_pmf(self, mag: torch.Tensor) -> torch.Tensor:
+        """Return P(|k_d|=m) for each magnitude m (non-negative integer tensor)."""
+        if self.distribution_type == "geometric":
+            p = self.distribution_kwargs["p"]
+            mag_f = mag.float()
+            return p * (1.0 - p) ** mag_f
+        elif self.distribution_type == "zeta":
+            a = self.distribution_kwargs["a"]
+            zeta_a = scipy.special.zeta(a, 1)  # Riemann ζ(a)
+            mag_f = mag.float()
+            return (mag_f + 1.0) ** (-a) / zeta_a
+        else:
+            raise ValueError(f"Unknown distribution_type: {self.distribution_type!r}")
+
+    def _compute_M_bound(self, tail_probability: float) -> int:
+        """Upper bound on frequency magnitude for high-probability indices.
+
+        Returns M such that any index with all |k_d| <= M may have
+        probability >= tail_probability; any with some |k_d| > M cannot.
+        """
+        if self.distribution_type == "geometric":
+            p = self.distribution_kwargs["p"]
+            pd = p ** self.domain_dim
+            if pd > 2.0 * tail_probability:
+                return int(math.log(pd / (2.0 * tail_probability)) / math.log(1.0 / (1.0 - p)))
+            return 0
+        elif self.distribution_type == "zeta":
+            a = self.distribution_kwargs["a"]
+            zeta_a = scipy.special.zeta(a, 1)
+            # max joint prob when all other dims at m=0: (1/ζ(a))^{d-1} * (M+1)^{-a} / (2*ζ(a))
+            # set equal to tail_probability and solve for M
+            # (M+1) = (1 / (2 * tail_probability * ζ(a)^d))^{1/a}
+            denom = 2.0 * tail_probability * (zeta_a ** self.domain_dim)
+            if denom < 1.0:
+                return int((1.0 / denom) ** (1.0 / a) - 1)
+            return 0
+        else:
+            raise ValueError(f"Unknown distribution_type: {self.distribution_type!r}")
+
+    def sample_indices(self, num_samples: int) -> torch.Tensor:
+        """Sample Fourier atom indices from the configured prior.
+
+        For each dimension, the frequency magnitude is drawn from the
+        configured distribution, and the sign (cosine vs. sine) is chosen
+        uniformly: positive index → cosine, negative → sine.
 
         Args:
             num_samples: Number of indices to sample.
@@ -57,15 +120,9 @@ class FourierDictionary(InfiDictionary):
         """
         idx = torch.zeros((num_samples, self.domain_dim), dtype=torch.long)
         for d in range(self.domain_dim):
-            # sample num_samples from a geometric distribution with p = self.index_geom_p
-            geom_samples = torch.distributions.Geometric(self.index_geom_p).sample((num_samples,))
-            # randomly assign half of the samples to be sine and half to be cosine
+            magnitudes = self._sample_1d_magnitudes(num_samples)
             kind_samples = torch.randint(0, 2, (num_samples,))
-            idx[:, d] = torch.where(
-                kind_samples == 0,
-                geom_samples,
-                - geom_samples,
-            )
+            idx[:, d] = torch.where(kind_samples == 0, magnitudes, -magnitudes)
         return idx
 
     def get_atoms(
@@ -106,11 +163,9 @@ class FourierDictionary(InfiDictionary):
     def get_index_pmfs(self, idx: torch.Tensor) -> torch.Tensor:
         """Prior probability p(k) for each signed frequency multi-index.
 
-        For each dimension ``d``:
-            ``P(k_d = 0)   = p``
-            ``P(k_d = ±m)  = p * (1-p)^m / 2``  for ``m > 0``,
-        where ``p = index_geom_p``.  The joint probability is the product
-        across dimensions.
+        The signed-index convention: ``P(k_d=0) = P_1d(0)``,
+        ``P(k_d=±m) = P_1d(m) / 2`` for m > 0.  The joint probability is
+        the product across dimensions.
 
         Args:
             idx: Signed frequency multi-indices, shape ``(A, domain_dim)``.
@@ -118,29 +173,20 @@ class FourierDictionary(InfiDictionary):
         Returns:
             Probability tensor of shape ``(A,)``.
         """
-        p = self.index_geom_p
         proba = torch.ones(idx.shape[0], device=idx.device, dtype=torch.float)
         for d in range(self.domain_dim):
-            k_d = idx[:, d].float()
-            mag = k_d.abs()
-            p_d = torch.where(
-                mag == 0,
-                torch.full_like(mag, p),
-                0.5 * p * (1.0 - p) ** mag,
-            )
+            mag = idx[:, d].abs()
+            p_1d = self._1d_pmf(mag)
+            p_d = torch.where(mag == 0, p_1d, 0.5 * p_1d)
             proba = proba * p_d
         return proba
 
     def get_high_probability_indices(self, tail_probability: float) -> torch.Tensor:
         """Return all multi-indices whose prior probability meets the threshold.
 
-        Derives a tight bound ``M`` on the per-dimension frequency magnitude
-        that any high-probability index can have, enumerates the
-        ``[-M, M]^d`` grid, and filters by exact probability.
-
-        The bound follows from requiring
-        ``p^d * (1-p)^M / 2 >= tail_probability``, giving
-        ``M = floor( log(p^d / (2 * tail_probability)) / log(1/(1-p)) )``.
+        Derives a conservative bound ``M`` on per-dimension frequency magnitude
+        via :meth:`_compute_M_bound`, enumerates the ``[-M, M]^d`` grid, and
+        filters by exact probability.
 
         Args:
             tail_probability: Minimum probability threshold.
@@ -148,13 +194,7 @@ class FourierDictionary(InfiDictionary):
         Returns:
             Integer tensor of shape ``(A, domain_dim)``.
         """
-        p = self.index_geom_p
-        pd = p ** self.domain_dim
-        if pd > 2.0 * tail_probability:
-            M = int(math.log(pd / (2.0 * tail_probability)) / math.log(1.0 / (1.0 - p)))
-        else:
-            M = 0
-
+        M = self._compute_M_bound(tail_probability)
         vals = torch.arange(-M, M + 1)
         grids = torch.meshgrid(*[vals for _ in range(self.domain_dim)], indexing='ij')
         idx = torch.stack(grids, dim=-1).view(-1, self.domain_dim)
@@ -190,8 +230,11 @@ class FourierDictionary(InfiDictionary):
         Returns:
             Probability tensor of shape ``(2*nyquist+1, 2*nyquist+1)``.
         """
-        single_tensor = self.index_geom_p * (1.0 - self.index_geom_p) ** torch.arange(0, nyquist + 1)
-        single_tensor = single_tensor / (1 - (1 - self.index_geom_p) ** (nyquist + 1))
+        if self.distribution_type != "geometric":
+            raise ValueError(f"Unsupported distribution type: {self.distribution_type}")
+        geom_p = self.distribution_kwargs["p"]
+        single_tensor = geom_p * (1.0 - geom_p) ** torch.arange(0, nyquist + 1)
+        single_tensor = single_tensor / (1 - (1 - geom_p) ** (nyquist + 1))
 
         # now do a tensor product to get d_dimensional weights
         weights = torch.ones(*[(nyquist+1) for _ in range(self.domain_dim)], device=single_tensor.device, dtype=single_tensor.dtype) # (nyquist, nyquist, ...)
