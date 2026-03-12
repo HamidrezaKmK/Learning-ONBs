@@ -92,7 +92,7 @@ def train(
                 tgt_field=vals_centered,
                 **pullback_pushforward_kwargs,
             )
-            energy = initial_dictionary.estimate_captured_energy(
+            energy = initial_dictionary.monte_carlo_captured_energy(
                 coords=src_coords,
                 logabsdet=src_logabsdet,
                 values=vals_pulled_back,

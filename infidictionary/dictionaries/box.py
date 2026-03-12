@@ -3,7 +3,6 @@ import torch
 import math
 
 from .base import InfiDictionary
-from infidictionary.utils import pairwise_inner_product
 
 class BoxDictionary(InfiDictionary):
     """Dictionary of axis-aligned box (indicator) functions on the unit hypercube.
@@ -83,33 +82,38 @@ class BoxDictionary(InfiDictionary):
             vals *= box_component[:, :, None] # (A, N_coords, 1) broadcast to (A, N_coords, C)
         return vals * math.sqrt(self.resolution ** self.domain_dim) / math.sqrt(self.num_channels) # shape (A, N_coords)
 
-    def estimate_captured_energy(
-        # TODO: check if I need to do the reconstruction trick or not
-        self,
-        coords: torch.Tensor, # (N, d)
-        logabsdet: torch.Tensor, # (N, )
-        values: torch.Tensor, # (B, N, C)
-        num_samples: int,
-    ) -> torch.Tensor: # (B, )
-        """Estimate captured energy via Monte Carlo over uniformly sampled atoms.
+    def get_index_pmfs(self, idx: torch.Tensor) -> torch.Tensor:
+        """Return the uniform prior probability for each index.
 
-        Approximates ``E_k[|<f, phi_k>|^2]`` by drawing ``num_samples`` atoms
-        uniformly at random and averaging their squared inner products with each
-        function in the batch.
+        All ``resolution^d`` atoms are equally likely, so every index receives
+        probability ``1 / resolution^d``.
 
         Args:
-            coords: Quadrature points, shape ``(N, d)``.
-            logabsdet: Log absolute value of the measure Jacobian, shape ``(N,)``.
-            values: Function values at quadrature points, shape ``(B, N, C)``.
-            num_samples: Number of atoms to sample for the Monte Carlo estimate.
+            idx: Cell multi-indices, shape ``(A, domain_dim)``.
 
         Returns:
-            Per-function energy estimate, shape ``(B,)``.
+            Probability tensor of shape ``(A,)``, all equal to
+            ``1 / resolution^domain_dim``.
         """
-        idx = self.sample_indices(num_samples).to(coords.device) # (A, ...)
-        atoms = self.get_atoms(coords, idx) # (A, N, C)
-        energy = pairwise_inner_product(values, atoms, logabsdet) ** 2 # (B, A)
-        return energy.sum(dim=-1) / num_samples
+        uniform_pmf = 1.0 / (self.resolution ** self.domain_dim)
+        return torch.full((idx.shape[0],), uniform_pmf, dtype=torch.float)
+
+    def get_high_probability_indices(self, tail_probability: float) -> torch.Tensor:
+        """Return all indices if the uniform PMF meets the threshold, else none.
+
+        Since all atoms are equally likely with probability ``1 / resolution^d``,
+        either all indices exceed the threshold or none do.
+
+        Args:
+            tail_probability: Minimum probability threshold.
+
+        Returns:
+            All ``resolution^d`` indices if ``1/resolution^d >= tail_probability``,
+            otherwise an empty tensor of shape ``(0, domain_dim)``.
+        """
+        if 1.0 / (self.resolution ** self.domain_dim) >= tail_probability:
+            return self.get_truncated_indices(self.resolution)
+        return torch.zeros((0, self.domain_dim), dtype=torch.long)
 
     def get_truncated_indices(self, num_truncated: int):
         """Return the first ``num_truncated^d`` box indices on a regular grid.

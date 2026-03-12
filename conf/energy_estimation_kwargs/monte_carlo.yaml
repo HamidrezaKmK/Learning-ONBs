@@ -1,3 +1,2 @@
-method: monte_carlo
 num_tail_samples: 128
 tail_probability: 1.0e-4

@@ -1,4 +1,3 @@
-from typing import Literal
 from sklearn.naive_bayes import abstractmethod
 import torch
 import math
@@ -105,7 +104,13 @@ class FourierDictionary(InfiDictionary):
         return vals / math.sqrt(self.num_channels) # shape (A, N_coords)
 
     def get_index_pmfs(self, idx: torch.Tensor) -> torch.Tensor:
-        """Compute the prior probability p(k) for each multi-index.
+        """Prior probability p(k) for each signed frequency multi-index.
+
+        For each dimension ``d``:
+            ``P(k_d = 0)   = p``
+            ``P(k_d = ±m)  = p * (1-p)^m / 2``  for ``m > 0``,
+        where ``p = index_geom_p``.  The joint probability is the product
+        across dimensions.
 
         Args:
             idx: Signed frequency multi-indices, shape ``(A, domain_dim)``.
@@ -118,7 +123,6 @@ class FourierDictionary(InfiDictionary):
         for d in range(self.domain_dim):
             k_d = idx[:, d].float()
             mag = k_d.abs()
-            # P(k_d=0) = p;  P(k_d=±m) = p*(1-p)^m / 2  for m > 0
             p_d = torch.where(
                 mag == 0,
                 torch.full_like(mag, p),
@@ -128,93 +132,35 @@ class FourierDictionary(InfiDictionary):
         return proba
 
     def get_high_probability_indices(self, tail_probability: float) -> torch.Tensor:
-        """Return all multi-indices whose prior probability exceeds a threshold.
+        """Return all multi-indices whose prior probability meets the threshold.
 
-        Enumerates a grid large enough to contain every index ``k`` satisfying
-        ``p(k) >= tail_probability`` and filters by the exact probability.  The
-        grid bound is derived analytically: for a single dimension, the maximum
-        frequency magnitude ``M`` that can appear is
+        Derives a tight bound ``M`` on the per-dimension frequency magnitude
+        that any high-probability index can have, enumerates the
+        ``[-M, M]^d`` grid, and filters by exact probability.
 
-            ``M = floor( log(p^d / (2 * tail_probability)) / log(1 / (1-p)) )``
-
-        where ``d`` is the domain dimension and ``p = index_geom_p``.
+        The bound follows from requiring
+        ``p^d * (1-p)^M / 2 >= tail_probability``, giving
+        ``M = floor( log(p^d / (2 * tail_probability)) / log(1/(1-p)) )``.
 
         Args:
             tail_probability: Minimum probability threshold.
 
         Returns:
-            Integer tensor of shape ``(A, domain_dim)`` containing every index
-            with ``p(k) >= tail_probability``.
+            Integer tensor of shape ``(A, domain_dim)``.
         """
         p = self.index_geom_p
         pd = p ** self.domain_dim
         if pd > 2.0 * tail_probability:
             M = int(math.log(pd / (2.0 * tail_probability)) / math.log(1.0 / (1.0 - p)))
         else:
-            M = 0  # only the zero-frequency index can contribute
+            M = 0
 
         vals = torch.arange(-M, M + 1)
         grids = torch.meshgrid(*[vals for _ in range(self.domain_dim)], indexing='ij')
-        idx = torch.stack(grids, dim=-1).view(-1, self.domain_dim)  # ((2M+1)^d, d)
-        probas = self.get_index_pmfs(idx)
-        return idx[probas >= tail_probability]  # (A_exact, d)
+        idx = torch.stack(grids, dim=-1).view(-1, self.domain_dim)
+        return idx[self.get_index_pmfs(idx) >= tail_probability]
 
-    def monte_carlo_captured_energy(
-        self,
-        coords: torch.Tensor, # (N, d)
-        logabsdet: torch.Tensor, # (N, )
-        values: torch.Tensor, # (B, N, C)
-        num_tail_samples: int,
-        tail_probability: float = 1e-4,
-    ) -> torch.Tensor: # (B, )
-        """Estimate captured energy with a stratified (low-variance) estimator.
-
-        Splits the sum ``E_k[|<f, phi_k>|^2]`` into two strata:
-
-        * **Exact stratum**: all indices with ``p(k) >= tail_probability``,
-          computed analytically — zero variance.  This naturally captures
-          axis-aligned high-frequency terms like ``(0, k)`` that a naive
-          Nyquist cutoff would miss.
-        * **MC tail stratum**: indices with ``p(k) < tail_probability``,
-          estimated by drawing ``num_tail_samples`` indices from the full prior
-          and discarding those already covered by the exact stratum.
-
-        Args:
-            coords: Quadrature points, shape ``(N, d)``.
-            logabsdet: Log absolute value of the measure Jacobian, shape ``(N,)``.
-            values: Function values at quadrature points, shape ``(B, N, C)``.
-            num_tail_samples: Number of index draws for the MC tail estimator.
-            tail_probability: Probability threshold separating the exact and MC
-                strata (default ``1e-4``).
-
-        Returns:
-            Per-function energy estimate, shape ``(B,)``.
-        """
-        # ── exact high-probability stratum ────────────────────────────────────
-        idx_exact = self.get_high_probability_indices(tail_probability).to(coords.device)
-        atoms_exact = self.get_atoms(coords, idx_exact)                          # (A_exact, N, C)
-        coeffs_exact = pairwise_inner_product(values, atoms_exact, logabsdet)    # (B, A_exact)
-        probas_exact = self.get_index_pmfs(idx_exact)                             # (A_exact,)
-        energy_exact = (coeffs_exact ** 2 * probas_exact[None, :]).sum(dim=-1)  # (B,)
-
-        # ── MC tail stratum  (p(k) < tail_probability) ───────────────────────
-        idx_all = self.sample_indices(num_tail_samples).to(coords.device)   # (S, d)
-        # reject any sample already covered by the exact stratum
-        in_exact = (idx_all[:, None, :] == idx_exact[None, :, :]).all(dim=-1).any(dim=-1)
-        idx_tail = idx_all[~in_exact]                                        # (S_tail, d)
-
-        if idx_tail.shape[0] == 0:
-            return energy_exact
-
-        idx_tail_u, idx_tail_c = torch.unique(idx_tail, return_counts=True, dim=0)
-        atoms_tail = self.get_atoms(coords, idx_tail_u)                          # (A_tail, N, C)
-        coeffs_tail = pairwise_inner_product(values, atoms_tail, logabsdet)      # (B, A_tail)
-        # empirical count / num_tail_samples  →  unbiased for sum_{tail k} p(k)*c_k^2
-        energy_tail = (coeffs_tail ** 2 * idx_tail_c[None, :]).sum(dim=-1) / num_tail_samples
-
-        return energy_exact + energy_tail
-
-    # # Low-variance but truncated alternative (nyquist=4, no tail MC):
+    # Low-variance but truncated alternative (nyquist=4, no tail MC):
     # def monte_carlo_captured_energy(self, coords, logabsdet, values, num_tail_samples, tail_probability=1e-4):
     #     idx = self.get_truncated_indices(5).to(coords.device)  # (A, 2), unique by construction
     #     atoms = self.get_atoms(coords, idx)  # (A, N, C)
@@ -307,37 +253,6 @@ class FourierDictionary(InfiDictionary):
         # energy_normalized = energy / nyquist
         return energy if not return_dft else (energy, dft, all_probas)
 
-    def estimate_captured_energy(
-        # TODO: check if I need to do the reconstruction trick or not
-        self,
-        coords: torch.Tensor, # (N, d)
-        logabsdet: torch.Tensor, # (N, )
-        values: torch.Tensor, # (B, N, C)
-        method: Literal['monte_carlo', 'nufft'],
-        *args,
-        **kwargs,
-    ) -> torch.Tensor: # (B, )
-        """Dispatch to the requested energy estimation method.
-
-        Args:
-            coords: Quadrature points, shape ``(N, d)``.
-            logabsdet: Log absolute value of the measure Jacobian, shape ``(N,)``.
-            values: Function values at quadrature points, shape ``(B, N, C)``.
-            method: ``'monte_carlo'`` for :meth:`monte_carlo_captured_energy`,
-                ``'nufft'`` for :meth:`nufft_captured_energy`.
-            *args: Forwarded to the selected method.
-            **kwargs: Forwarded to the selected method.
-
-        Returns:
-            Per-function energy estimate, shape ``(B,)``.
-        """
-        if method == 'nufft' and coords.shape[1] == 2:
-            return self.nufft_captured_energy(coords, logabsdet, values, *args, **kwargs)
-        elif method == 'monte_carlo':
-            return self.monte_carlo_captured_energy(coords, logabsdet, values, *args, **kwargs)
-        else:
-            raise ValueError("Unknown or incompatible energy estimation method.")
-            
     def get_truncated_indices(self, num_truncated: int) -> torch.Tensor:
         """Return all Fourier multi-indices within a frequency band.
 
@@ -357,5 +272,3 @@ class FourierDictionary(InfiDictionary):
             dim=-1,
         ).view(-1, self.domain_dim)
         return grid
-
-    # TODO: add a nufft based reconstruction scheme maybe?

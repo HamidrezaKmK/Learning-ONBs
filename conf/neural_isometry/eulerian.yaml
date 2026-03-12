@@ -1,5 +1,5 @@
 defaults:
-  - /neural_fields@scalar_field_partial: factored # TODO 
+  - /neural_fields@scalar_field_partial: factored
   - _self_
 
 _target_: infidictionary.neural_isometries.EulerianIsometry
