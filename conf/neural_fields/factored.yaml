@@ -3,8 +3,8 @@ _target_: infidictionary.utils.FactoredTimeEvolvingField
 
 spatial_hidden_dims:
   - 256
-  - 256
-  - 256
+  # - 256
+  # - 256
   - 256
 time_hidden_dims:
   - 256
@@ -14,8 +14,8 @@ use_fourier_features: true
 n_fourier_features: 64
 fourier_sigma: 10.0
 n_time_freqs: 8
-norm_mode: running_ema   # or "instantaneous"
-norm_momentum: 0.1
+post_combination_dims:
+  - 64
 activation:
   _target_: torch.nn.ReLU
   _partial_: true

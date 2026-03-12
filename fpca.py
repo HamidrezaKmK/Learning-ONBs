@@ -46,6 +46,7 @@ def train(
     pullback_pushforward_kwargs: dict,
     checkpointer: Checkpointer | None,
     checkpoint: dict | None,
+    max_grad_norm: float | None = None,
 ):
     neural_isometry = neural_isometry.to(device)
     optim_isometry.zero_grad()
@@ -65,13 +66,12 @@ def train(
         if epoch_i < start_epoch:
             continue
 
-        neural_isometry.shuffle_model_state(**model_state_kwargs)
         energy_history_temp = []
         mean_function_mse_history_temp = []
-
         mean_function_frozen = n_epochs_mean_function is not None and epoch_i >= n_epochs_mean_function
-
+        f_gen.reset_buffer()
         for _ in range(grad_accumulation_steps):
+            neural_isometry.shuffle_model_state(**model_state_kwargs)
             coords, vals = f_gen.get_batch(batch_size)
             coords = coords.to(device)  # shape (N, d)
             vals = vals.to(device)      # shape (B, N, C)
@@ -118,6 +118,8 @@ def train(
             wandb.log({"train/avg_lr_isometry": get_avg_lr(optim_isometry)}, step=epoch_i)
 
         pbar.set_postfix({'energy': energy_item, 'mean_function_mse': mean_mse_item})
+        if max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(neural_isometry.parameters(), max_grad_norm)
         optim_isometry.step()
         if not mean_function_frozen:
             optim_mean_function.step()
@@ -241,6 +243,7 @@ def main(conf: DictConfig):
         wandb_enabled=conf.wandb.enabled,
         checkpointer=checkpointer,
         checkpoint=checkpoint,
+        max_grad_norm=conf.get("max_grad_norm", None),
     )
 
     if conf.wandb.enabled:

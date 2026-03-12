@@ -33,8 +33,9 @@ wandb:
 # training hyperparameters
 n_epochs: 500000
 n_epochs_mean_function: null  # freeze mean function after this many epochs (null = never)
-batch_size: 128
+batch_size: 16
 grad_accumulation_steps: 1
+max_grad_norm: 1.0
 
 resume_training:
   enabled: false

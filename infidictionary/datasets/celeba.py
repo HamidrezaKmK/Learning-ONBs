@@ -68,9 +68,23 @@ class CelebADataset(IrregularDataset):
 
         self.images = torch.stack(signals, dim=0).to(self.device)  # (n_images, N, 3)
 
+    def reset_buffer(self) -> None:
+        """Shuffle the image order and reset the cyclic pointer.
+
+        Call this once before a gradient-accumulation loop so that successive
+        get_batch calls draw non-overlapping subsets of images.  The buffer
+        wraps around automatically when exhausted.
+        """
+        self._buffer = torch.randperm(self.n_images, device=self.device)
+        self._buffer_ptr = 0
+
     def get_batch(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Sample `batch_size` images and a random irregular subset of pixels.
+
+        Image selection uses the cyclic buffer set by reset_buffer() when
+        available, ensuring non-overlapping draws across accumulation steps.
+        Falls back to random sampling if reset_buffer() has never been called.
 
         Returns:
             coords : (N', 2)    — randomly subsampled pixel coordinates
@@ -83,12 +97,17 @@ class CelebADataset(IrregularDataset):
         keep_idx = torch.randperm(N_full, device=self.device)[:self.n_keep]
         coords = self._full_coords[keep_idx]          # (N', 2)
 
-        # Random image subset
-        if batch_size <= self.n_images:
+        # Image selection: cycle through buffer without overlap when available
+        if hasattr(self, '_buffer'):
+            if self._buffer_ptr + batch_size > self.n_images:
+                self.reset_buffer()   # wrap around
+            img_idx = self._buffer[self._buffer_ptr : self._buffer_ptr + batch_size]
+            self._buffer_ptr += batch_size
+        elif batch_size <= self.n_images:
             img_idx = torch.randperm(self.n_images, device=self.device)[:batch_size]
         else:
             img_idx = torch.randint(self.n_images, (batch_size,), device=self.device)
-
+        
         images = self.images[img_idx][:, keep_idx, :]  # (B, N', 3)
 
         return coords, images

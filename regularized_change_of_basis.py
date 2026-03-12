@@ -41,6 +41,7 @@ def reg_change_of_basis(
     checkpoint: dict | None,
     reg_lambda: float = 1.0,
     fidelity_lambda: float = 1.0,
+    max_grad_norm: float | None = None,
 ):
     neural_isometry = neural_isometry.to(device)
     optim_isometry.zero_grad()
@@ -55,12 +56,12 @@ def reg_change_of_basis(
         if epoch_i < start_epoch:
             continue
 
-        neural_isometry.shuffle_model_state(**model_state_kwargs)
         coords = domain_sampler.sample(domain_sample_size).to(device)  # (N, d)
         fidelity_history_temp = []
         reg_energy_history_temp = []
 
         for _ in range(grad_accumulation_steps):
+            neural_isometry.shuffle_model_state(**model_state_kwargs)
             # sample atom indices from the dictionary's own prior distribution
             atom_indices = initial_dictionary.sample_indices(atom_index_batch_size).to(device)
             unique_atom_indices, inverse_indices = torch.unique(atom_indices, dim=0, return_inverse=True)
@@ -87,6 +88,9 @@ def reg_change_of_basis(
         fidelity_item = sum(fidelity_history_temp) / len(fidelity_history_temp)
         reg_energy_item = sum(reg_energy_history_temp) / len(reg_energy_history_temp)
         energy_item = fidelity_lambda * fidelity_item + reg_lambda * reg_energy_item
+
+        if max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(neural_isometry.parameters(), max_grad_norm)
 
         if wandb_enabled:
             wandb.log({"train/fidelity": fidelity_item}, step=epoch_i)
@@ -203,6 +207,7 @@ def main(conf: DictConfig):
         checkpoint=checkpoint,
         reg_lambda=conf.reg_lambda,
         fidelity_lambda=conf.fidelity_lambda,
+        max_grad_norm=conf.get("max_grad_norm", None),
     )
 
     if conf.wandb.enabled:

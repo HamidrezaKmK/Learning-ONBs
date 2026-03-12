@@ -104,36 +104,125 @@ class FourierDictionary(InfiDictionary):
             vals *= component[:, :, None] # (A, N_coords, 1) broadcast to (A, N_coords, C)
         return vals / math.sqrt(self.num_channels) # shape (A, N_coords)
 
+    def get_index_pmfs(self, idx: torch.Tensor) -> torch.Tensor:
+        """Compute the prior probability p(k) for each multi-index.
+
+        Args:
+            idx: Signed frequency multi-indices, shape ``(A, domain_dim)``.
+
+        Returns:
+            Probability tensor of shape ``(A,)``.
+        """
+        p = self.index_geom_p
+        proba = torch.ones(idx.shape[0], device=idx.device, dtype=torch.float)
+        for d in range(self.domain_dim):
+            k_d = idx[:, d].float()
+            mag = k_d.abs()
+            # P(k_d=0) = p;  P(k_d=±m) = p*(1-p)^m / 2  for m > 0
+            p_d = torch.where(
+                mag == 0,
+                torch.full_like(mag, p),
+                0.5 * p * (1.0 - p) ** mag,
+            )
+            proba = proba * p_d
+        return proba
+
+    def get_high_probability_indices(self, tail_probability: float) -> torch.Tensor:
+        """Return all multi-indices whose prior probability exceeds a threshold.
+
+        Enumerates a grid large enough to contain every index ``k`` satisfying
+        ``p(k) >= tail_probability`` and filters by the exact probability.  The
+        grid bound is derived analytically: for a single dimension, the maximum
+        frequency magnitude ``M`` that can appear is
+
+            ``M = floor( log(p^d / (2 * tail_probability)) / log(1 / (1-p)) )``
+
+        where ``d`` is the domain dimension and ``p = index_geom_p``.
+
+        Args:
+            tail_probability: Minimum probability threshold.
+
+        Returns:
+            Integer tensor of shape ``(A, domain_dim)`` containing every index
+            with ``p(k) >= tail_probability``.
+        """
+        p = self.index_geom_p
+        pd = p ** self.domain_dim
+        if pd > 2.0 * tail_probability:
+            M = int(math.log(pd / (2.0 * tail_probability)) / math.log(1.0 / (1.0 - p)))
+        else:
+            M = 0  # only the zero-frequency index can contribute
+
+        vals = torch.arange(-M, M + 1)
+        grids = torch.meshgrid(*[vals for _ in range(self.domain_dim)], indexing='ij')
+        idx = torch.stack(grids, dim=-1).view(-1, self.domain_dim)  # ((2M+1)^d, d)
+        probas = self.get_index_pmfs(idx)
+        return idx[probas >= tail_probability]  # (A_exact, d)
+
     def monte_carlo_captured_energy(
         self,
         coords: torch.Tensor, # (N, d)
         logabsdet: torch.Tensor, # (N, )
         values: torch.Tensor, # (B, N, C)
-        num_samples: int,
+        num_tail_samples: int,
+        tail_probability: float = 1e-4,
     ) -> torch.Tensor: # (B, )
-        """Estimate captured energy via Monte Carlo over the geometric index prior.
+        """Estimate captured energy with a stratified (low-variance) estimator.
 
-        Samples ``num_samples`` indices from the geometric prior, deduplicates
-        them, computes squared inner products, and weights each by its empirical
-        count before averaging.  This gives an unbiased estimate of
-        ``E_k[|<f, phi_k>|^2]`` under the sampling distribution.
+        Splits the sum ``E_k[|<f, phi_k>|^2]`` into two strata:
+
+        * **Exact stratum**: all indices with ``p(k) >= tail_probability``,
+          computed analytically — zero variance.  This naturally captures
+          axis-aligned high-frequency terms like ``(0, k)`` that a naive
+          Nyquist cutoff would miss.
+        * **MC tail stratum**: indices with ``p(k) < tail_probability``,
+          estimated by drawing ``num_tail_samples`` indices from the full prior
+          and discarding those already covered by the exact stratum.
 
         Args:
             coords: Quadrature points, shape ``(N, d)``.
             logabsdet: Log absolute value of the measure Jacobian, shape ``(N,)``.
             values: Function values at quadrature points, shape ``(B, N, C)``.
-            num_samples: Total number of index draws (before deduplication).
+            num_tail_samples: Number of index draws for the MC tail estimator.
+            tail_probability: Probability threshold separating the exact and MC
+                strata (default ``1e-4``).
 
         Returns:
             Per-function energy estimate, shape ``(B,)``.
         """
-        idx = self.sample_indices(num_samples).to(coords.device) # (A, ...)
-        idx_unique, idx_counts = torch.unique(idx, return_counts=True, dim=0)
-        atoms = self.get_atoms(coords, idx_unique) # (A_unique, N, C)
-        coefficients = pairwise_inner_product(values, atoms, logabsdet) # (B, A_unique)
-        energy = coefficients ** 2 * idx_counts[None, :] # (B, A_unique)
-        avg_energy = energy.sum(dim=-1) / num_samples # (B, )
-        return avg_energy
+        # ── exact high-probability stratum ────────────────────────────────────
+        idx_exact = self.get_high_probability_indices(tail_probability).to(coords.device)
+        atoms_exact = self.get_atoms(coords, idx_exact)                          # (A_exact, N, C)
+        coeffs_exact = pairwise_inner_product(values, atoms_exact, logabsdet)    # (B, A_exact)
+        probas_exact = self.get_index_pmfs(idx_exact)                             # (A_exact,)
+        energy_exact = (coeffs_exact ** 2 * probas_exact[None, :]).sum(dim=-1)  # (B,)
+
+        # ── MC tail stratum  (p(k) < tail_probability) ───────────────────────
+        idx_all = self.sample_indices(num_tail_samples).to(coords.device)   # (S, d)
+        # reject any sample already covered by the exact stratum
+        in_exact = (idx_all[:, None, :] == idx_exact[None, :, :]).all(dim=-1).any(dim=-1)
+        idx_tail = idx_all[~in_exact]                                        # (S_tail, d)
+
+        if idx_tail.shape[0] == 0:
+            return energy_exact
+
+        idx_tail_u, idx_tail_c = torch.unique(idx_tail, return_counts=True, dim=0)
+        atoms_tail = self.get_atoms(coords, idx_tail_u)                          # (A_tail, N, C)
+        coeffs_tail = pairwise_inner_product(values, atoms_tail, logabsdet)      # (B, A_tail)
+        # empirical count / num_tail_samples  →  unbiased for sum_{tail k} p(k)*c_k^2
+        energy_tail = (coeffs_tail ** 2 * idx_tail_c[None, :]).sum(dim=-1) / num_tail_samples
+
+        return energy_exact + energy_tail
+
+    # # Low-variance but truncated alternative (nyquist=4, no tail MC):
+    # def monte_carlo_captured_energy(self, coords, logabsdet, values, num_tail_samples, tail_probability=1e-4):
+    #     idx = self.get_truncated_indices(5).to(coords.device)  # (A, 2), unique by construction
+    #     atoms = self.get_atoms(coords, idx)  # (A, N, C)
+    #     coefficients = pairwise_inner_product(values, atoms, logabsdet)  # (B, A)
+    #     nyquist = int(idx.abs().max().item())  # = 4
+    #     probas = self.compute_grid_probas(nyquist=nyquist).to(coords.device)  # (2*nyquist+1, 2*nyquist+1)
+    #     atom_probas = probas[idx[:, 0] + nyquist, idx[:, 1] + nyquist]  # (A,)
+    #     return (coefficients ** 2 * atom_probas[None, :]).sum(dim=-1)  # (B,)
 
     def compute_grid_probas(self, nyquist: int) -> torch.Tensor:
         """Compute per-frequency PMF weights on the ``(2*nyquist+1)^2`` DFT grid.

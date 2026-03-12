@@ -36,7 +36,7 @@ class EulerianIsometry(NeuralIsometry):
         N = values.shape[1]
         t1_batch = torch.ones(N, device=device, dtype=dtype) * t
         v = self.function_field(t1_batch, coords)  # (N, C)
-        v = v / torch.sqrt(norm2(v, logabsdet)).unsqueeze(-1) # (N, C)
+        v = v / torch.sqrt(norm2(v, logabsdet).clamp(min=1e-8)).unsqueeze(-1) # (N, C)
         inner_products = pairwise_inner_product(values, v, logabsdet) # (B, )
         interim = torch.einsum("b,nc->bnc", inner_products, v) # (B, N, C)
         values = values - 2 * interim # (B, N, C)

@@ -26,3 +26,5 @@ model_state_kwargs:
   num_steps: 200
 
 n_epochs: 500000
+
+max_grad_norm: 1.0

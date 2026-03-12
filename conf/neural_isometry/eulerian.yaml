@@ -1,20 +1,9 @@
+defaults:
+  - /neural_fields@scalar_field_partial: factored # TODO 
+  - _self_
+
 _target_: infidictionary.neural_isometries.EulerianIsometry
 coords_dim: 2
 channels_dim: 1
 scalar_field_partial:
-  _target_: infidictionary.utils.TimeEvolvingField
   _partial_: true
-  base_field_partial:
-    _target_: infidictionary.utils.HybridNeuralField
-    _partial_: true
-    n_features: 64
-    sigma: 10.0
-    ff_hidden_dims:
-      - 256
-      - 256
-    mlp_hidden_dims:
-      - 256
-      - 256
-    activation:
-      _target_: torch.nn.ReLU
-      _partial_: true
