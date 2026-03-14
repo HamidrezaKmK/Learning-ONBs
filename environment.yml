@@ -30,3 +30,6 @@ dependencies:
       - torchdiffeq
       - pytorch-finufft
       - cufinufft
+      - scikit-learn
+      - datasets
+      - plotly
