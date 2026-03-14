@@ -10,19 +10,24 @@ from infidictionary.utils import pairwise_inner_product
 class FourierDictionary(InfiDictionary):
     """Dictionary of real-valued Fourier (trigonometric) atoms on the unit hypercube.
 
-    Each atom is a product of 1-D cosine or sine functions.  Atoms are indexed
-    by a ``d``-dimensional integer vector ``k = (k_1, ..., k_d)``:
+    Each atom is a product of 1-D cosine or sine functions **active in exactly
+    one output channel**, forming a complete orthonormal basis of
+    ``L^2([0,1]^d, R^C)``.
 
-    * ``k_i >= 0`` selects the cosine atom ``sqrt(2) * cos(2 pi k_i x_i)``
-      along dimension ``i`` (with the constant function ``1`` for ``k_i = 0``).
-    * ``k_i < 0``  selects the sine   atom ``sqrt(2) * sin(2 pi |k_i| x_i)``.
+    Atoms are indexed by ``(k_1, ..., k_d, c)`` where:
 
-    The resulting atoms form an orthonormal basis of ``L^2([0,1]^d, R^C)``
-    (with channel-wise normalization by ``1/sqrt(C)``).
+    * ``k_i >= 0`` selects the cosine function ``sqrt(2) * cos(2 pi k_i x_i)``
+      (constant ``1`` for ``k_i = 0``).
+    * ``k_i < 0``  selects the sine   function ``sqrt(2) * sin(2 pi |k_i| x_i)``.
+    * ``c in {0, ..., C-1}`` is the output channel index.
 
-    Atom indices are sampled from either a Geometric or Zeta (Riemann zeta)
-    distribution over frequency magnitudes, with cosine/sine sign chosen
-    uniformly at random.
+    Atom ``(k, c)`` evaluates to ``phi_k(x)`` in channel ``c`` and ``0`` in
+    all other channels.  This gives an orthonormal basis:
+    ``<phi_{k,c}, phi_{k',c'}> = delta(k,k') delta(c,c')``.
+
+    Index tensors have shape ``(A, domain_dim + 1)`` where the last column is
+    the channel index.  Spatial indices are sampled from a Geometric or Zeta
+    distribution; the channel index is sampled uniformly over ``{0,...,C-1}``.
 
     For Geometric: ``P(|k_d|=m) = p*(1-p)^m``.
     For Zeta:      ``P(|k_d|=m) = (m+1)^{-a} / ζ(a)``  (infinite support, a > 1).
@@ -81,10 +86,12 @@ class FourierDictionary(InfiDictionary):
             raise ValueError(f"Unknown distribution_type: {self.distribution_type!r}")
 
     def _compute_M_bound(self, tail_probability: float) -> int:
-        """Upper bound on frequency magnitude for high-probability indices.
+        """Upper bound on spatial frequency magnitude for high-probability indices.
 
-        Returns M such that any index with all |k_d| <= M may have
+        Returns M such that any index with all |k_d| <= M may have spatial
         probability >= tail_probability; any with some |k_d| > M cannot.
+        Pass ``tail_probability * num_channels`` when computing the bound for
+        the full joint index (k, c).
         """
         if self.distribution_type == "geometric":
             p = self.distribution_kwargs["p"]
@@ -95,9 +102,6 @@ class FourierDictionary(InfiDictionary):
         elif self.distribution_type == "zeta":
             a = self.distribution_kwargs["a"]
             zeta_a = scipy.special.zeta(a, 1)
-            # max joint prob when all other dims at m=0: (1/ζ(a))^{d-1} * (M+1)^{-a} / (2*ζ(a))
-            # set equal to tail_probability and solve for M
-            # (M+1) = (1 / (2 * tail_probability * ζ(a)^d))^{1/a}
             denom = 2.0 * tail_probability * (zeta_a ** self.domain_dim)
             if denom < 1.0:
                 return int((1.0 / denom) ** (1.0 / a) - 1)
@@ -105,127 +109,186 @@ class FourierDictionary(InfiDictionary):
         else:
             raise ValueError(f"Unknown distribution_type: {self.distribution_type!r}")
 
-    def sample_indices(self, num_samples: int) -> torch.Tensor:
-        """Sample Fourier atom indices from the configured prior.
+    # ── Core dictionary methods ────────────────────────────────────────────
 
-        For each dimension, the frequency magnitude is drawn from the
-        configured distribution, and the sign (cosine vs. sine) is chosen
-        uniformly: positive index → cosine, negative → sine.
-
-        Args:
-            num_samples: Number of indices to sample.
-
-        Returns:
-            Integer tensor of shape ``(num_samples, domain_dim)``.
-        """
-        idx = torch.zeros((num_samples, self.domain_dim), dtype=torch.long)
-        for d in range(self.domain_dim):
-            magnitudes = self._sample_1d_magnitudes(num_samples)
-            kind_samples = torch.randint(0, 2, (num_samples,))
-            idx[:, d] = torch.where(kind_samples == 0, magnitudes, -magnitudes)
-        return idx
-
-    def get_atoms(
+    def _get_spatial_atoms(
         self,
-        coords: torch.Tensor,
-        idx: torch.Tensor, # (A, domain_dim)
-    ):
-        """Evaluate Fourier atoms at the given coordinates.
+        coords: torch.Tensor,       # (N, d)
+        spatial_idx: torch.Tensor,  # (A, d)  signed frequency indices
+    ) -> torch.Tensor:              # (A, N)  scalar spatial atoms
+        """Compute scalar spatial Fourier atoms phi_k(x).
 
-        Each atom is the tensor product of 1-D basis functions across dimensions:
-        ``phi_k(x) = (1/sqrt(C)) * prod_i f_{k_i}(x_i)``, where
-        ``f_0(t) = 1``, ``f_{k>0}(t) = sqrt(2) cos(2 pi k t)``,
-        ``f_{k<0}(t) = sqrt(2) sin(2 pi |k| t)``.
-
-        Args:
-            coords: Quadrature points in ``[0, 1)^d``, shape ``(N, d)``.
-            idx: Signed frequency multi-indices, shape ``(A, domain_dim)``.
-
-        Returns:
-            Atom values, shape ``(A, N, C)``.
+        Returns the product of 1-D trig functions for each atom and coordinate,
+        without any channel or normalization factor.
         """
-        vals = torch.ones((idx.shape[0], coords.shape[0], self.num_channels), device=coords.device, dtype=coords.dtype)
+        A, N = spatial_idx.shape[0], coords.shape[0]
+        vals = torch.ones((A, N), device=coords.device, dtype=coords.dtype)
         for d in range(self.domain_dim):
-            d_idx = idx[:, d]
-            kind = d_idx >= 0 # 1 for cosine, 0 for sine
-            freq = torch.abs(d_idx).float() # (A, )
-            kt = 2.0 * math.pi * freq[:, None] * coords[:, d][None, :]   # (N_idx, N_coords)
+            d_idx = spatial_idx[:, d]
+            kind = d_idx >= 0  # True → cosine branch, False → sine branch
+            freq = torch.abs(d_idx).float()
+            kt = 2.0 * math.pi * freq[:, None] * coords[:, d][None, :]  # (A, N)
             cos_component = math.sqrt(2.0) * torch.cos(kt)
             sin_component = math.sqrt(2.0) * torch.sin(kt)
             component = torch.where(
                 d_idx[:, None] == 0,
                 torch.ones_like(cos_component),
-                torch.where(kind[:, None] == 0, cos_component, sin_component)
-            ) # (A, N_coords)
-            vals *= component[:, :, None] # (A, N_coords, 1) broadcast to (A, N_coords, C)
-        return vals / math.sqrt(self.num_channels) # shape (A, N_coords)
+                torch.where(kind[:, None] == 0, cos_component, sin_component),
+            )  # (A, N)
+            vals *= component
+        return vals  # (A, N)
 
-    def get_index_pmfs(self, idx: torch.Tensor) -> torch.Tensor:
-        """Prior probability p(k) for each signed frequency multi-index.
+    def sample_indices(self, num_samples: int) -> torch.Tensor:
+        """Sample Fourier atom indices ``(k_1,...,k_d, c)`` from the joint prior.
 
-        The signed-index convention: ``P(k_d=0) = P_1d(0)``,
-        ``P(k_d=±m) = P_1d(m) / 2`` for m > 0.  The joint probability is
-        the product across dimensions.
+        Spatial frequency magnitudes are drawn from the configured distribution;
+        the cosine/sine sign is chosen uniformly; the channel ``c`` is drawn
+        uniformly from ``{0, ..., C-1}``.
 
         Args:
-            idx: Signed frequency multi-indices, shape ``(A, domain_dim)``.
+            num_samples: Number of indices to sample.
+
+        Returns:
+            Integer tensor of shape ``(num_samples, domain_dim + 1)``.
+        """
+        spatial = torch.zeros((num_samples, self.domain_dim), dtype=torch.long)
+        for d in range(self.domain_dim):
+            magnitudes = self._sample_1d_magnitudes(num_samples)
+            sign = torch.randint(0, 2, (num_samples,))
+            spatial[:, d] = torch.where(sign == 0, magnitudes, -magnitudes)
+        channels = torch.randint(0, self.num_channels, (num_samples,))
+        return torch.cat([spatial, channels.unsqueeze(-1)], dim=-1)  # (num_samples, d+1)
+
+    def get_atoms(
+        self,
+        coords: torch.Tensor,
+        idx: torch.Tensor,  # (A, domain_dim + 1)  last col = channel
+    ) -> torch.Tensor:      # (A, N, C)
+        """Evaluate Fourier atoms at the given coordinates.
+
+        Atom ``(k, c)`` equals ``phi_k(x)`` in channel ``c`` and ``0`` in all
+        other channels, where ``phi_k`` is the product of 1-D trig functions.
+
+        Args:
+            coords: Quadrature points in ``[0, 1)^d``, shape ``(N, d)``.
+            idx: Multi-indices ``(k_1,...,k_d, c)``, shape ``(A, domain_dim+1)``.
+
+        Returns:
+            Atom values, shape ``(A, N, C)``.
+        """
+        spatial_idx = idx[:, :-1]           # (A, d)
+        channel_idx = idx[:, -1]            # (A,)
+        C = self.num_channels
+        A, N = spatial_idx.shape[0], coords.shape[0]
+
+        phi = self._get_spatial_atoms(coords, spatial_idx)  # (A, N)
+
+        vals = torch.zeros((A, N, C), device=coords.device, dtype=coords.dtype)
+        # Place phi_k(x) in channel c and leave all other channels at 0.
+        c_idx = channel_idx.clamp(0, C - 1)
+        vals.scatter_(
+            2,
+            c_idx[:, None, None].expand(A, N, 1),
+            phi.unsqueeze(-1),
+        )
+        return vals  # (A, N, C)
+
+    def get_index_pmfs(self, idx: torch.Tensor) -> torch.Tensor:
+        """Prior probability p(k, c) for each multi-index.
+
+        ``p(k, c) = p_spatial(k) / C`` where the spatial probability factors
+        across dimensions, and channel is drawn uniformly.
+
+        Signed-index convention: ``P(k_d=0) = P_1d(0)``,
+        ``P(k_d=±m) = P_1d(m) / 2`` for m > 0.
+
+        Args:
+            idx: Multi-indices ``(k_1,...,k_d, c)``, shape ``(A, domain_dim+1)``.
 
         Returns:
             Probability tensor of shape ``(A,)``.
         """
+        spatial_idx = idx[:, :-1]  # (A, d)
         proba = torch.ones(idx.shape[0], device=idx.device, dtype=torch.float)
         for d in range(self.domain_dim):
-            mag = idx[:, d].abs()
+            mag = spatial_idx[:, d].abs()
             p_1d = self._1d_pmf(mag)
             p_d = torch.where(mag == 0, p_1d, 0.5 * p_1d)
             proba = proba * p_d
-        return proba
+        return proba / self.num_channels  # uniform over channels
 
     def get_high_probability_indices(self, tail_probability: float) -> torch.Tensor:
-        """Return all multi-indices whose prior probability meets the threshold.
+        """Return all ``(k, c)`` multi-indices whose prior probability meets the threshold.
 
-        Derives a conservative bound ``M`` on per-dimension frequency magnitude
-        via :meth:`_compute_M_bound`, enumerates the ``[-M, M]^d`` grid, and
-        filters by exact probability.
+        Computes a conservative spatial M-bound (accounting for the 1/C channel
+        factor), enumerates the ``[-M, M]^d × {0,...,C-1}`` grid, and filters
+        by exact joint probability.
 
         Args:
             tail_probability: Minimum probability threshold.
 
         Returns:
-            Integer tensor of shape ``(A, domain_dim)``.
+            Integer tensor of shape ``(A, domain_dim + 1)``.
         """
-        M = self._compute_M_bound(tail_probability)
+        # p(k,c) = p_spatial(k)/C >= tail_probability  ⟺  p_spatial(k) >= C * tail_probability
+        M = self._compute_M_bound(tail_probability * self.num_channels)
         vals = torch.arange(-M, M + 1)
         grids = torch.meshgrid(*[vals for _ in range(self.domain_dim)], indexing='ij')
-        idx = torch.stack(grids, dim=-1).view(-1, self.domain_dim)
+        spatial_idx = torch.stack(grids, dim=-1).view(-1, self.domain_dim)  # (A_s, d)
+
+        # Cross with all channels
+        C = self.num_channels
+        A_s = spatial_idx.shape[0]
+        channels = torch.arange(C).unsqueeze(0).expand(A_s, -1).reshape(-1)        # (A_s*C,)
+        spatial_rep = spatial_idx.unsqueeze(1).expand(-1, C, -1).reshape(-1, self.domain_dim)
+        idx = torch.cat([spatial_rep, channels.unsqueeze(-1)], dim=-1)  # (A_s*C, d+1)
+
         return idx[self.get_index_pmfs(idx) >= tail_probability]
+
+    def get_truncated_indices(self, num_truncated: int) -> torch.Tensor:
+        """Return all ``(k, c)`` indices within a spatial frequency band.
+
+        Constructs the ``(2*num_truncated-1)^d × C`` grid of multi-indices
+        ``(k_1,...,k_d, c)`` with ``k_i in {-(num_truncated-1),...,num_truncated-1}``
+        and ``c in {0,...,C-1}``.
+
+        Args:
+            num_truncated: Half-bandwidth for spatial frequencies.
+
+        Returns:
+            Integer tensor of shape ``((2*num_truncated-1)^d * C, domain_dim+1)``.
+        """
+        freq = torch.arange(-num_truncated + 1, num_truncated)
+        grids = torch.meshgrid(*[freq for _ in range(self.domain_dim)], indexing='ij')
+        spatial_idx = torch.stack(grids, dim=-1).view(-1, self.domain_dim)  # (A_s, d)
+
+        C = self.num_channels
+        A_s = spatial_idx.shape[0]
+        channels = torch.arange(C).unsqueeze(0).expand(A_s, -1).reshape(-1)        # (A_s*C,)
+        spatial_rep = spatial_idx.unsqueeze(1).expand(-1, C, -1).reshape(-1, self.domain_dim)
+        return torch.cat([spatial_rep, channels.unsqueeze(-1)], dim=-1)  # (A_s*C, d+1)
 
     # Low-variance but truncated alternative (nyquist=4, no tail MC):
     # def monte_carlo_captured_energy(self, coords, logabsdet, values, num_tail_samples, tail_probability=1e-4):
-    #     idx = self.get_truncated_indices(5).to(coords.device)  # (A, 2), unique by construction
-    #     atoms = self.get_atoms(coords, idx)  # (A, N, C)
-    #     coefficients = pairwise_inner_product(values, atoms, logabsdet)  # (B, A)
-    #     nyquist = int(idx.abs().max().item())  # = 4
-    #     probas = self.compute_grid_probas(nyquist=nyquist).to(coords.device)  # (2*nyquist+1, 2*nyquist+1)
-    #     atom_probas = probas[idx[:, 0] + nyquist, idx[:, 1] + nyquist]  # (A,)
-    #     return (coefficients ** 2 * atom_probas[None, :]).sum(dim=-1)  # (B,)
+    #     idx = self.get_truncated_indices(5).to(coords.device)  # (A*C, d+1)
+    #     atoms = self.get_atoms(coords, idx)  # (A*C, N, C)
+    #     coefficients = pairwise_inner_product(values, atoms, logabsdet)  # (B, A*C)
+    #     nyquist = int(idx[:, :-1].abs().max().item())  # spatial nyquist = 4
+    #     probas = self.compute_grid_probas(nyquist=nyquist).to(coords.device)  # (2*nyquist+1)^2
+    #     # Map each (k1, k2, c) to its spatial probability / C
+    #     spatial_probas = probas[idx[:, 0] + nyquist, idx[:, 1] + nyquist] / self.num_channels
+    #     return (coefficients ** 2 * spatial_probas[None, :]).sum(dim=-1)  # (B,)
 
     def compute_grid_probas(self, nyquist: int) -> torch.Tensor:
-        """Compute per-frequency PMF weights on the ``(2*nyquist+1)^2`` DFT grid.
+        """Compute per-spatial-frequency PMF weights on the ``(2*nyquist+1)^2`` grid.
 
-        Returns a 2-D probability tensor whose entry at ``(k_1, k_2)`` gives the
-        probability ``p(k)`` under the (truncated) geometric prior, accounting
-        for the fact that cosine and sine share the same frequency magnitude.
-        Used to weight DFT coefficients in :meth:`nufft_captured_energy`.
-
-        The single-dimensional probabilities are truncated geometric PMFs,
-        normalized to sum to 1 over ``{0, ..., nyquist}``.  The joint
-        probability is their tensor product, and each signed-frequency cell
-        receives an equal share of the joint mass.
+        Returns the **spatial** probability ``p_spatial(k)`` (without the 1/C
+        channel factor).  Used to weight DFT coefficients in
+        :meth:`nufft_captured_energy`, which divides by ``num_channels``
+        separately.
 
         Args:
-            nyquist: Maximum frequency magnitude; the grid spans frequencies
-                ``-nyquist, ..., 0, ..., nyquist`` in each dimension.
+            nyquist: Maximum frequency magnitude.
 
         Returns:
             Probability tensor of shape ``(2*nyquist+1, 2*nyquist+1)``.
@@ -236,12 +299,11 @@ class FourierDictionary(InfiDictionary):
         single_tensor = geom_p * (1.0 - geom_p) ** torch.arange(0, nyquist + 1)
         single_tensor = single_tensor / (1 - (1 - geom_p) ** (nyquist + 1))
 
-        # now do a tensor product to get d_dimensional weights
-        weights = torch.ones(*[(nyquist+1) for _ in range(self.domain_dim)], device=single_tensor.device, dtype=single_tensor.dtype) # (nyquist, nyquist, ...)
+        weights = torch.ones(*[(nyquist+1) for _ in range(self.domain_dim)], device=single_tensor.device, dtype=single_tensor.dtype)
         for d in range(self.domain_dim):
             shape = [1 for _ in range(self.domain_dim)]
             shape[d] = nyquist + 1
-            weights *= single_tensor.view(shape) # (1, 1, ..., nyquist+1, ..., 1) where the nyquist+1 is in the d-th dimension
+            weights *= single_tensor.view(shape)
 
         all_probas = torch.zeros((2*nyquist+1, 2*nyquist+1))
         all_probas[nyquist:, nyquist:] += weights
@@ -254,64 +316,40 @@ class FourierDictionary(InfiDictionary):
 
     def nufft_captured_energy(
         self,
-        coords: torch.Tensor, # (N, d)
-        logabsdet: torch.Tensor, # (N, )
-        values: torch.Tensor, # (B, N, C)
+        coords: torch.Tensor,      # (N, d)
+        logabsdet: torch.Tensor,   # (N, )
+        values: torch.Tensor,      # (B, N, C)
         nyquist: int,
         return_dft: bool = False,
-    ) -> torch.Tensor: # (B, )
+    ) -> torch.Tensor:             # (B, )
         """Estimate captured energy using a Non-Uniform FFT.
 
-        Computes all Fourier coefficients up to the Nyquist frequency in one
-        efficient NUFFT pass, then weights their squared magnitudes by the
-        per-frequency PMF to obtain
-        ``E_k[|<f, phi_k>|^2]``.
+        Computes ``E_{k,c}[|<f, phi_{k,c}>|^2]`` efficiently via NUFFT.
+        Equivalent to ``(1/C) * sum_k p(k) * sum_c |F_c(k)|^2``, consistent
+        with the joint index distribution ``p(k, c) = p_spatial(k) / C``.
 
         Args:
             coords: Quadrature points in ``[0, 1)^d``, shape ``(N, d)``.
             logabsdet: Log absolute value of the measure Jacobian, shape ``(N,)``.
             values: Function values at quadrature points, shape ``(B, N, C)``.
-            nyquist: Maximum frequency magnitude; determines the DFT grid size
-                ``(2*nyquist+1)^d``.
-            return_dft: If ``True``, also return the DFT grid and probability
-                tensor (useful for inspection / debugging).
+            nyquist: Maximum frequency magnitude.
+            return_dft: If ``True``, also return the DFT grid and spatial
+                probability tensor.
 
         Returns:
-            Per-function energy estimate of shape ``(B,)``, or a tuple
-            ``(energy, dft, all_probas)`` when ``return_dft=True``.
+            Per-function energy estimate of shape ``(B,)``.
         """
-        # (d, N), scaled to [-π, π] as finufft expects
         points = (2 * math.pi * coords).transpose(0, 1).contiguous().to(coords.device).to(dtype=torch.float32)
-        weights = torch.exp(logabsdet).to(dtype=torch.float32)  # (N,)
-        values = values.permute(0, 2, 1).contiguous().to(coords.device).to(dtype=torch.complex64)
-        values = values * weights[None, None, :]  # (B, C, N) — apply measure weights
+        weights = torch.exp(logabsdet).to(dtype=torch.float32)
+        values_in = values.permute(0, 2, 1).contiguous().to(coords.device).to(dtype=torch.complex64)
+        values_in = values_in * weights[None, None, :]  # (B, C, N)
         dft = finufft.finufft_type1(
-            points=points,  # (d, N) as expected by finufft
-            values=values,  # (B, C, N)
+            points=points,
+            values=values_in,
             output_shape=(nyquist * 2 + 1, nyquist * 2 + 1),
             modeord=0,
-        ).permute(0, 2, 3, 1) / points.shape[1] # (B, H, W, C)
-        all_probas = self.compute_grid_probas(nyquist=nyquist).to(coords.device) # (2 * nyquist + 1, 2 * nyquist + 1)
-        energy = (dft.abs() ** 2 * all_probas[None, :, :, None]).sum(dim=(1, 2, 3)) # (B, )
-        # energy_normalized = energy / nyquist
+        ).permute(0, 2, 3, 1) / points.shape[1]  # (B, H, W, C)
+        all_probas = self.compute_grid_probas(nyquist=nyquist).to(coords.device)  # (H, W)
+        # Divide by num_channels: p(k,c) = p_spatial(k) / C
+        energy = (dft.abs() ** 2 * all_probas[None, :, :, None]).sum(dim=(1, 2, 3)) / self.num_channels
         return energy if not return_dft else (energy, dft, all_probas)
-
-    def get_truncated_indices(self, num_truncated: int) -> torch.Tensor:
-        """Return all Fourier multi-indices within a frequency band.
-
-        Constructs the full ``(2*num_truncated - 1)^d`` grid of signed integer
-        indices in ``{-num_truncated+1, ..., num_truncated-1}^d``.
-
-        Args:
-            num_truncated: Half-bandwidth; the grid spans frequencies
-                ``-(num_truncated-1)`` to ``num_truncated-1`` in each dimension.
-
-        Returns:
-            Integer tensor of shape ``((2*num_truncated-1)^d, domain_dim)``.
-        """
-        idx = torch.arange(-num_truncated + 1, num_truncated)
-        grid = torch.stack(
-            torch.meshgrid(*[idx for _ in range(self.domain_dim)], indexing='ij'),
-            dim=-1,
-        ).view(-1, self.domain_dim)
-        return grid

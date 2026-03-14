@@ -47,11 +47,11 @@ callbacks:
     frequency: 500
     density: 1000
     indices:
-      - [-1, 1]
-      - [0, 0]
-      - [1, -1]
-      - [0, -1]
-      - [-1, 0]
+      - [-1,  1, 0]
+      - [ 0,  0, 0]
+      - [ 1, -1, 0]
+      - [ 0, -1, 0]
+      - [-1,  0, 0]
 
 # Add tags so that it is easier to filter the experiments in the W&B dashboard
 wandb:
