@@ -9,14 +9,20 @@ class CelebADataset(IrregularDataset):
     Pre-loads `n_images` images from the CelebA-HQ dataset and exposes them
     as an IrregularDataset.
 
-    On each call to get_batch a random `drop_fraction` of the pixels are
-    discarded, so the returned coordinates are an irregular subset of the
-    full pixel grid.
+    `n_drop_draws` independent pixel-dropping patterns are pre-computed at
+    construction time (seeded, reproducible).  Each pattern is drawn via
+    independent Bernoulli sampling with keep-probability ``1 - drop_fraction``,
+    so pattern lengths vary naturally across draws.
 
-    get_batch returns:
-        coords : (N', 2)    sparse pixel-grid coordinates in [0, 1]²
-        images : (B, N', 3) batch of RGB signals at those coordinates
-    where N' = round(H * W * (1 - drop_fraction)).
+    The effective dataset size is ``n_images * n_drop_draws``: every
+    (image, drop-pattern) pair is a distinct sample.
+
+    get_batch selects one drop pattern uniformly at random, then draws
+    `batch_size` images — all sharing that same irregular grid for the call.
+
+    __call__(seed) is fully deterministic:
+        image index = (seed // n_drop_draws) % n_images
+        drop  index =  seed  % n_drop_draws
     """
 
     def __init__(
@@ -24,6 +30,7 @@ class CelebADataset(IrregularDataset):
         resolution: int,
         n_images: int,
         drop_fraction: float = 0.0,
+        n_drop_draws: int = 1,
         dataset_name: str = "mattymchen/celeba-hq",
         device: str | torch.device = "cpu",
     ):
@@ -35,7 +42,7 @@ class CelebADataset(IrregularDataset):
         self.resolution = resolution
         self.n_images = n_images
         self.drop_fraction = drop_fraction
-        self.n_keep = round(N * (1.0 - drop_fraction))
+        self.n_drop_draws = n_drop_draws
         self.device = torch.device(device)
 
         # Full pixel-grid coordinates in [0, 1]²  — (N, 2)
@@ -45,6 +52,25 @@ class CelebADataset(IrregularDataset):
         self._full_coords = torch.stack(
             [grid_x.flatten(), grid_y.flatten()], dim=-1
         ).to(self.device)  # (N, 2)
+
+        # Pre-compute n_drop_draws fixed dropping patterns (seeded for reproducibility).
+        # Each pattern is a Bernoulli draw: keep pixel i with probability (1 - drop_fraction).
+        # Pattern lengths vary between draws.
+        rng = torch.Generator()
+        rng.manual_seed(42)
+        if drop_fraction == 0.0:
+            # No dropping: every pattern keeps all pixels
+            pattern = torch.arange(N, device=self.device)
+            self._drop_patterns = [pattern] * n_drop_draws
+        else:
+            self._drop_patterns = []
+            for _ in range(n_drop_draws):
+                mask = torch.rand(N, generator=rng) >= drop_fraction
+                self._drop_patterns.append(mask.nonzero(as_tuple=False).squeeze(-1).to(self.device))
+
+        self._drop_coords = [
+            self._full_coords[pat] for pat in self._drop_patterns
+        ]  # list of n_drop_draws tensors, each (n_keep_r, 2)  — lengths may differ
 
         # Pre-load images from the streaming HuggingFace dataset
         from datasets import load_dataset
@@ -69,58 +95,52 @@ class CelebADataset(IrregularDataset):
         self.images = torch.stack(signals, dim=0).to(self.device)  # (n_images, N, 3)
 
     def reset_buffer(self) -> None:
-        """Shuffle the image order and reset the cyclic pointer.
-
-        Call this once before a gradient-accumulation loop so that successive
-        get_batch calls draw non-overlapping subsets of images.  The buffer
-        wraps around automatically when exhausted.
-        """
+        """Shuffle the image order and reset the cyclic pointer."""
         self._buffer = torch.randperm(self.n_images, device=self.device)
         self._buffer_ptr = 0
 
     def get_batch(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Sample `batch_size` images and a random irregular subset of pixels.
+        Sample `batch_size` images under one randomly selected drop pattern.
 
-        Image selection uses the cyclic buffer set by reset_buffer() when
-        available, ensuring non-overlapping draws across accumulation steps.
-        Falls back to random sampling if reset_buffer() has never been called.
+        All images in the batch share the same irregular grid (one pattern
+        drawn uniformly from the pre-computed `n_drop_draws` patterns).
 
         Returns:
-            coords : (N', 2)    — randomly subsampled pixel coordinates
+            coords : (N', 2)    — pixel coordinates for the selected pattern
             images : (B, N', 3) — RGB signals at those coordinates
-        where N' = round(H*W * (1 - drop_fraction)).
         """
-        N_full = self._full_coords.shape[0]
-
-        # Random pixel subset — new draw on every call, giving an irregular grid
-        keep_idx = torch.randperm(N_full, device=self.device)[:self.n_keep]
-        coords = self._full_coords[keep_idx]          # (N', 2)
+        # Pick one drop pattern uniformly at random
+        draw = int(torch.randint(self.n_drop_draws, (1,)).item())
+        keep_idx = self._drop_patterns[draw]
+        coords   = self._drop_coords[draw]
 
         # Image selection: cycle through buffer without overlap when available
         if hasattr(self, '_buffer'):
             if self._buffer_ptr + batch_size > self.n_images:
-                self.reset_buffer()   # wrap around
+                self.reset_buffer()
             img_idx = self._buffer[self._buffer_ptr : self._buffer_ptr + batch_size]
             self._buffer_ptr += batch_size
         elif batch_size <= self.n_images:
             img_idx = torch.randperm(self.n_images, device=self.device)[:batch_size]
         else:
             img_idx = torch.randint(self.n_images, (batch_size,), device=self.device)
-        
-        images = self.images[img_idx][:, keep_idx, :]  # (B, N', 3)
 
+        images = self.images[img_idx][:, keep_idx, :]  # (B, N', 3)
         return coords, images
 
     def __call__(self, seed: int) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return full-grid coords and RGB values for image at index `seed` (mod n_images).
+        """Deterministic lookup for a specific (image, drop-pattern) pair.
 
-        Implements the same interface as FunctionClassGenerator.__call__ so that
-        callbacks like VisualizeKLExpansionReconstruction work with CelebADataset.
+        seed is a flat index into the n_images × n_drop_draws grid:
+            image index = (seed // n_drop_draws) % n_images
+            drop  index =  seed  % n_drop_draws
 
         Returns:
-            coords: (N, 2)  full pixel-grid coordinates in [0, 1]²
-            vals:   (N, 3)  RGB values for the selected image
+            coords : (N', 2)  sparse pixel coordinates for the selected pattern
+            vals   : (N', 3)  RGB values for the selected image at those coords
         """
-        idx = seed % self.n_images
-        return self._full_coords, self.images[idx]
+        img_idx  = (seed // self.n_drop_draws) % self.n_images
+        draw_idx = seed % self.n_drop_draws
+        keep_idx = self._drop_patterns[draw_idx]
+        return self._drop_coords[draw_idx], self.images[img_idx][keep_idx]
