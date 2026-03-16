@@ -43,17 +43,13 @@ ntk_model_weights_path: null  # e.g. outputs/neural_field_fit/joseph_fourier.pt
 
 # ── Training hyperparameters ──────────────────────────────────────────────────
 n_epochs: 500000
-domain_sample_size: 32    # number of quadrature points; also determines NTK matrix size
-atom_index_batch_size: 512  # used only when stratified sampling is disabled (tail_probability: null)
+domain_sample_size: 32    # number of quadrature points per training step
 grad_accumulation_steps: 1
 
 # ── Stratified atom sampling ──────────────────────────────────────────────────
-# Mirrors the monte_carlo_captured_energy pattern to reduce gradient variance:
 #   exact stratum:  all indices with pmf >= tail_probability, weighted by pmf.
 #   MC tail stratum: num_tail_samples random indices (excluding exact stratum),
 #                    weighted by counts / num_tail_samples.
-# Set both to non-null to enable; leave either as null to fall back to plain MC
-# (atom_index_batch_size samples, uniform reweighting).
 tail_probability: 0.001   # include all atoms with pmf >= this threshold exactly
 num_tail_samples: 256     # MC samples for the remaining tail
 max_grad_norm: 1.0

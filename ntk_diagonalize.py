@@ -12,6 +12,7 @@ from tqdm import tqdm
 import wandb
 
 from infidictionary.ntk import estimate_ntk
+from torch.func import functional_call
 from infidictionary.checkpointing import Checkpointer
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.neural_isometries import NeuralIsometry
@@ -39,63 +40,35 @@ def ntk_diagonalize(
     callbacks: list,
     wandb_enabled: bool,
     grad_accumulation_steps: int,
-    atom_index_batch_size: int,
+    tail_probability: float,
+    num_tail_samples: int,
     model_state_kwargs: dict,
     pushforward_kwargs: dict,
     checkpointer: Checkpointer | None,
     checkpoint: dict | None,
     max_grad_norm: float | None = None,
-    tail_probability: float | None = None,
-    num_tail_samples: int | None = None,
 ):
     """
     Train a NeuralIsometry Q to diagonalize the NTK of a given neural field.
 
-    At each step we maximise  sum_k  <Q phi_k, K Q phi_k>_{L^2}
-    over the isometry parameters, where phi_k are atoms drawn from the
-    initial dictionary and K is the NTK operator.
+    At each step we maximise  Σ_a pmf_a · <Q φ_a, K Q φ_a>_{L^2}
+    over the isometry parameters, using the identity
 
-    The quadratic form is computed with full measure-correctness:
+        <Q φ_a, K Q φ_a> = ‖∇_θ <f_θ, Q φ_a>‖²  =  ‖∇_θ <Q* f_θ, φ_a>‖²
 
-      1.  Pull back every NTK row K(x_i, .) (viewed as a function in L^2(tgt))
-          to the source domain via Q^*, capturing
-              (coords_src, logabsdet_src, K_rows_src).
-          The volume correction logabsdet_src accounts for the measure change
-          under the pullback.
+    so the NTK matrix K is never explicitly formed.
 
-      2.  Evaluate initial atoms phi_a at coords_src.
+    Per step:
+      1.  Sample evaluation coords; evaluate f_θ (gradient tracked w.r.t. θ).
+      2.  Pull back f_θ through Q* to the source domain.
+      3.  For each sampled atom a:  c_a = <Q* f_θ, φ_a>_{L²(src)}.
+      4.  qf_a = ‖∂c_a/∂θ‖²  (autograd.grad with create_graph=True so Q
+          can be differentiated through the result).
 
-      3.  Compute g_a(x_i) = <Q^* K(x_i, .), phi_a>_{L^2(src, logabsdet_src)}
-          for all (i, a) simultaneously via pairwise_inner_product. By the
-          adjoint identity this equals (K Q phi_a)(x_i), the NTK operator
-          applied to Q phi_a, evaluated at target point x_i.
-
-      4.  Push phi_a forward to the target domain, capturing the output
-          measure (tgt_logabsdet) alongside Qphi_a_tgt.
-
-      5.  Compute QF_a = <Q phi_a, g_a>_{L^2(tgt, tgt_logabsdet)}.
-          The tgt_logabsdet from step 4 is passed to parallel_inner_product
-          to correctly weight the integration in the target domain.
-
-    The NTK is evaluated at fixed target coordinates (sampled at start-up)
-    and is optionally refreshed together with the coords every
-    `ntk_reestimate_every` epochs (0 means estimate once, never refresh).
-
-    Notes
-    -----
-    * For Eulerian isometries both logabsdet_src and tgt_logabsdet are zero
-      and all coordinates remain unchanged, so steps 1–5 reduce to simple
-      inner products at the fixed sample points.
-    * For Lagrangian / mixed isometries the measure corrections are non-trivial
-      and essential for correctness.
-    * The NTK model is never trained; its parameters are resampled inside
-      estimate_ntk and the model is kept in eval mode throughout.
-    * When tail_probability and num_tail_samples are both set, atom indices
-      are drawn via stratified sampling (mirroring monte_carlo_captured_energy):
-        - Exact stratum: all indices with pmf >= tail_probability, weighted by pmf.
-        - MC tail stratum: num_tail_samples random indices (excluding exact),
-          weighted by counts / num_tail_samples.
-      Otherwise falls back to plain MC with atom_index_batch_size samples.
+    Atom indices are drawn via stratified sampling:
+      - Exact stratum: all indices with pmf >= tail_probability, weighted by pmf.
+      - MC tail stratum: num_tail_samples random indices (excluding exact),
+        weighted by counts / num_tail_samples.
     """
     neural_isometry = neural_isometry.to(device)
     ntk_model = ntk_model.to(device)
@@ -107,127 +80,92 @@ def ntk_diagonalize(
     if checkpoint is not None and checkpointer is not None:
         start_epoch, _ = checkpointer.restore(checkpoint)
 
-    # ── Initial NTK estimation ────────────────────────────────────────────────
-    coords_tgt = domain_sampler.sample(domain_sample_size).to(device)  # (N, d)
-    tqdm.write(
-        f"Estimating NTK: {ntk_n_samples} samples, sigma={ntk_sigma}, "
-        f"N={coords_tgt.shape[0]} points ..."
-    )
-    with torch.no_grad():
-        K_flat = estimate_ntk(ntk_model, coords_tgt, ntk_n_samples, ntk_sigma)
-    N = coords_tgt.shape[0]
-    C = K_flat.shape[0] // N  # output channels
-    tqdm.write(
-        f"NTK done. K_flat: {K_flat.shape},  "
-        f"||K||_F = {K_flat.norm().item():.3e}"
-    )
-
     pbar = tqdm(range(n_epochs))
 
     for epoch_i in pbar:
         if epoch_i < start_epoch:
             continue
 
-        # ── Optionally re-estimate NTK on fresh domain coords ────────────────
-        if ntk_reestimate_every > 0 and epoch_i > 0 and epoch_i % ntk_reestimate_every == 0:
-            coords_tgt = domain_sampler.sample(domain_sample_size).to(device)
-            with torch.no_grad():
-                K_flat = estimate_ntk(ntk_model, coords_tgt, ntk_n_samples, ntk_sigma)
-            N = coords_tgt.shape[0]
-            C = K_flat.shape[0] // N
-
         qf_history_temp = []
 
         for _ in range(grad_accumulation_steps):
             neural_isometry.shuffle_model_state(**model_state_kwargs)
 
-            # ── Step 1: Pull back all NTK rows to the source domain ───────────
-            #
-            # Reshape K_flat so that each row becomes one C-channel function
-            # at the N target points:
-            #   K_rows_tgt[i*C+c, j, c'] = K_flat[i*C+c, j*C+c']
-            #                             = K_{c,c'}(x_i, x_j)
-            K_rows_tgt = K_flat.reshape(N * C, N, C)  # (N*C, N, C)
+            # Sample source coords; pushforward to get target eval points for f_θ
+            coords_src = domain_sampler.sample(domain_sample_size).to(device)
+            N = coords_src.shape[0]
+            logabsdet_src = torch.zeros(N, device=device)
+            with torch.no_grad():
+                coords_tgt, logabsdet_tgt, _ = neural_isometry.pushforward(
+                    src_coords=coords_src,
+                    src_logabsdet=logabsdet_src,
+                    src_field=torch.zeros(1, N, 1, device=device),
+                    **pushforward_kwargs,
+                )
 
-            coords_src, logabsdet_src, K_rows_src = neural_isometry.pullback(
-                tgt_coords=coords_tgt,
-                tgt_logabsdet=torch.zeros(N, device=device),
-                tgt_field=K_rows_tgt,
-                **pushforward_kwargs,
-            )
-            # coords_src:    (N, d)       — source coordinates
-            # logabsdet_src: (N,)         — log |det dQ^{-1}| at each source point
-            # K_rows_src:    (N*C, N, C)  — pulled-back kernel rows Q^* K(x_i, .)
+            # Cache param names once for functional_call inside _qf_for_atoms
+            ntk_param_names = [name for name, _ in ntk_model.named_parameters()]
 
             def _qf_for_atoms(unique_indices: torch.Tensor) -> torch.Tensor:
-                """Run steps 2–5 for a given set of unique atom indices.
+                """Compute <Qφ_a, K Qφ_a> = ‖∇_θ <Q*f_θ, φ_a>‖² per atom.
+
+                Uses torch.autograd.functional.jacobian with vectorize=True to batch
+                all A backward passes via vmap — no Python for-loop over atoms.
 
                 Returns qf of shape (A,).
                 """
                 A = unique_indices.shape[0]
-
-                # Step 2: atoms at source coords
                 phi_src = initial_dictionary.get_atoms(coords_src, unique_indices)  # (A, N, C)
 
-                # Step 3: g_a(x_i) = <Q* K(x_i,.), phi_a>_{L^2(src)}
-                g_raw = pairwise_inner_product(K_rows_src, phi_src, logabsdet_src)  # (N*C, A)
-                g = g_raw.reshape(N, C, A).permute(2, 0, 1).contiguous()  # (A, N, C)
-
-                # Step 4: push atoms forward, capture target measure
-                _, tgt_logabsdet, Qphi_tgt = neural_isometry.pushforward(
-                    src_coords=coords_src,
-                    src_logabsdet=logabsdet_src,
-                    src_field=phi_src,
-                    **pushforward_kwargs,
-                )  # tgt_logabsdet: (N,),  Qphi_tgt: (A, N, C)
-
-                # Step 5: QF_a = <Q phi_a, g_a>_{L^2(tgt)}
-                return parallel_inner_product(Qphi_tgt, g, tgt_logabsdet)  # (A,)
-
-            use_stratified = (
-                tail_probability is not None and num_tail_samples is not None
-            )
-
-            if use_stratified:
-                # ── Exact high-probability stratum ────────────────────────────
-                idx_exact = initial_dictionary.get_high_probability_indices(
-                    tail_probability
-                ).to(device)
-                qf_exact_per_atom = _qf_for_atoms(idx_exact)  # (A_exact,)
-                pmfs_exact = initial_dictionary.get_index_pmfs(idx_exact).to(device)
-                qf_exact = (qf_exact_per_atom * pmfs_exact).sum()
-
-                # ── MC tail stratum ───────────────────────────────────────────
-                idx_all = initial_dictionary.sample_indices(num_tail_samples).to(device)
-                in_exact = (
-                    idx_all[:, None, :] == idx_exact[None, :, :]
-                ).all(dim=-1).any(dim=-1)
-                idx_tail = idx_all[~in_exact]
-
-                if idx_tail.shape[0] > 0:
-                    idx_tail_u, idx_tail_c = torch.unique(
-                        idx_tail, return_counts=True, dim=0
+                def c_from_ntk_params(*params):
+                    ntk_dict = dict(zip(ntk_param_names, params))
+                    f_vals = functional_call(ntk_model, ntk_dict, (coords_tgt,))
+                    _, _, qsf = neural_isometry.pullback(
+                        tgt_coords=coords_tgt,
+                        tgt_logabsdet=logabsdet_tgt,
+                        tgt_field=f_vals.unsqueeze(0),
+                        **pushforward_kwargs,
                     )
-                    qf_tail_per_atom = _qf_for_atoms(idx_tail_u)  # (A_tail,)
-                    qf_tail = (
-                        qf_tail_per_atom * idx_tail_c.float()
-                    ).sum() / num_tail_samples
-                else:
-                    qf_tail = torch.zeros(1, device=device).squeeze()
+                    # Inner product in the source domain with source measure
+                    return pairwise_inner_product(
+                        qsf.squeeze(0).unsqueeze(0), phi_src, logabsdet_src,
+                    ).squeeze(0)  # (A,)
 
-                total_qf = qf_exact + qf_tail
-            else:
-                # ── Plain MC fallback ─────────────────────────────────────────
-                atom_indices = initial_dictionary.sample_indices(
-                    atom_index_batch_size
-                ).to(device)
-                unique_atom_indices, inverse_indices = torch.unique(
-                    atom_indices, dim=0, return_inverse=True
+                # J_tuple[i] has shape (A, *param_i.shape); vectorize=True batches
+                # the A backward passes via vmap instead of a Python loop.
+                J_tuple = torch.autograd.functional.jacobian(
+                    c_from_ntk_params, tuple(ntk_model.parameters()),
+                    create_graph=True, vectorize=True,
                 )
-                atom_counts = torch.bincount(inverse_indices).float().to(device)
+                return sum(j.reshape(A, -1).pow(2).sum(-1) for j in J_tuple)  # (A,)
 
-                qf = _qf_for_atoms(unique_atom_indices)  # (A_unique,)
-                total_qf = (qf * atom_counts).sum() / atom_counts.sum()
+            # ── Exact high-probability stratum ────────────────────────────────
+            idx_exact = initial_dictionary.get_high_probability_indices(
+                tail_probability
+            ).to(device)
+            qf_exact_per_atom = _qf_for_atoms(idx_exact)  # (A_exact,)
+            pmfs_exact = initial_dictionary.get_index_pmfs(idx_exact).to(device)
+            qf_exact = (qf_exact_per_atom * pmfs_exact).sum()
+
+            # ── MC tail stratum ───────────────────────────────────────────────
+            idx_all = initial_dictionary.sample_indices(num_tail_samples).to(device)
+            in_exact = (
+                idx_all[:, None, :] == idx_exact[None, :, :]
+            ).all(dim=-1).any(dim=-1)
+            idx_tail = idx_all[~in_exact]
+
+            if idx_tail.shape[0] > 0:
+                idx_tail_u, idx_tail_c = torch.unique(
+                    idx_tail, return_counts=True, dim=0
+                )
+                qf_tail_per_atom = _qf_for_atoms(idx_tail_u)  # (A_tail,)
+                qf_tail = (
+                    qf_tail_per_atom * idx_tail_c.float()
+                ).sum() / num_tail_samples
+            else:
+                qf_tail = torch.zeros(1, device=device).squeeze()
+
+            total_qf = qf_exact + qf_tail
 
             (-total_qf / grad_accumulation_steps).backward(retain_graph=False)
             qf_history_temp.append(total_qf.item())
@@ -363,14 +301,13 @@ def main(conf: DictConfig):
         callbacks=callbacks,
         wandb_enabled=conf.wandb.enabled,
         grad_accumulation_steps=conf.grad_accumulation_steps,
-        atom_index_batch_size=conf.atom_index_batch_size,
+        tail_probability=conf.tail_probability,
+        num_tail_samples=conf.num_tail_samples,
         model_state_kwargs=conf.get("model_state_kwargs", {}) or {},
         pushforward_kwargs=conf.get("pushforward_kwargs", {}) or {},
         checkpointer=checkpointer,
         checkpoint=checkpoint,
         max_grad_norm=conf.get("max_grad_norm", None),
-        tail_probability=conf.get("tail_probability", None),
-        num_tail_samples=conf.get("num_tail_samples", None),
     )
 
     if conf.wandb.enabled:

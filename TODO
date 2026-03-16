@@ -1,10 +1,10 @@
+[] Is the current geometric distribution the best? The x and y axis bases are always dominant.
 [] Re-run Fourierer
 [] Use the Cayley ODE solver method with alpha and beta
 [] Improve the architecture of the Eulerian thing with RMSNorm or LayerNorm instead of the Frobenius normalization stuff
 [] Merge the refactor changes
 
 Adding the new experiments:
-[] Run NTK diagonalization on INRs or just simply "explain" your INR architecture
 [] Use a simple Haar wavelet basis instead of the Fourier basis for the celeba example.
 
 Side Experiments:
