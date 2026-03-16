@@ -1,0 +1,90 @@
+defaults:
+  - neural_isometry: eulerian
+  - /neural_fields@ntk_model: joseph_model
+  - /dictionaries@initial_dictionary: fourier_2d
+  - /domain_samplers@domain_sampler: square_sampler
+  - hydra: default
+  - wandb: disabled  # set to enabled for wandb logging
+  - _self_
+  - override hydra/hydra_logging: none  # hack to fix the logging code
+  - override hydra/job_logging: none    # hack to fix the logging code
+
+isometry_optimizer_callable:
+  _target_: torch.optim.Adam
+  lr: 0.001
+  _partial_: true
+isometry_scheduler_callable: null
+
+pushforward_kwargs:
+  start_time: 0.0
+  end_time: 1.0
+
+model_state_kwargs:
+  num_steps: 200
+
+# ── NTK hyperparameters ───────────────────────────────────────────────────────
+# The NTK is estimated as:
+#   K(x, y) = E_{theta ~ N(0, ntk_sigma^2 I)} [
+#       <grad_theta MLP(x; theta), grad_theta MLP(y; theta)>
+#   ]
+# via Monte Carlo averaging over ntk_n_samples random initializations.
+# The ntk_model architecture (see defaults above) determines which MLP is used.
+
+ntk_n_samples: 1         # MC samples for NTK estimation (more = better, slower)
+ntk_sigma: 0.0     # std of perturbation around current weights; ~0 => exact empirical NTK
+ntk_reestimate_every: 10  # re-estimate NTK every K steps; 0 = once at startup only
+
+# Optional: load pre-trained weights into the NTK model before estimation.
+# Architecture is still defined by the ntk_model default above.
+# When set, estimate_ntk centres its MC perturbations on the loaded weights.
+# Leave null to use random initialisation (standard NTK regime).
+# Path is relative to the original working directory (where the script is launched).
+ntk_model_weights_path: null  # e.g. outputs/neural_field_fit/joseph_fourier.pt
+
+# ── Training hyperparameters ──────────────────────────────────────────────────
+n_epochs: 500000
+domain_sample_size: 32    # number of quadrature points; also determines NTK matrix size
+atom_index_batch_size: 512  # used only when stratified sampling is disabled (tail_probability: null)
+grad_accumulation_steps: 1
+
+# ── Stratified atom sampling ──────────────────────────────────────────────────
+# Mirrors the monte_carlo_captured_energy pattern to reduce gradient variance:
+#   exact stratum:  all indices with pmf >= tail_probability, weighted by pmf.
+#   MC tail stratum: num_tail_samples random indices (excluding exact stratum),
+#                    weighted by counts / num_tail_samples.
+# Set both to non-null to enable; leave either as null to fall back to plain MC
+# (atom_index_batch_size samples, uniform reweighting).
+tail_probability: 0.001   # include all atoms with pmf >= this threshold exactly
+num_tail_samples: 256     # MC samples for the remaining tail
+max_grad_norm: 1.0
+
+resume_training:
+  enabled: false
+  checkpoint_path: null   # absolute path to a checkpoint .pt file
+
+checkpointing:
+  checkpoint_dir: outputs/checkpoints   # relative to Hydra output dir
+  checkpoint_every_n_steps: 100        # optimizer steps between periodic saves
+  checkpoint_window_size: 3             # number of periodic checkpoints to keep
+
+callbacks:
+  isometry_check:
+    _target_: infidictionary.callbacks.IsometryCheck
+    dictionary: ${initial_dictionary}
+    domain_sampler: ${domain_sampler}
+    frequency: 100
+    density: 1000
+    indices:
+      - [ 0,  0, 0]   # constant
+      - [-1,  0, 0]   # sin(x)
+      - [ 0, -1, 0]   # sin(y)
+      - [ 1,  0, 0]   # cos(x)
+      - [ 0,  1, 0]   # cos(y)
+      # - [-1, -1, 0]   # sin(x)sin(y)
+      # - [ 1, -1, 0]   # cos(x)sin(y)
+      # - [-1,  1, 0]   # sin(x)cos(y)
+      # - [ 1,  1, 0]   # cos(x)cos(y)
+
+wandb:
+  tags:
+    experiment: ntk_diagonalize

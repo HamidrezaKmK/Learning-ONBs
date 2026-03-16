@@ -1,0 +1,7 @@
+_target_: infidictionary.utils.MLPNeuralField
+input_dim: 2
+output_dim: 1
+hidden_dims: 
+  a: 256
+  b: 256
+  c: 256
