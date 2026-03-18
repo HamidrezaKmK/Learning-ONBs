@@ -1,0 +1,12 @@
+_target_: infidictionary.utils.NTKMLPNeuralField
+input_dim: 2
+output_dim: 1
+hidden_dims:
+  a: 1024
+  b: 1024
+  c: 1024
+n_fourier_features: 0
+fourier_sigma: 0.
+activation:
+  _target_: torch.nn.Tanh
+  _partial_: true

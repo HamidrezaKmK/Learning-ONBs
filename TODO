@@ -1,7 +1,9 @@
-[] Is the current geometric distribution the best? The x and y axis bases are always dominant.
-[] Re-run Fourierer
 [] Use the Cayley ODE solver method with alpha and beta
+[] Check if all of the notebooks work or not
+[] Start writing stuff (in parallel)
+[] Is the current geometric distribution the best? The x and y axis bases are always dominant.
 [] Improve the architecture of the Eulerian thing with RMSNorm or LayerNorm instead of the Frobenius normalization stuff
+[] Laplacian eigenfunctions (Shape Space Spectra)
 [] Merge the refactor changes
 
 Adding the new experiments:

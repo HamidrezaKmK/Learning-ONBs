@@ -1,6 +1,5 @@
 defaults:
   - neural_isometry: eulerian
-  - /neural_fields@ntk_model: joseph_model
   - /dictionaries@initial_dictionary: fourier_2d
   - /domain_samplers@domain_sampler: square_sampler
   - hydra: default
