@@ -1,17 +1,18 @@
 from typing import Literal, Callable, Dict, Any
 import torch
+from torch.utils.checkpoint import checkpoint
 
 from .base import NeuralIsometry
 from infidictionary.utils import TimeEvolvingField, norm2, pairwise_inner_product
 
 class EulerianIsometry(NeuralIsometry):
 
-    # TODO: implement forward mode backpropagation to avoid memory blowup
     def __init__(
         self,
         coords_dim: int,
         channels_dim: int,
         scalar_field_partial: Callable[[Dict[str, Any]], TimeEvolvingField],
+        gradient_checkpointing: bool = False,
     ):
         super().__init__()
 
@@ -21,6 +22,7 @@ class EulerianIsometry(NeuralIsometry):
         )
         self.coords_dim = coords_dim
         self.channels_dim = channels_dim
+        self.gradient_checkpointing = gradient_checkpointing
         self._num_steps = 0
         self.register_buffer("tspan", torch.tensor([]), persistent=False)
 
@@ -35,26 +37,37 @@ class EulerianIsometry(NeuralIsometry):
         dtype = coords.dtype
         N = values.shape[1]
         t1_batch = torch.ones(N, device=device, dtype=dtype) * t
-        v = self.function_field(t1_batch, coords)  # (N, C)
+        v = self.function_field(t1_batch, coords.detach())  # (N, C)
         v = v / torch.sqrt(norm2(v, logabsdet).clamp(min=1e-8)).unsqueeze(-1) # (N, C)
         inner_products = pairwise_inner_product(values, v, logabsdet) # (B, )
         interim = torch.einsum("b,nc->bnc", inner_products, v) # (B, N, C)
         values = values - 2 * interim # (B, N, C)
 
         return values
-        
+
     def _run_euler(
-        self, 
+        self,
         coords: torch.Tensor, # (N, d)
         logabsdet: torch.Tensor, # (N, )
         f: torch.Tensor, # (B, N, C)
         tspan: torch.Tensor, # (T,)
     ):
-        for t0, t1 in zip(tspan[:-1], tspan[1:]):
-            f = self._householder_step(t1, coords, logabsdet, f)
-            f = self._householder_step(t0, coords, logabsdet, f)
+        use_ckpt = self.gradient_checkpointing and self.training
+        for t0_v, t1_v in zip(tspan[:-1].tolist(), tspan[1:].tolist()):
+            if use_ckpt:
+                # Capture t values as defaults so the closure doesn't share a mutable loop variable.
+                # checkpoint stores only the input f and recomputes the two Householder steps
+                # during backward — O(1) intermediate activations instead of O(num_steps).
+                def _two_steps(f, _t0=t0_v, _t1=t1_v):
+                    f = self._householder_step(_t1, coords, logabsdet, f)
+                    f = self._householder_step(_t0, coords, logabsdet, f)
+                    return f
+                f = checkpoint(_two_steps, f, use_reentrant=False)
+            else:
+                f = self._householder_step(t1_v, coords, logabsdet, f)
+                f = self._householder_step(t0_v, coords, logabsdet, f)
         return f
-    
+
     def shuffle_model_state(self, num_steps: int | None = None):
         if num_steps is not None:
             self._num_steps = num_steps
@@ -65,7 +78,7 @@ class EulerianIsometry(NeuralIsometry):
             self.tspan = torch.sort(tspan)[0]
         else:
             self.tspan = torch.linspace(0, 1, self._num_steps)
-    
+
     def pushforward(
         self,
         src_coords: torch.Tensor, # (N, d)
@@ -83,7 +96,7 @@ class EulerianIsometry(NeuralIsometry):
             tspan=tspan,
         )
         return src_coords, src_logabsdet, tgt_field
-    
+
     def pullback(
         self,
         tgt_coords: torch.Tensor, # (N, d)

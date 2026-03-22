@@ -236,7 +236,7 @@ class FactoredTimeEvolvingField(NeuralField):
         # ── Spatial MLP + BN ─────────────────────────────────────────────────
         if use_fourier_features:
             self.ff = FourierFeatures(coords_dim, n_fourier_features, fourier_sigma)
-            spatial_in = 2 * n_fourier_features
+            spatial_in = 2 * n_fourier_features + coords_dim  # FF(x) ++ x
         else:
             self.ff = None
             spatial_in = coords_dim
@@ -283,7 +283,7 @@ class FactoredTimeEvolvingField(NeuralField):
 
     def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         # t: (N,), x: (N, d)
-        x_in = self.ff(x) if self.ff is not None else x                    # (N, spatial_in)
+        x_in = torch.cat([self.ff(x), x], dim=-1) if self.ff is not None else x  # (N, spatial_in)
         g = self.spatial_bn(self.spatial_mlp(x_in))                        # (N, D)
 
         t_emb = self.time_embedding(t)                                      # (N, D_t)

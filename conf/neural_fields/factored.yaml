@@ -12,7 +12,7 @@ time_hidden_dims:
 feature_dim: 256
 use_fourier_features: true
 n_fourier_features: 64
-fourier_sigma: 10.0
+fourier_sigma: 2.0  # was 10.0 — high sigma biases v(t,x) to very high spatial freq
 n_time_freqs: 8
 post_combination_dims:
   - 64

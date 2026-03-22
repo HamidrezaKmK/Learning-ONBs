@@ -1,0 +1,54 @@
+defaults:
+  - neural_isometry: eulerian
+  - /dictionaries@initial_dictionary: fourier_2d
+  - hydra: default
+  - wandb: disabled
+  - _self_
+  - override hydra/hydra_logging: none
+  - override hydra/job_logging: none
+
+# Must be provided via +experiment=<name> (see conf/experiment/)
+material: ???
+
+isometry_optimizer_callable:
+  _target_: torch.optim.Adam
+  lr: 0.001
+  _partial_: true
+isometry_scheduler_callable: null
+
+pushforward_kwargs:
+  start_time: 0.0
+  end_time: 1.0
+
+model_state_kwargs:
+  num_steps: 200
+
+# ── Training hyperparameters ──────────────────────────────────────────────────
+n_epochs: 50000
+domain_sample_size: 32
+grad_accumulation_steps: 1
+
+# ── Stratified atom sampling ──────────────────────────────────────────────────
+tail_probability: 0.05 # 0.0001 TODO: fix this
+num_tail_samples: 0 # TODO: fix this
+max_grad_norm: 1.0
+
+# finite_diff_h lives inside dirichlet_energy_kwargs so it is actually forwarded
+# to dirichlet_energy_for_atoms_finite_difference (the top-level key is never read).
+dirichlet_energy_method: finite_difference  # or autograd
+dirichlet_energy_kwargs:
+  finite_diff_h: 1e-3
+  n_fd_dirs: 1  # number of random FD directions to average over per step
+
+resume_training:
+  enabled: false
+  checkpoint_path: null
+
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 100
+  checkpoint_window_size: 3
+
+wandb:
+  tags:
+    experiment: vibrational_modes

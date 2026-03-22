@@ -1,9 +1,13 @@
 defaults:
-  - /neural_fields@scalar_field_partial: factored_simple # factored
+  - /neural_fields@scalar_field_partial: factored
   - _self_
 
 _target_: infidictionary.neural_isometries.EulerianIsometry
 coords_dim: 2
 channels_dim: 1
+
+# NOTE: make sure this is correct
+gradient_checkpointing: true
+
 scalar_field_partial:
   _partial_: true

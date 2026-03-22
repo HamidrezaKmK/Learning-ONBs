@@ -94,7 +94,7 @@ class DiskSampler(DomainSampler):
     ):
         super().__init__()
         self.square_sampler = SquareSampler(
-            stratified=stratified, 
+            stratified=stratified,
             add_noise=add_noise,
             height=1.0, width=1.0,
         )
@@ -112,4 +112,5 @@ class DiskSampler(DomainSampler):
         y = r * torch.sin(theta)
         coords = torch.stack([x, y], dim=1) * self.radius
         return coords
-    
+
+
