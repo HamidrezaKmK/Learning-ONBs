@@ -29,16 +29,14 @@ domain_sample_size: 32
 grad_accumulation_steps: 1
 
 # ── Stratified atom sampling ──────────────────────────────────────────────────
-tail_probability: 0.05 # 0.0001 TODO: fix this
+tail_probability: 0.0001 # 0.05 # 0.0001 TODO: fix this
 num_tail_samples: 0 # TODO: fix this
 max_grad_norm: 1.0
 
-# finite_diff_h lives inside dirichlet_energy_kwargs so it is actually forwarded
-# to dirichlet_energy_for_atoms_finite_difference (the top-level key is never read).
-dirichlet_energy_method: finite_difference  # or autograd
-dirichlet_energy_kwargs:
-  finite_diff_h: 1e-3
-  n_fd_dirs: 1  # number of random FD directions to average over per step
+# ── Heat-kernel objective  ⟨Qφ, P_t Qφ⟩  ─────────────────────────────────────
+# P_t = e^{t ∇·(D∇)}: larger t → stronger smoothing, tighter focus on low modes.
+smoothing_t: 0.05
+n_diffusion_samples: 4  # MC draws to estimate E_Z[Qφ(x + √(2Dt) Z)]
 
 resume_training:
   enabled: false
