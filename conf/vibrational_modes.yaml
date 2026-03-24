@@ -30,7 +30,7 @@ grad_accumulation_steps: 1
 
 # ── Stratified atom sampling ──────────────────────────────────────────────────
 tail_probability: 0.0001 # 0.05 # 0.0001 TODO: fix this
-num_tail_samples: 0 # TODO: fix this
+num_tail_samples: 32 # TODO: fix this
 max_grad_norm: 1.0
 
 # ── Heat-kernel objective  ⟨Qφ, P_t Qφ⟩  ─────────────────────────────────────

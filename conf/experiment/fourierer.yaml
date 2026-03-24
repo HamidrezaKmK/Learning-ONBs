@@ -6,10 +6,12 @@ material:
   _target_: infidictionary.material.JosephFourierMaterial
   image_path: assets/Joseph_Fourier.jpg
   image_size: 256
-  min_diffusivity: 0.01
+  min_diffusivity: 0.1
   max_diffusivity: 1.0
+  invert: False
   threshold: 0.5
   sigma: 0.002
+  exterior_mass: 0.1
 
 callbacks:
   isometry_check:
@@ -17,7 +19,7 @@ callbacks:
     dictionary: ${initial_dictionary}
     domain_sampler:
       _target_: infidictionary.domain_samplers.SquareSampler
-    frequency: 100
+    frequency: 500
     density: 1000
     indices:
       - [ 0,  0, 0]

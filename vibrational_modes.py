@@ -67,34 +67,41 @@ def heat_kernel_qform_for_atoms(
     initial_dictionary: InfiDictionary,
     tgt_coords: torch.Tensor,       # (N, d) detached
     diffusivity: torch.Tensor,      # (N,) detached
+    mass: torch.Tensor,             # (N,) detached — ρ(x), from material
     unique_indices: torch.Tensor,   # (A, domain_dim+1)
     pushforward_kwargs: dict,
     smoothing_t: float = 1.0,
     n_diffusion_samples: int = 4,
     **kwargs,
 ) -> torch.Tensor:                  # (A,)
-    """Compute ⟨Qφ_a, P_t Qφ_a⟩_{L²} for each atom via Monte Carlo diffusion.
+    """Compute ⟨Qφ_a, P̃_t Qφ_a⟩_ρ for each atom via Monte Carlo diffusion.
 
-    P_t = e^{t ∇·(D(x)∇)} is the heat semigroup.  Its quadratic form is:
+    With mass ρ the effective operator is ρ⁻¹L (L = -∇·(D∇)), whose heat
+    semigroup P̃_t = e^{-t ρ⁻¹ L} corresponds to the SDE (drift dropped):
 
-        ⟨Qφ_a, P_t Qφ_a⟩ = E_x[ Qφ_a(x) · E_Z[ Qφ_a(x + √(2D(x)t) Z) ] ]
+        dX ≈ √(2 D(x) / ρ(x)) dW
+
+    The quadratic form is:
+
+        ⟨Qφ_a, P̃_t Qφ_a⟩_ρ
+            = E_x[ρ(x) · Qφ_a(x) · E_Z[Qφ_a(x + √(2D(x)t/ρ(x)) Z)]]
 
     where Z ~ N(0, I_d) and coordinates are wrapped periodically into [0,1)^d.
-    The inner expectation over Z is estimated with n_diffusion_samples draws;
-    the outer expectation over x uses the provided quadrature points.
 
     Args:
         neural_isometry:      The isometry Q.
         initial_dictionary:   Fourier atom dictionary.
         tgt_coords:           Spatial quadrature points, shape (N, d).
         diffusivity:          D(x_j) at each point, shape (N,).
+        mass:                 ρ(x_j) at each point, shape (N,).  Returned by
+                              the material alongside diffusivity.
         unique_indices:       Atom multi-indices, shape (A, domain_dim+1).
         pushforward_kwargs:   Forwarded to pullback / pushforward.
-        smoothing_t:          Diffusion time t in P_t = e^{t∇·(D∇)}.
-        n_diffusion_samples:  MC draws K to estimate E_Z[Qφ(x + √(2Dt)Z)].
+        smoothing_t:          Diffusion time t in P̃_t = e^{-t ρ⁻¹ L}.
+        n_diffusion_samples:  MC draws K to estimate E_Z[Qφ(x + √(2Dt/ρ)Z)].
 
     Returns:
-        qform: shape (A,), the quadratic form ⟨Qφ_a, P_t Qφ_a⟩ per atom.
+        qform: shape (A,), the quadratic form ⟨Qφ_a, P̃_t Qφ_a⟩_ρ per atom.
     """
     tgt_coords = tgt_coords.detach()
     A = unique_indices.shape[0]
@@ -128,9 +135,9 @@ def heat_kernel_qform_for_atoms(
     # ── Qφ(x) at the original quadrature points ───────────────────────────────
     qphi_base = _eval_qphi(tgt_coords)  # (A, N, C)
 
-    # ── MC estimate of P_t Qφ(x) = E_Z[ Qφ(x + √(2D(x)t) Z) ] ──────────────
-    # Local diffusion standard deviation: √(2 D(x_j) t), shape (N, 1)
-    diffusion_std = torch.sqrt(2.0 * diffusivity * smoothing_t).unsqueeze(-1)
+    # ── MC estimate of P̃_t Qφ(x) = E_Z[ Qφ(x + √(2D(x)t/ρ(x)) Z) ] ─────────
+    # Local diffusion std: √(2 D(x_j) t / ρ(x_j)), shape (N, 1)
+    diffusion_std = torch.sqrt(2.0 * diffusivity * smoothing_t / mass).unsqueeze(-1)
 
     qphi_diffused = torch.zeros_like(qphi_base)
     for _ in range(n_diffusion_samples):
@@ -139,11 +146,11 @@ def heat_kernel_qform_for_atoms(
         coords_shifted = coords_shifted - torch.floor(coords_shifted)  # periodic
         qphi_diffused = qphi_diffused + _eval_qphi(coords_shifted)
 
-    qphi_diffused = qphi_diffused / n_diffusion_samples  # (A, N, C) — P_t Qφ
+    qphi_diffused = qphi_diffused / n_diffusion_samples  # (A, N, C) — P̃_t Qφ
 
-    # ── ⟨Qφ, P_t Qφ⟩ with uniform spatial measure ────────────────────────────
-    logabsdet_zeros = torch.zeros(N, device=device, dtype=dtype)
-    return parallel_inner_product(qphi_base, qphi_diffused, logabsdet=logabsdet_zeros)
+    # ── ⟨Qφ, P̃_t Qφ⟩_ρ with ρ-weighted spatial measure ─────────────────────
+    log_mass = torch.log(mass)  # (N,)
+    return parallel_inner_product(qphi_base, qphi_diffused, logabsdet=log_mass)
 
 
 # ── Main training loop ────────────────────────────────────────────────────────
@@ -203,7 +210,9 @@ def vibrational_modes(
             coords_raw = material.domain_sampler.sample(domain_sample_size).to(device)
 
             with torch.no_grad():
-                diffusivity = material(coords_raw).detach()  # (N,)
+                diffusivity, mass = material(coords_raw)
+                diffusivity = diffusivity.detach()  # (N,)
+                mass = mass.detach()                # (N,)
 
             tgt_coords = coords_raw.detach()
 
@@ -213,7 +222,7 @@ def vibrational_modes(
             ).to(device)
             qform_exact_per_atom = heat_kernel_qform_for_atoms(
                 neural_isometry, initial_dictionary,
-                tgt_coords, diffusivity,
+                tgt_coords, diffusivity, mass,
                 idx_exact, pushforward_kwargs,
                 smoothing_t=smoothing_t,
                 n_diffusion_samples=n_diffusion_samples,
@@ -234,7 +243,7 @@ def vibrational_modes(
                 )
                 qform_tail_per_atom = heat_kernel_qform_for_atoms(
                     neural_isometry, initial_dictionary,
-                    tgt_coords, diffusivity,
+                    tgt_coords, diffusivity, mass,
                     idx_tail_u, pushforward_kwargs,
                     smoothing_t=smoothing_t,
                     n_diffusion_samples=n_diffusion_samples,

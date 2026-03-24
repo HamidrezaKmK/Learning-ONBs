@@ -81,9 +81,6 @@ class GraphLaplacianRegularizer(Regularizer):
         energy = torch.einsum("anc,nm,amc->a", values, laplacian, values) / laplacian.shape[0]  # (A,)
         return energy
 
-
-
-
 def load_bw_tensor_from_path(
             path: str = "../assets/Joseph_Fourier.jpg",
             resize_to: int | None = 512,

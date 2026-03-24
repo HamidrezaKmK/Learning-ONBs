@@ -5,8 +5,9 @@ defaults:
 material:
   _target_: infidictionary.material.AirplaneMaterial
   length: 2.0
-  min_diffusivity: 0.1
+  min_diffusivity: 1.0 # 0.01
   max_diffusivity: 1.0
+  exterior_mass: 0.01 #1.0e-8
 
 # Isometry-check domain sampler must match the airplane domain
 callbacks:
@@ -15,7 +16,7 @@ callbacks:
     dictionary: ${initial_dictionary}
     domain_sampler:
       _target_: infidictionary.domain_samplers.SquareSampler
-    frequency: 100
+    frequency: 500
     density: 1000
     indices:
       - [ 0,  0, 0]
