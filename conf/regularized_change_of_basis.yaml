@@ -22,7 +22,8 @@ pushforward_kwargs:
 model_state_kwargs:
   num_steps: 200
 
-atom_index_batch_size: 512
+tail_probability: 0.0001
+num_tail_samples: 32
 grad_accumulation_steps: 1
 
 resume_training:
@@ -31,27 +32,13 @@ resume_training:
 
 checkpointing:
   checkpoint_dir: outputs/checkpoints  # relative to Hydra output dir
-  checkpoint_every_n_steps: 1000  # optimizer steps between periodic saves
+  checkpoint_every_n_steps: 100  # optimizer steps between periodic saves
 reg_lambda: 1.0
 fidelity_lambda: 1.0
 
 # training hyperparameters
 n_epochs: 500000
 domain_sample_size: 32
-
-callbacks:
-  isometry_check:
-    _target_: infidictionary.callbacks.IsometryCheck
-    dictionary: ${initial_dictionary}
-    domain_sampler: ${domain_sampler}
-    frequency: 500
-    density: 1000
-    indices:
-      - [-1,  1, 0]
-      - [ 0,  0, 0]
-      - [ 1, -1, 0]
-      - [ 0, -1, 0]
-      - [-1,  0, 0]
 
 # Add tags so that it is easier to filter the experiments in the W&B dashboard
 wandb:

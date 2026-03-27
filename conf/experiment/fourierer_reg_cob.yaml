@@ -1,0 +1,60 @@
+# @package _global_
+#
+# Regularized change-of-basis experiment using the FouriererRegularizer.
+#
+# The regularizer promotes a two-channel structure on the pushed-forward atoms:
+#   - c=0 atoms: non-zero only in channel 0, only inside the Fourier portrait.
+#   - c=1 atoms: non-zero only in channel 1, only outside the Fourier portrait.
+#
+# Usage:
+#   python regularized_change_of_basis.py +experiment=fourierer_reg_cob
+defaults:
+  - override /regularizer: fourierer
+  - _self_
+
+# Two-channel dictionary so atoms have shape (N, 2); isometry must match
+initial_dictionary:
+  num_channels: 2
+
+neural_isometry:
+  channels_dim: 2
+
+# Stratified sampling: keep the exact stratum small (high-pmf atoms are few)
+# and rely on the MC tail for coverage.
+tail_probability: 0.0001
+num_tail_samples: 64
+grad_accumulation_steps: 8
+
+# Laplacian smoothness inside the active region of each atom.
+# Dirichlet energy: smooth_lambda * Σ w_ij (f_i - f_j)²  restricted to the active mask.
+regularizer:
+  smooth_lambda: 1.0   # tune this; 0.0 disables the graph term
+  sigma: 0.05
+  k: 8
+
+# Balance between isometry fidelity and the spatial-constancy regularizer.
+fidelity_lambda: 0.0
+reg_lambda: 1.0
+
+n_epochs: 200000
+domain_sample_size: 64
+
+callbacks:
+  isometry_check:
+    _target_: infidictionary.callbacks.IsometryCheck
+    dictionary: ${initial_dictionary}
+    domain_sampler: ${domain_sampler}
+    frequency: 100
+    density: 100
+    indices:
+      - [ 0,  0, 0]
+      - [ 1,  0, 0]
+      - [ 0,  1, 0]
+      - [ 0,  0, 1]
+      - [-1,  0, 1]
+      - [ 0, -1, 1]
+
+wandb:
+  tags:
+    experiment: regularized_change_of_basis
+    regularizer: fourierer_channel_region

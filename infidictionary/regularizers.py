@@ -1,16 +1,27 @@
 import torch
 from abc import ABC, abstractmethod
-from PIL import Image
-import torch.nn.functional as F
-import numpy as np
 
 class Regularizer(ABC):
+    def update_coordinates(self, coords: torch.Tensor) -> None:
+        """Called whenever the spatial coordinates change.
+
+        Subclasses may override this to pre-compute any coordinate-dependent
+        quantities (e.g. KNN graphs, weight matrices) that are expensive to
+        rebuild every time ``compute_energy`` is called.  The default
+        implementation is a no-op.
+
+        Args:
+            coords: (N, d) the new spatial coordinates.
+        """
+        pass
+
     @abstractmethod
-    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            coords: (N, d) spatial coordinates.
-            values: (A, N, C) atom values at those coordinates.
+            coords:  (N, d) spatial coordinates.
+            values:  (A, N, C) atom values at those coordinates.
+            indices: (A, ...) atom multi-indices (e.g. Fourier multi-indices).
         Returns:
             Per-atom energy, shape (A,).
         """
@@ -20,7 +31,7 @@ class EntropyRegularizer(Regularizer):
     def __init__(self, sigma: float = 0.01):
         self.sigma = sigma
 
-    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
         # values: (A, N, C)
         # pairwise squared L2 distances in value space: (A, N, N)
         val_diffs = values.unsqueeze(2) - values.unsqueeze(1)  # (A, N, N, C)
@@ -32,31 +43,6 @@ class EntropyRegularizer(Regularizer):
         entropy = -torch.mean(torch.log(p_x), dim=-1)  # (A,)
         return entropy
 
-class TVRegularizer(Regularizer):
-    def __init__(
-        self,
-        sigma: float = 0.1,
-        neighbourhood_r: float = 0.1,
-    ):
-        self.sigma = sigma
-        self.neighbourhood_r = neighbourhood_r
-
-    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
-        # values: (A, N, C)
-        distances = torch.cdist(coords, coords)
-        weights = torch.where(
-            distances < self.neighbourhood_r,
-            torch.exp(-distances.pow(2) / (2 * self.sigma ** 2)),
-            torch.zeros_like(distances)
-        )
-        weights.fill_diagonal_(0)  # (N, N)
-
-        val_diffs = values.unsqueeze(2) - values.unsqueeze(1)  # (A, N, N, C)
-        val_norms = val_diffs.norm(dim=-1)  # (A, N, N)
-
-        energy = torch.mean(weights[None] * val_norms, dim=(1, 2))  # (A,)
-        return energy
-
 class GraphLaplacianRegularizer(Regularizer):
     def __init__(
         self,
@@ -66,7 +52,7 @@ class GraphLaplacianRegularizer(Regularizer):
         self.sigma = sigma
         self.neighbourhood_r = neighbourhood_r
 
-    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
         # values: (A, N, C)
         distances = torch.cdist(coords, coords)
         weights = torch.where(
@@ -81,90 +67,300 @@ class GraphLaplacianRegularizer(Regularizer):
         energy = torch.einsum("anc,nm,amc->a", values, laplacian, values) / laplacian.shape[0]  # (A,)
         return energy
 
-def load_bw_tensor_from_path(
-            path: str = "../assets/Joseph_Fourier.jpg",
-            resize_to: int | None = 512,
-            device: torch.device | str = "cpu",
-            dtype: torch.dtype = torch.float32,
-        ) -> torch.Tensor:
-            """
-            Returns: (1, 1, H, W) grayscale in [0,1]
-            """
-            img = Image.open(path).convert("L")  # grayscale
-            if resize_to is not None:
-                W, H = img.size
-                scale = resize_to / max(W, H)
-                newW, newH = int(round(W * scale)), int(round(H * scale))
-                img = img.resize((newW, newH), Image.BICUBIC)
+class TVMaterialRegularizer(Regularizer):
+    """Regularizer that applies a sparse TV penalty inside a material mask.
 
-            arr = np.asarray(img, dtype=np.float32) / 255.0  # (H,W)
-            t = torch.from_numpy(arr).to(device=device, dtype=dtype)
-            # standardize pixels to have mean 0 and std 1, to make the regularizer more stable to train
-            t = (t - t.mean()) / (t.std() + 1e-8)
-            return t.unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
+    Uses a ``Material`` to derive an inside mask from its mass map, then
+    penalises variation of atom values at coordinates *inside* the material
+    (mass >= mass_threshold).  The penalty is uniform across all atoms —
+    there is no index-parity selection.
 
-class FouriererRegularizer(Regularizer):
+    The TV penalty is the mean weighted |v_i - v_j| over a sparse KNN graph
+    of spatial neighbours, restricted to edges where both endpoints lie inside
+    the mask.  The KNN graph is built with FAISS on detached coordinates so the
+    full N×N distance matrix is never materialised.
+
+    Using a ``ConstantMaterial`` (mass = 1 everywhere) makes the penalty apply
+    globally, promoting piecewise-constant atom functions on the whole domain.
+
+    Args:
+        material:        Any ``Material`` used to derive the inside mask via its
+                         mass map.
+        mass_threshold:  Points with ``mass >= mass_threshold`` are *inside*.
+        sigma:           Gaussian bandwidth for the neighbourhood edge weights.
+        k:               Number of nearest neighbours per point in the KNN graph.
+    """
 
     def __init__(
         self,
-        asset_path: str = "./assets/Joseph_Fourier.jpg",
-        resize_to: int = 512,
+        material,
+        mass_threshold: float = 0.5,
+        sigma: float = 0.05,
+        k: int = 8,
     ):
-        self.img = load_bw_tensor_from_path(asset_path, resize_to=resize_to, device="cpu")  # (1,1,H,W)
-       
+        self.material = material
+        self.mass_threshold = mass_threshold
+        self.sigma = sigma
+        self.k = k
 
-    def sample_image_irregular(
+        # Cached by update_coordinates; None until first call.
+        self._edge_w: torch.Tensor | None = None
+        self._w_inside: torch.Tensor | None = None
+        self._src: torch.Tensor | None = None
+        self._dst: torch.Tensor | None = None
+
+    @staticmethod
+    def _build_knn_edges(coords: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
+        import faiss
+        import numpy as np
+
+        xy = coords.detach().cpu().float().contiguous().numpy()  # (N, d)
+        N, d = xy.shape
+        index = faiss.IndexFlatL2(d)
+        index.add(xy)
+        _, I = index.search(xy, k + 1)   # (N, k+1); first column is self
+        I = I[:, 1:]                      # (N, k) — exclude self
+        src = np.repeat(np.arange(N), k)  # (N*k,)
+        dst = I.reshape(-1)               # (N*k,)
+        device = coords.device
+        return (
+            torch.from_numpy(src).long().to(device),
+            torch.from_numpy(dst).long().to(device),
+        )
+
+    def update_coordinates(self, coords: torch.Tensor) -> None:
+        """Pre-compute and cache the KNN graph and masked edge weights.
+
+        Builds the FAISS KNN graph, computes Gaussian edge weights, queries
+        the material for the inside mask, and stores the masked weight vector
+        ``_w_inside``.  Called once per coordinate update so that
+        ``compute_energy`` only indexes into the pre-built edge set.
+
+        Args:
+            coords: (N, d) the new spatial coordinates.
+        """
+        with torch.no_grad():
+            src, dst = self._build_knn_edges(coords, self.k)
+
+            edge_sq_dist = (coords[src] - coords[dst]).pow(2).sum(dim=-1)  # (E,)
+            edge_w = torch.exp(-edge_sq_dist / (2.0 * self.sigma ** 2))    # (E,)
+
+            _, mass = self.material(coords)                  # (N,)
+            inside = (mass >= self.mass_threshold).float()   # (N,)
+
+            self._src     = src
+            self._dst     = dst
+            self._edge_w  = edge_w
+            self._w_inside = edge_w * inside[src] * inside[dst]  # (E,)
+
+    def compute_energy(
         self,
-        img_1x1xHxW: torch.Tensor,
-        xy: torch.Tensor,
-        coords: str = "pixel",          # "pixel" or "unit"
-        mode: str = "bilinear",
-        padding_mode: str = "border",
-        align_corners: bool = True,
+        coords: torch.Tensor,
+        values: torch.Tensor,
+        indices: torch.Tensor,
     ) -> torch.Tensor:
+        """Compute per-atom sparse TV penalty restricted to the material mask.
+
+        Relies on the KNN graph and edge weights cached by the last call to
+        ``update_coordinates``.  Raises if ``update_coordinates`` has not been
+        called yet.
+
+        Args:
+            coords:  (N, d) spatial coordinates — the actual graph is read from
+                     the cache.
+            values:  (A, N, C) pushed-forward atom values.
+            indices: (A, ...) atom multi-indices (unused; present for API
+                     compatibility).
+        Returns:
+            energy: (A,) per-atom TV penalty.
         """
-        xy: (N,2)
-        - coords="pixel": x in [0,W-1], y in [0,H-1], origin TOP-LEFT
-        - coords="unit":  x,y in [0,1], origin TOP-LEFT
-        Returns: (N,)
+        if self._src is None:
+            raise RuntimeError(
+                "TVMaterialRegularizer.update_coordinates must be called before "
+                "compute_energy."
+            )
+
+        src, dst = self._src, self._dst
+
+        # ── Sparse TV energy, fully vectorised over atoms ─────────────────────
+        edge_norms = (values[:, src, :] - values[:, dst, :]).norm(dim=-1)  # (A, E)
+        return (self._w_inside[None] * edge_norms).mean(dim=-1)  # (A,)
+
+
+class FouriererRegularizer(Regularizer):
+    """Channel-and-region-constancy regularizer for two-channel Fourier dictionaries.
+
+    Atoms are indexed by ``[kx, ky, ..., c]`` where ``c ∈ {0, 1}`` is the
+    dictionary channel.  The regularizer promotes the following structure on the
+    pushed-forward atoms (shape ``(N, 2)``):
+
+      * **c = 0**: channel 1 is zero everywhere; channel 0 is zero *outside*
+        the material mask.  The atom lives only inside the portrait, in channel 0.
+      * **c = 1**: channel 0 is zero everywhere; channel 1 is zero *inside*
+        the material mask.  The atom lives only outside the portrait, in channel 1.
+
+    The masking objective uses a binary mask (mass >= mass_threshold).
+
+    Optionally, a graph-Laplacian Dirichlet-energy term can be added to encourage
+    smooth (low-frequency) behaviour in the active region of each atom.  The
+    Dirichlet energy is normalised by the region's signal energy (Rayleigh-quotient
+    style) so that its scale is invariant to atom amplitude and grid size.
+
+    Args:
+        material:        A ``Material`` used to derive the inside mask.
+        mass_threshold:  Points with ``mass >= mass_threshold`` are *inside*.
+        smooth_lambda:   Weight of the Dirichlet smoothness penalty.  Set to 0
+                         to disable (no FAISS graph is built in that case).
+        sigma:           Gaussian bandwidth for edge weights: exp(-dist²/σ²).
+        k:               Number of nearest neighbours per point in the KNN graph.
+    """
+
+    def __init__(
+        self,
+        material,
+        mass_threshold: float = 0.5,
+        smooth_lambda: float = 0.0,
+        sigma: float = 0.05,
+        k: int = 8,
+    ):
+        self.material = material
+        self.mass_threshold = mass_threshold
+        self.smooth_lambda = smooth_lambda
+        self.sigma = sigma
+        self.k = k
+
+        self._inside:    torch.Tensor | None = None
+        self._outside:   torch.Tensor | None = None
+        self._src:       torch.Tensor | None = None
+        self._dst:       torch.Tensor | None = None
+        self._w_inside:  torch.Tensor | None = None  # edge weights for c=0 smoothing
+        self._w_outside: torch.Tensor | None = None  # edge weights for c=1 smoothing
+
+    def update_coordinates(self, coords: torch.Tensor) -> None:
+        with torch.no_grad():
+            diffusivity, mass = self.material(coords)
+            self._inside  = (mass >= self.mass_threshold).float()   # (N,)
+            self._outside = 1.0 - self._inside                      # (N,)
+
+            if self.smooth_lambda > 0.0:
+                # TODO: move build_knn outside of the TVMaterialRegularizer code
+                src, dst = TVMaterialRegularizer._build_knn_edges(coords, self.k)
+                edge_sq_dist = (coords[src] - coords[dst]).pow(2).sum(dim=-1)  # (E,)
+                # Gaussian kernel scaled by geometric mean of diffusivities
+                # TODO: maybe harmonic mean is better
+                D_edge = (diffusivity[src] * diffusivity[dst]).sqrt()           # (E,)
+                edge_w = torch.exp(-edge_sq_dist / self.sigma ** 2) * D_edge   # (E,)
+                self._src       = src
+                self._dst       = dst
+                self._w_inside  = edge_w * self._inside[src]  * self._inside[dst]   # (E,)
+                self._w_outside = edge_w * self._outside[src] * self._outside[dst]  # (E,)
+
+    # TODO: remove coords from this and just set coordinates in the update_coordinates function
+    def compute_energy(
+        self,
+        coords: torch.Tensor,
+        values: torch.Tensor,
+        indices: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute per-atom masking + optional Laplacian smoothness penalty.
+
+        Args:
+            coords:  (N, d) spatial coordinates.
+            values:  (A, N, 2) pushed-forward atom values (two channels).
+            indices: (A, D+1) atom multiindices; last entry is the channel (0 or 1).
+        Returns:
+            energy: (A,) per-atom penalty.
         """
-        _, _, H, W = img_1x1xHxW.shape
-        xy = xy.to(device=img_1x1xHxW.device, dtype=img_1x1xHxW.dtype)
+        from infidictionary.utils import norm2
 
-        if coords == "unit":
-            x = xy[:, 0] * (W - 1)
-            y =  (1 - xy[:, 1]) * (H - 1)
-        elif coords == "pixel":
-            x, y = xy[:, 0], (H - 1) - xy[:, 1]
-        else:
-            raise ValueError("coords must be 'pixel' or 'unit'")
+        if self._inside is None:
+            raise RuntimeError(
+                "FouriererRegularizer.update_coordinates must be called before "
+                "compute_energy."
+            )
 
-        if align_corners:
-            gx = 2.0 * (x / (W - 1)) - 1.0
-            gy = 2.0 * (y / (H - 1)) - 1.0
-        else:
-            gx = (2.0 * x + 1.0) / W - 1.0
-            gy = (2.0 * y + 1.0) / H - 1.0
+        inside  = self._inside[None, :, None]   # (1, N, 1)
+        outside = self._outside[None, :, None]  # (1, N, 1)
 
-        grid = torch.stack([gx, gy], dim=-1).view(1, -1, 1, 2)  # (1,N,1,2)
+        v0 = values[:, :, 0:1]  # (A, N, 1)
+        v1 = values[:, :, 1:2]  # (A, N, 1)
 
-        samples = F.grid_sample(
-            img_1x1xHxW, grid,
-            mode=mode,
-            padding_mode=padding_mode,
-            align_corners=align_corners,
-        )  # (1,1,N,1)
+        # ── Binary-mask objective ─────────────────────────────────────────────
+        # c=0: atom lives in ch0 inside the portrait → penalise ch1 everywhere
+        #      and ch0 outside the mask.
+        # c=1: atom lives in ch1 outside the portrait → penalise ch0 everywhere
+        #      and ch1 inside the mask.
+        e_ch0 = norm2(v1) + norm2(v0 * outside)  # (A,)
+        e_ch1 = norm2(v0) + norm2(v1 * inside)   # (A,)
 
-        return samples.view(-1)  # (N,)
+        # ── Dirichlet smoothness — Rayleigh-quotient normalised (optional) ────
+        # The denominator is detached so gradients flow only through the Dirichlet
+        # numerator; without detach the denominator would create conflicting
+        # gradients that fight the masking term.
+        # raw_ch* uses .sum()/N (not .mean()) to match norm2's 1/N normalisation,
+        # making the Dirichlet energy grid-size invariant (independent of N).
+        if self.smooth_lambda > 0.0 and self._src is not None:
+            src, dst = self._src, self._dst
+            N = values.shape[1]
 
-    def compute_energy(self, coords: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
-        # values: (A, N, C)
-        # Sample the image at the given coordinates
-        sampled_vals = self.sample_image_irregular(self.img.to(coords.device), coords, coords="unit")  # (N,)
+            v0_flat  = values[:, :, 0]
+            d_in     = v0_flat[:, src] - v0_flat[:, dst]                         # (A, E)
+            raw_ch0  = (self._w_inside[None] * d_in.pow(2)).sum(dim=-1) / N      # (A,)
+            # den_ch0  = norm2(v0 * inside).clamp(min=1e-8).detach()               # (A,) inside-region energy
 
-        # MSE between each atom and the image values, averaged over N and C
-        fidelity = torch.mean((values - sampled_vals[None, :, None]) ** 2, dim=(1, 2))  # (A,)
-        return fidelity
+            v1_flat  = values[:, :, 1]
+            d_out    = v1_flat[:, src] - v1_flat[:, dst]                         # (A, E)
+            raw_ch1  = (self._w_outside[None] * d_out.pow(2)).sum(dim=-1) / N    # (A,)
+            # den_ch1  = norm2(v1 * outside).clamp(min=1e-8).detach()              # (A,) outside-region energy
 
-    def get_joseph(self, coords: torch.Tensor) -> torch.Tensor:
-        return self.sample_image_irregular(self.img.to(coords.device), coords, coords="unit")  # (N,)
+            e_ch0 = e_ch0 + self.smooth_lambda * raw_ch0 #  / den_ch0
+            e_ch1 = e_ch1 + self.smooth_lambda * raw_ch1 # / den_ch1
+
+        ch0 = (indices[:, -1] == 0)         # (A,)
+        return torch.where(ch0, e_ch0, e_ch1)
+
+
+# ── Previous FouriererRegularizer (binary-mask, unnormalised smoothness) ──────
+#
+# class FouriererRegularizer(Regularizer):
+#     def __init__(self, material, mass_threshold=0.5, smooth_lambda=0.0,
+#                  sigma=0.05, k=8):
+#         self.material        = material
+#         self.mass_threshold  = mass_threshold
+#         self.smooth_lambda   = smooth_lambda
+#         self.sigma           = sigma
+#         self.k               = k
+#         self._inside  = None;  self._outside = None
+#         self._src     = None;  self._dst     = None
+#         self._w_inside = None; self._w_outside = None
+#
+#     def update_coordinates(self, coords):
+#         with torch.no_grad():
+#             _, mass = self.material(coords)
+#             self._inside  = (mass >= self.mass_threshold).float()
+#             self._outside = 1.0 - self._inside
+#             if self.smooth_lambda > 0.0:
+#                 src, dst = TVMaterialRegularizer._build_knn_edges(coords, self.k)
+#                 edge_sq_dist = (coords[src] - coords[dst]).pow(2).sum(dim=-1)
+#                 edge_w = torch.exp(-edge_sq_dist / self.sigma ** 2)
+#                 self._src       = src;  self._dst       = dst
+#                 self._w_inside  = edge_w * self._inside[src]  * self._inside[dst]
+#                 self._w_outside = edge_w * self._outside[src] * self._outside[dst]
+#
+#     def compute_energy(self, coords, values, indices):
+#         from infidictionary.utils import norm2
+#         v0 = values[:, :, 0:1];  v1 = values[:, :, 1:2]
+#         e_ch0 = norm2(v1) + norm2(v0 * self._outside[None, :, None])
+#         e_ch1 = norm2(v0) + norm2(v1 * self._inside[None,  :, None])
+#         if self.smooth_lambda > 0.0 and self._src is not None:
+#             src, dst = self._src, self._dst
+#             v0_flat = values[:, :, 0]
+#             d_in    = v0_flat[:, src] - v0_flat[:, dst]
+#             s_ch0   = (self._w_inside[None]  * d_in.pow(2)).mean(dim=-1)
+#             v1_flat = values[:, :, 1]
+#             d_out   = v1_flat[:, src] - v1_flat[:, dst]
+#             s_ch1   = (self._w_outside[None] * d_out.pow(2)).mean(dim=-1)
+#             e_ch0   = e_ch0 + self.smooth_lambda * s_ch0
+#             e_ch1   = e_ch1 + self.smooth_lambda * s_ch1
+#         ch0 = (indices[:, -1] == 0)
+#         return torch.where(ch0, e_ch0, e_ch1)

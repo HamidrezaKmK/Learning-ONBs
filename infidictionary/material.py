@@ -151,6 +151,7 @@ class JosephFourierMaterial(Material):
         else:
             inside = np.ones_like(img_np, dtype=bool)
 
+        self.exterior_mass = exterior_mass
         mass_np = np.where(inside, 1.0, exterior_mass).astype(np.float32)
         self._mass_image: torch.Tensor = (
             torch.from_numpy(mass_np).unsqueeze(0).unsqueeze(0)

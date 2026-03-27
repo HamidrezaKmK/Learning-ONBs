@@ -12,7 +12,7 @@ import wandb
 
 from infidictionary.checkpointing import Checkpointer
 from infidictionary.dictionaries.base import InfiDictionary
-from infidictionary.neural_isometries import NeuralIsometry
+from infidictionary.neural_isometries import NeuralIsometry, EulerianIsometry
 from infidictionary.regularizers import Regularizer
 from infidictionary.domain_samplers import DomainSampler
 from training_utils import get_grad_norm, get_param_norm, get_avg_lr, step_scheduler
@@ -34,7 +34,8 @@ def reg_change_of_basis(
     callbacks: list,
     wandb_enabled: bool,
     grad_accumulation_steps: int,
-    atom_index_batch_size: int,
+    tail_probability: float,
+    num_tail_samples: int,
     model_state_kwargs: dict,
     pushforward_kwargs: dict,
     checkpointer: Checkpointer | None,
@@ -57,29 +58,89 @@ def reg_change_of_basis(
             continue
 
         coords = domain_sampler.sample(domain_sample_size).to(device)  # (N, d)
+        # N, d = half_coords.shape
+        # Z = torch.randn_like(half_coords)
+        # coords_shifted = half_coords + 0.01 * Z        # (N, d)
+        # coords_shifted = coords_shifted - torch.floor(coords_shifted)  # periodic
+        # coords = torch.cat([half_coords, coords_shifted], dim=0)  # (2N, d)
+        
+        regularizer.update_coordinates(coords)
         fidelity_history_temp = []
         reg_energy_history_temp = []
 
         for _ in range(grad_accumulation_steps):
             neural_isometry.shuffle_model_state(**model_state_kwargs)
-            # sample atom indices from the dictionary's own prior distribution
-            atom_indices = initial_dictionary.sample_indices(atom_index_batch_size).to(device)
-            unique_atom_indices, inverse_indices = torch.unique(atom_indices, dim=0, return_inverse=True)
-            atom_counts = torch.bincount(inverse_indices).float().to(device)  # (A_unique,)
 
-            initial_atoms = initial_dictionary.get_atoms(coords, unique_atom_indices)  # (A, N, C)
-            _, _, pushed_atoms = neural_isometry.pushforward(
-                src_coords=coords,
-                src_logabsdet=torch.zeros(coords.shape[0], device=device),
-                src_field=initial_atoms,
-                **pushforward_kwargs,
-            )  # (A, N, C)
+            # Resolve source coords: for Eulerian isometries src == tgt;
+            # otherwise pull back the sampled target coords (no gradient needed).
+            if isinstance(neural_isometry, EulerianIsometry):
+                src_coords = coords
+                src_logabsdet = torch.zeros(coords.shape[0], device=device)
+            else:
+                with torch.no_grad():
+                    src_coords, src_logabsdet, _ = neural_isometry.pullback(
+                        tgt_coords=coords,
+                        tgt_logabsdet=torch.zeros(coords.shape[0], device=device),
+                        tgt_field=torch.zeros(1, coords.shape[0], 1, device=device),
+                        **pushforward_kwargs,
+                    )
+                src_coords = src_coords.detach()
+                src_logabsdet = src_logabsdet.detach()
 
-            all_reg = regularizer.compute_energy(coords, pushed_atoms)  # (A,)
-            all_fidelity = torch.mean((pushed_atoms - initial_atoms) ** 2, dim=(1, 2))  # (A,)
+            def _pushforward_atoms(unique_indices: torch.Tensor):
+                """Get initial atoms at src_coords and push them forward.
 
-            fidelity = (all_fidelity * atom_counts).sum() / atom_counts.sum()
-            reg_energy = (all_reg * atom_counts).sum() / atom_counts.sum()
+                Returns (initial_atoms, pushed_atoms, tgt_coords_pf) with shapes
+                (A, N, C), (A, N, C), (N, d).
+                """
+                init = initial_dictionary.get_atoms(src_coords, unique_indices)  # (A, N, C)
+                tgt_pf, _, pushed = neural_isometry.pushforward(
+                    src_coords=src_coords,
+                    src_logabsdet=src_logabsdet,
+                    src_field=init,
+                    **pushforward_kwargs,
+                )  # (N, d), _, (A, N, C)
+                return init, pushed, tgt_pf
+
+            # ── Exact high-probability stratum ────────────────────────────────
+            idx_exact = initial_dictionary.get_high_probability_indices(
+                tail_probability
+            ).to(device)
+            init_exact, pushed_exact, tgt_coords_exact = _pushforward_atoms(idx_exact)
+            
+            pmfs_exact = initial_dictionary.get_index_pmfs(idx_exact).to(device)  # (A_exact,)
+
+            reg_exact_per_atom = regularizer.compute_energy(tgt_coords_exact, pushed_exact, idx_exact)  # (A_exact,)
+            fidelity_exact_per_atom = torch.mean(
+                (pushed_exact - init_exact) ** 2, dim=(1, 2)
+            )  # (A_exact,)
+            reg_exact = (reg_exact_per_atom * pmfs_exact).sum()
+            fidelity_exact = (fidelity_exact_per_atom * pmfs_exact).sum()
+
+            # ── MC tail stratum ───────────────────────────────────────────────
+            idx_all = initial_dictionary.sample_indices(num_tail_samples).to(device)
+            in_exact = (
+                idx_all[:, None, :] == idx_exact[None, :, :]
+            ).all(dim=-1).any(dim=-1)
+            idx_tail = idx_all[~in_exact]
+
+            if idx_tail.shape[0] > 0:
+                idx_tail_u, idx_tail_c = torch.unique(
+                    idx_tail, return_counts=True, dim=0
+                )
+                init_tail, pushed_tail, tgt_coords_tail = _pushforward_atoms(idx_tail_u)
+                reg_tail_per_atom = regularizer.compute_energy(tgt_coords_tail, pushed_tail, idx_tail_u)  # (A_tail,)
+                fidelity_tail_per_atom = torch.mean(
+                    (pushed_tail - init_tail) ** 2, dim=(1, 2)
+                )  # (A_tail,)
+                reg_tail = (reg_tail_per_atom * idx_tail_c.float()).sum() / num_tail_samples
+                fidelity_tail = (fidelity_tail_per_atom * idx_tail_c.float()).sum() / num_tail_samples
+            else:
+                reg_tail = torch.zeros(1, device=device).squeeze()
+                fidelity_tail = torch.zeros(1, device=device).squeeze()
+
+            reg_energy = reg_exact + reg_tail
+            fidelity = fidelity_exact + fidelity_tail
             energy = fidelity_lambda * fidelity + reg_lambda * reg_energy
             (energy / grad_accumulation_steps).backward(retain_graph=False)
             fidelity_history_temp.append(fidelity.item())
@@ -200,7 +261,8 @@ def main(conf: DictConfig):
         callbacks=callbacks,
         wandb_enabled=conf.wandb.enabled,
         grad_accumulation_steps=conf.grad_accumulation_steps,
-        atom_index_batch_size=conf.atom_index_batch_size,
+        tail_probability=conf.tail_probability,
+        num_tail_samples=conf.num_tail_samples,
         model_state_kwargs=conf.get("model_state_kwargs", {}) or {},
         pushforward_kwargs=conf.get("pushforward_kwargs", {}) or {},
         checkpointer=checkpointer,

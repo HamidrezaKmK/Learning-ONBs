@@ -1,3 +1,15 @@
 _target_: infidictionary.regularizers.FouriererRegularizer
-asset_path: ./assets/Joseph_Fourier.jpg
-resize_to: 512
+mass_threshold: 0.5  # binary split for restricting Laplacian graph edges
+smooth_lambda: 0.0   # weight of Dirichlet smoothness term (0 = disabled, no graph built)
+sigma: 0.05          # base Gaussian bandwidth: exp(-dist²/σ²) · sqrt(D_i·D_j)
+k: 8                 # number of KNN neighbours for the Laplacian graph
+material:
+  _target_: infidictionary.material.JosephFourierMaterial
+  image_path: assets/Joseph_Fourier.jpg
+  image_size: 256
+  min_diffusivity: 1.0
+  max_diffusivity: 1.0
+  invert: false
+  threshold: 0.5
+  sigma: 0.002
+  exterior_mass: 0.01
