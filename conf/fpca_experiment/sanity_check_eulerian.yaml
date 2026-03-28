@@ -1,0 +1,12 @@
+# @package _global_
+defaults:
+  - /domain_samplers@domain_sampler: square_sampler
+  - /function_generator@function_generator: fourier_2d
+  - /neural_isometry@neural_isometry: eulerian
+  - /callbacks@_global_: square
+  - _self_
+
+model_state_kwargs:
+  num_steps: 200
+
+n_epochs: 50000

@@ -1,0 +1,57 @@
+defaults:
+  - neural_isometry: eulerian
+  - /dictionaries@initial_dictionary: fourier_2d
+  - /domain_samplers@domain_sampler: square_sampler
+  - hydra: default
+  - wandb: disabled
+  - _self_
+  - override hydra/hydra_logging: none
+  - override hydra/job_logging: none
+
+isometry_optimizer_callable:
+  _target_: torch.optim.Adam
+  lr: 0.001
+  _partial_: true
+isometry_scheduler_callable: null
+
+pushforward_kwargs:
+  start_time: 0.0
+  end_time: 1.0
+
+model_state_kwargs:
+  num_steps: 200
+
+tail_probability: 0.0001
+num_tail_samples: 32
+grad_accumulation_steps: 1
+
+# When set, exact atoms are processed in chunks of this size and each chunk's
+# gradient is accumulated immediately (freeing the previous chunk's graph).
+# Use this when a small tail_probability produces too many high-probability atoms
+# to fit in GPU memory. Set to null to process all exact atoms in one pass.
+atom_batch_size: null
+
+resume_training:
+  enabled: false
+  checkpoint_path: null
+
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 100
+
+# training hyperparameters
+n_epochs: 500000
+domain_sample_size: 32
+
+# Adaptive loss balancing via EMA of each term's energy magnitude.
+# When enabled, the effective weight for term i = configured_weight_i / EMA_i,
+# so every term contributes at roughly its configured scale regardless of
+# the raw magnitude of its energy.
+adaptive_weighting:
+  enabled: true
+  ema_decay: 0.99
+
+wandb:
+  tags:
+    experiment: regularized_change_of_basis
+    task: fourierer

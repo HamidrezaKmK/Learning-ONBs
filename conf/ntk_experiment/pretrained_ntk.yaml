@@ -1,0 +1,26 @@
+# @package _global_
+#
+# NTK regularizer at a pre-trained point (empirical NTK regime).
+#
+# The ntk_model is an MLP whose weights are loaded from a checkpoint trained
+# on the Joseph Fourier portrait.  The NTK is therefore the empirical NTK
+# evaluated at those learned parameters (ntk_sigma = 0 equivalent).
+#
+# Usage:
+#   python regularized_change_of_basis.py +ntk_experiment=pretrained_ntk
+defaults:
+  - _self_
+
+regularizers:
+  ntk:
+    weight: 1.0
+    _target_: infidictionary.regularizers.NTKRegularizer
+    ntk_model_weights_path: ./outputs/neural_field_fit/joseph_fourier_mlp.pt
+    ntk_model:
+      _target_: infidictionary.utils.MLPNeuralField
+      input_dim: 2
+      output_dim: 1
+      hidden_dims:
+        a: 256
+        b: 256
+        c: 256

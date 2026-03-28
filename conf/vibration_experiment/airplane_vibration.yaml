@@ -1,0 +1,51 @@
+# @package _global_
+#
+# Vibrational-modes experiment on the airplane material, using the
+# HeatQuadraticFormRegularizer via regularized_change_of_basis.py.
+#
+# Usage:
+#   python regularized_change_of_basis.py +experiment=airplane_vibration
+defaults:
+  - _self_
+
+material:
+  _target_: infidictionary.material.AirplaneMaterial
+  length: 2.0
+  min_diffusivity: 1.0 # 0.01
+  max_diffusivity: 1.0
+  exterior_mass: 0.01 #1.0e-8
+
+regularizers:
+  reg:
+    weight: 1.0
+    _target_: infidictionary.regularizers.HeatQuadraticFormRegularizer
+    smoothing_t: 0.05
+    n_diffusion_samples: 4
+    material: ${material}
+
+  masking:
+    weight: 1.0
+    _target_: infidictionary.regularizers.MaskingRegularizer
+    mass_threshold: 0.5
+    material: ${regularizers.reg.material}
+
+# Isometry-check domain sampler must match the airplane domain
+callbacks:
+  isometry_check:
+    _target_: infidictionary.callbacks.IsometryCheck
+    dictionary: ${initial_dictionary}
+    domain_sampler:
+      _target_: infidictionary.domain_samplers.SquareSampler
+    frequency: 500
+    density: 1000
+    indices:
+      - [ 0,  0, 0]
+      - [-1,  0, 0]
+      - [ 0, -1, 0]
+      - [ 1,  0, 0]
+      - [ 0,  1, 0]
+
+wandb:
+  tags:
+    experiment: vibrational_modes
+    material: airplane_constant

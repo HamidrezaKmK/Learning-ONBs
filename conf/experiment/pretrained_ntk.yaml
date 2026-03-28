@@ -1,6 +1,0 @@
-# @package _global_
-defaults:
-  - /neural_fields@ntk_model: joseph_model_mlp
-  - _self_
-
-ntk_model_weights_path: ./outputs/neural_field_fit/joseph_fourier_mlp.pt  

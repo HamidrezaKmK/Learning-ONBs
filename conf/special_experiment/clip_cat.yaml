@@ -1,0 +1,59 @@
+# @package _global_
+#
+# Regularized change-of-basis using CLIP similarity to a text prompt.
+#
+# Usage:
+#   python reg_cob.py +special_experiment=clip_cat
+defaults:
+  - _self_
+
+# Three-channel dictionary to produce RGB images for CLIP.
+initial_dictionary:
+  num_channels: 3
+
+neural_isometry:
+  channels_dim: 3
+
+
+regularizers:
+  clip:
+    weight: 1.0
+    _target_: infidictionary.regularizers.CLIPRegularizer
+    subject: "Cat"
+    k_nn: 8
+    image_size: 224
+    model_name: ViT-B-32
+    pretrained: openai
+    n_augmentation_trials: 8
+    hair_thresholds: [1.0, 2.0, 3.0]
+    bg_alpha: 0.8
+
+tail_probability: 0.001
+num_tail_samples: 32
+atom_batch_size: 32
+grad_accumulation_steps: 8
+domain_sample_size: 64
+
+n_epochs: 1000
+
+adaptive_weighting:
+  enabled: false
+
+callbacks:
+  isometry_check:
+    _target_: infidictionary.callbacks.IsometryCheck
+    dictionary: ${initial_dictionary}
+    domain_sampler: ${domain_sampler}
+    frequency: 10
+    density: 100
+    indices:
+      - [ 0,  0, 0]
+      - [ 1,  0, 0]
+      - [ 0,  0, 1]
+      - [-1,  0, 1]
+      - [ 0,  0, 2]
+
+wandb:
+  tags:
+    experiment: regularized_change_of_basis
+    regularizer: clip

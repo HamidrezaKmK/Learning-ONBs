@@ -17,5 +17,5 @@ n_time_freqs: 8
 post_combination_dims:
   - 64
 activation:
-  _target_: torch.nn.ReLU
+  _target_: torch.nn.SiLU
   _partial_: true

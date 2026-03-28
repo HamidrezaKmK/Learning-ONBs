@@ -1,9 +1,0 @@
-_target_: infidictionary.regularizers.TVMaterialRegularizer
-mass_threshold: 0.5
-sigma: 0.05
-k: 8
-material:
-  _target_: infidictionary.material.ConstantMaterial
-  diffusivity: 1.0
-  domain_sampler:
-    _target_: infidictionary.domain_samplers.SquareSampler

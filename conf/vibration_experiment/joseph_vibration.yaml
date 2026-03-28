@@ -1,0 +1,54 @@
+# @package _global_
+#
+# Vibrational-modes experiment on the Joseph Fourier portrait material, using
+# the HeatQuadraticFormRegularizer via regularized_change_of_basis.py.
+#
+# Usage:
+#   python regularized_change_of_basis.py +experiment=fourierer
+defaults:
+  - _self_
+
+material:
+  _target_: infidictionary.material.JosephFourierMaterial
+  image_path: assets/Joseph_Fourier.jpg
+  image_size: 256
+  min_diffusivity: 0.1
+  max_diffusivity: 1.0
+  invert: False
+  threshold: 0.5
+  sigma: 0.002
+  exterior_mass: 0.1
+
+regularizers:
+  reg:
+    weight: 1.0
+    _target_: infidictionary.regularizers.HeatQuadraticFormRegularizer
+    smoothing_t: 0.05
+    n_diffusion_samples: 4
+    material: ${material}
+
+  masking:
+    weight: 1.0
+    _target_: infidictionary.regularizers.MaskingRegularizer
+    mass_threshold: 0.5
+    material: ${regularizers.reg.material}
+
+callbacks:
+  isometry_check:
+    _target_: infidictionary.callbacks.IsometryCheck
+    dictionary: ${initial_dictionary}
+    domain_sampler:
+      _target_: infidictionary.domain_samplers.SquareSampler
+    frequency: 100
+    density: 1000
+    indices:
+      - [ 0,  0, 0]
+      - [-1,  0, 0]
+      - [ 0, -1, 0]
+      - [ 1,  0, 0]
+      - [ 0,  1, 0]
+
+wandb:
+  tags:
+    experiment: vibrational_modes
+    material: joseph_fourier
