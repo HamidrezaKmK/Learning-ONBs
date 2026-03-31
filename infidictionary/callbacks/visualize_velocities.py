@@ -7,7 +7,7 @@ from .base import Callback
 
 from infidictionary.domain_samplers import DomainSampler
 from infidictionary.neural_isometries import NeuralIsometry, LagrangianIsometry
-from infidictionary.utils import NeuralField
+from infidictionary.networks import NeuralField
 
 class VisualizeVelocityField(Callback):
     """

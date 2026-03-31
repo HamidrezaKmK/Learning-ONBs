@@ -14,7 +14,6 @@ from infidictionary.checkpointing import Checkpointer
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.neural_isometries import NeuralIsometry
 from infidictionary.regularizers import Regularizer, _base_push_cache
-from infidictionary.domain_samplers import DomainSampler
 from training_utils import get_grad_norm, get_param_norm, get_avg_lr, step_scheduler
 
 OmegaConf.register_new_resolver("eval", eval)
@@ -24,9 +23,7 @@ def reg_change_of_basis(
     neural_isometry: NeuralIsometry,
     initial_dictionary: InfiDictionary,
     regularizers: list,           # list of (weight: float, regularizer: Regularizer)
-    domain_sampler: DomainSampler,
     n_epochs: int,
-    domain_sample_size: int,
     device: torch.device,
     optim_isometry: torch.optim.Optimizer,
     scheduler_isometry: torch.optim.lr_scheduler._LRScheduler | None,
@@ -79,9 +76,8 @@ def reg_change_of_basis(
         if epoch_i < start_epoch:
             continue
 
-        coords = domain_sampler.sample(domain_sample_size).to(device)
         for _, regularizer in regularizers:
-            regularizer.update_coordinates(coords)
+            regularizer.update_coordinates()
 
         # Effective weights for this step: use EMA-normalised weights if enabled,
         # falling back to the configured weight on the first step (EMA not yet warm).
@@ -141,7 +137,7 @@ def reg_change_of_basis(
                     if effective_weights[i] <= 1e-12:
                         continue
                     chunk_per_atom = regularizer.compute_energy(
-                        neural_isometry, initial_dictionary, coords,
+                        neural_isometry, initial_dictionary,
                         chunk_idx, pushforward_kwargs,
                     )
                     chunk_energy = (chunk_per_atom * chunk_pmfs).sum()
@@ -158,7 +154,7 @@ def reg_change_of_basis(
                     if effective_weights[i] <= 1e-12:
                         continue
                     tail_per_atom = regularizer.compute_energy(
-                        neural_isometry, initial_dictionary, coords,
+                        neural_isometry, initial_dictionary,
                         idx_tail_u, pushforward_kwargs,
                     )
                     reg_tail = (tail_per_atom * idx_tail_c.float()).sum() / num_tail_samples
@@ -228,7 +224,6 @@ def main(conf: DictConfig):
 
     neural_isometry: NeuralIsometry = instantiate(conf.neural_isometry)
     initial_dictionary: InfiDictionary = instantiate(conf.initial_dictionary)
-    domain_sampler: DomainSampler = instantiate(conf.domain_sampler)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -318,9 +313,7 @@ def main(conf: DictConfig):
         neural_isometry=neural_isometry,
         initial_dictionary=initial_dictionary,
         regularizers=regularizers,
-        domain_sampler=domain_sampler,
         n_epochs=conf.n_epochs,
-        domain_sample_size=conf.domain_sample_size,
         device=device,
         optim_isometry=optim_isometry,
         scheduler_isometry=scheduler_isometry,

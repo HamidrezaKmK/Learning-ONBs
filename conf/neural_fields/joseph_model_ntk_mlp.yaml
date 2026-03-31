@@ -1,4 +1,4 @@
-_target_: infidictionary.utils.NTKMLPNeuralField
+_target_: infidictionary.networks.NTKMLPNeuralField
 input_dim: 2
 output_dim: 1
 hidden_dims:

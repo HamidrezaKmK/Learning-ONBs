@@ -8,18 +8,22 @@ class MaskingRegularizer(PushforwardRegularizer):
     atoms in regions with negligible mass (e.g. outside a portrait or shape).
 
     Args:
-        material:        A ``Material`` used to derive the mask via its mass map.
-        mass_threshold:  Points with ``mass < mass_threshold`` are *outside*.
+        domain_sampler:    A ``DomainSampler`` providing quadrature points.
+        domain_sample_size: Passed as n_per_dim to domain_sampler.sample.
+        material:          A ``Material`` used to derive the mask via its mass map.
+        mass_threshold:    Points with ``mass < mass_threshold`` are *outside*.
     """
 
-    def __init__(self, material, mass_threshold: float = 0.5):
+    def __init__(self, domain_sampler, domain_sample_size: int, material, mass_threshold: float = 0.5):
+        super().__init__(domain_sampler, domain_sample_size)
         self.material = material
         self.mass_threshold = mass_threshold
         self._outside: torch.Tensor | None = None
 
-    def update_coordinates(self, coords: torch.Tensor) -> None:
+    def update_coordinates(self) -> None:
+        super().update_coordinates()
         with torch.no_grad():
-            _, mass = self.material(coords)
+            _, mass = self.material(self._coords)
             self._outside = (mass < self.mass_threshold).float().detach()
 
     def _energy_from_atoms(self, tgt_coords, init, pushed, indices):
@@ -29,8 +33,8 @@ class MaskingRegularizer(PushforwardRegularizer):
             raise RuntimeError(
                 "MaskingRegularizer.update_coordinates must be called before compute_energy."
             )
-        outside = self._outside[None, :, None]  # (1, N, 1) — broadcast over atoms and channels
-        return norm2(pushed * outside)           # (A,)
+        outside = self._outside.to(pushed.device)[None, :, None]  # (1, N, 1)
+        return norm2(pushed * outside)                             # (A,)
 
 
 class HeatQuadraticFormRegularizer(Regularizer):
@@ -50,26 +54,37 @@ class HeatQuadraticFormRegularizer(Regularizer):
         P̃_t Qφ(x) ≈ E_Z[ Qφ(x + √(2D(x)t/ρ(x)) Z) ],   Z ~ N(0, I)
 
     Args:
+        domain_sampler:      A ``DomainSampler`` providing quadrature points.
+        domain_sample_size:  Passed as n_per_dim to domain_sampler.sample.
         material:            A ``Material`` providing D(x) and ρ(x).
         smoothing_t:         Diffusion time t in P̃_t = e^{-t ρ⁻¹ L}.
         n_diffusion_samples: Number of MC draws for the diffusion estimate.
     """
 
-    def __init__(self, material, smoothing_t: float = 1.0, n_diffusion_samples: int = 4):
+    def __init__(
+        self,
+        domain_sampler,
+        domain_sample_size: int,
+        material,
+        smoothing_t: float = 1.0,
+        n_diffusion_samples: int = 4,
+    ):
+        super().__init__(domain_sampler, domain_sample_size)
         self.material = material
         self.smoothing_t = smoothing_t
         self.n_diffusion_samples = n_diffusion_samples
         self._diffusivity: torch.Tensor | None = None
         self._mass:        torch.Tensor | None = None
 
-    def update_coordinates(self, coords: torch.Tensor) -> None:
+    def update_coordinates(self) -> None:
+        super().update_coordinates()
         with torch.no_grad():
-            diffusivity, mass = self.material(coords)
+            diffusivity, mass = self.material(self._coords)
             self._diffusivity = diffusivity.detach()
             self._mass = mass.detach()
 
     def compute_energy(
-        self, neural_isometry, initial_dictionary, tgt_coords, indices, pushforward_kwargs
+        self, neural_isometry, initial_dictionary, indices, pushforward_kwargs
     ) -> torch.Tensor:
         from infidictionary.utils import parallel_inner_product
 
@@ -79,9 +94,13 @@ class HeatQuadraticFormRegularizer(Regularizer):
                 "before compute_energy."
             )
 
+        tgt_coords = self._coords.to(indices.device)
         N, d = tgt_coords.shape
         device = tgt_coords.device
         dtype = tgt_coords.dtype
+
+        diffusivity = self._diffusivity.to(device)
+        mass        = self._mass.to(device)
 
         # Base: Qφ_a(x)
         _, qphi_base, _ = _base_push_cache.get_or_compute(
@@ -90,7 +109,7 @@ class HeatQuadraticFormRegularizer(Regularizer):
 
         # MC estimate of P̃_t Qφ(x) = E_Z[ Qφ(x + √(2D(x)t/ρ(x)) Z) ]
         diffusion_std = torch.sqrt(
-            2.0 * self._diffusivity * self.smoothing_t / self._mass
+            2.0 * diffusivity * self.smoothing_t / mass
         ).unsqueeze(-1)  # (N, 1)
 
         qphi_diffused = torch.zeros_like(qphi_base)
@@ -104,7 +123,7 @@ class HeatQuadraticFormRegularizer(Regularizer):
             qphi_diffused = qphi_diffused + qphi_shifted
         qphi_diffused = qphi_diffused / self.n_diffusion_samples
 
-        log_mass = torch.log(self._mass)
+        log_mass = torch.log(mass)
         qform = parallel_inner_product(qphi_base, qphi_diffused, logabsdet=log_mass)
 
         # Return the *negative* so that minimising energy = maximising the quadratic form.

@@ -16,7 +16,7 @@ from infidictionary.checkpointing import Checkpointer
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.datasets import IrregularDataset
 from infidictionary.neural_isometries import NeuralIsometry
-from infidictionary.utils import NeuralField
+from infidictionary.networks import NeuralField
 from infidictionary.domain_samplers import DomainSampler
 from training_utils import get_grad_norm, get_param_norm, get_avg_lr, step_scheduler
 

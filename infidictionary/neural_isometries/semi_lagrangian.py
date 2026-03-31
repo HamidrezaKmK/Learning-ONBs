@@ -5,7 +5,7 @@ from torch import nn
 from .eulerian import EulerianIsometry
 from .lagrangian import LagrangianIsometry
 from .base import NeuralIsometry
-from infidictionary.utils import TimeEvolvingField, SinusoidalTimeEmbedding
+from infidictionary.networks import TimeEvolvingField, SinusoidalTimeEmbedding
 from infidictionary.diffeomorphisms import Diffeomorphism
 
 class SemiLagrangianIsometry(NeuralIsometry):

@@ -10,10 +10,10 @@ ode_isometry:
   coords_dim: 2
   channels_dim: 1
   scalar_field_partial:
-    _target_: infidictionary.utils.TimeEvolvingField
+    _target_: infidictionary.networks.TimeEvolvingField
     _partial_: true
     base_field_partial:
-      _target_: infidictionary.utils.MLPNeuralField
+      _target_: infidictionary.networks.MLPNeuralField
       _partial_: true
       hidden_dims:
         a: 16

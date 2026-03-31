@@ -1,7 +1,7 @@
 import torch
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.neural_isometries.base import NeuralIsometry
-from .utils import NeuralField
+from infidictionary.networks import NeuralField
 
 def get_reconstructions(
     coords: torch.Tensor, # (N, d)

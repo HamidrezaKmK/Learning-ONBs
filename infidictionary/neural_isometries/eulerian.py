@@ -3,7 +3,8 @@ import torch
 from torch.utils.checkpoint import checkpoint
 
 from .base import NeuralIsometry
-from infidictionary.utils import TimeEvolvingField, norm2, pairwise_inner_product
+from infidictionary.networks import TimeEvolvingField
+from infidictionary.utils import norm2, pairwise_inner_product
 
 class EulerianIsometry(NeuralIsometry):
 

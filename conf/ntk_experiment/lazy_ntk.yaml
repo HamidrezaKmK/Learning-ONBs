@@ -17,7 +17,7 @@ regularizers:
     _target_: infidictionary.regularizers.NTKRegularizer
     ntk_model_weights_path: null
     ntk_model:
-      _target_: infidictionary.utils.NTKMLPNeuralField
+      _target_: infidictionary.networks.NTKMLPNeuralField
       input_dim: 2
       output_dim: 1
       hidden_dims:
@@ -29,3 +29,8 @@ regularizers:
       activation:
         _target_: torch.nn.Tanh
         _partial_: true
+    domain_sampler:
+      _target_: infidictionary.domain_samplers.SquareSampler
+      stratified: true
+      add_noise: true
+    domain_sample_size: 32

@@ -1,4 +1,4 @@
-_target_: infidictionary.utils.FactoredTimeEvolvingField
+_target_: infidictionary.networks.FactoredTimeEvolvingField
 # coords_dim and output_dim are injected by EulerianIsometry via _partial_
 
 spatial_hidden_dims:

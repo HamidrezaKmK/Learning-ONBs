@@ -2,91 +2,32 @@
 from .base import PushforwardRegularizer
 import torch
 import torch.nn.functional as F
-
-
-def build_grid_weights(
-    tgt_coords: torch.Tensor, k_nn: int = 8, image_size: int = 32
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Build KNN interpolation weights from pixel centres to irregular coordinates.
-
-    Args:
-        tgt_coords:  (N, d) coordinates; the first two dimensions are used.
-        k_nn:        Number of nearest quadrature points per pixel centre.
-        image_size:  Side length of the square output grid (default 32).
-
-    Returns:
-        nn_idx: (image_size², k) LongTensor — indices into the N input points.
-        nn_w:   (image_size², k) FloatTensor — normalised inverse-distance weights.
-    """
-    import faiss
-
-    dtype   = tgt_coords.dtype
-    spatial = tgt_coords[:, :2].detach().cpu().float().contiguous().numpy()  # (N, 2)
-
-    t = (torch.arange(image_size, dtype=dtype) + 0.5) / image_size
-    gy, gx = torch.meshgrid(t, t, indexing="ij")
-    queries = torch.stack([gx, gy], dim=-1).reshape(-1, 2).float().numpy()  # (S², 2)
-
-    k = min(k_nn, spatial.shape[0])
-    index = faiss.IndexFlatL2(2)
-    index.add(spatial)
-    sq_dists, nn_idx = index.search(queries, k)  # (S², k) each
-
-    nn_w = 1.0 / (torch.from_numpy(sq_dists).to(dtype).sqrt() + 1e-8)
-    nn_w = nn_w / nn_w.sum(dim=1, keepdim=True)
-
-    return torch.from_numpy(nn_idx).long(), nn_w
-
-
-def atoms_to_grid_images(
-    pushed: torch.Tensor,
-    nn_idx: torch.Tensor,
-    nn_w: torch.Tensor,
-    image_size: int,
-) -> torch.Tensor:
-    """Interpolate scattered atom values onto a square grid using precomputed KNN weights.
-
-    Args:
-        pushed:     (A, N, C) atom values at N irregular coordinates.
-        nn_idx:     (image_size², k) nearest-neighbour indices from :func:`build_grid_weights`.
-        nn_w:       (image_size², k) interpolation weights from :func:`build_grid_weights`.
-        image_size: Side length of the square output grid; must match what was
-                    passed to :func:`build_grid_weights`.
-
-    Returns:
-        grid: (A, C, image_size, image_size) images.
-    """
-    A, N, C  = pushed.shape
-    n_pixels = image_size * image_size
-    device   = pushed.device
-    nn_idx   = nn_idx.to(device)
-    nn_w     = nn_w.to(device)
-    k        = nn_idx.shape[1]
-
-    vals      = pushed[:, nn_idx.reshape(-1), :].reshape(A, n_pixels, k, C)
-    grid_flat = (vals * nn_w[None, :, :, None]).sum(dim=2)                        # (A, S², C)
-    return grid_flat.reshape(A, image_size, image_size, C).permute(0, 3, 1, 2)   # (A, C, S, S)
-
+import math
 
 class ClassActivationRegularizer(PushforwardRegularizer):
     """Maximises a target CIFAR-10 class logit for each pushed-forward atom.
 
-    In update_coordinates, a FAISS KNN graph maps each 32×32 pixel centre to
-    its k nearest quadrature points with normalised inverse-distance weights.
-    In _energy_from_atoms those weights convert the (A, N, 3) atom values to a
-    (A, 3, 32, 32) image, which is passed through a frozen CIFAR-10 classifier.
-    Returning the negative target-class logit as energy makes minimisation
-    equivalent to maximising that class score.
+    Atoms are evaluated on a stratified ``image_size × image_size`` pixel grid
+    built internally.  The resulting (A, 3, image_size, image_size) images are
+    passed directly to a frozen CIFAR-10 classifier after optional Gaussian noise
+    augmentation.
+
+    The internal ``SquareSampler(stratified=True, add_noise=add_noise)`` produces
+    coords in ``indexing='ij'`` order, so ``pushed.reshape(A, n, n, 3)`` is a valid
+    spatial image with no KNN interpolation required.
 
     CIFAR-10 indices: 0 airplane 1 automobile 2 bird 3 cat 4 deer
                       5 dog 6 frog 7 horse 8 ship 9 truck
 
     Args:
-        target_class: CIFAR-10 class to maximise (default 3 = cat).
-        k_nn:         Nearest quadrature points per pixel (default 8).
-        image_size:   Resolution of the grid fed to the classifier (default 32).
-        hub_repo:     torch.hub source for the CIFAR-10 model.
-        hub_model:    Model name within that repo.
+        image_size:     Grid resolution; total quadrature points = image_size².
+                        Must match the classifier's expected input size (32).
+        add_noise:      If True, adds per-epoch jitter to the stratified grid.
+        target_class:   CIFAR-10 class to maximise (default 3 = cat).
+        hub_repo:       torch.hub source for the CIFAR-10 model.
+        hub_model:      Model name within that repo.
+        noise_std:      Std of Gaussian noise added per trial for robustness.
+        n_noise_trials: Number of noised copies per atom per step.
     """
 
     CIFAR10_CLASSES = [
@@ -98,122 +39,108 @@ class ClassActivationRegularizer(PushforwardRegularizer):
 
     def __init__(
         self,
-        target_class: int = 3,
-        k_nn: int = 8,
         image_size: int = 32,
+        add_noise: bool = False,
+        target_class: int = 3,
         hub_repo: str = "chenyaofo/pytorch-cifar-models",
         hub_model: str = "cifar10_resnet20",
         noise_std: float = 0.05,
         n_noise_trials: int = 8,
     ):
+        from infidictionary.domain_samplers import SquareSampler
+        super().__init__(SquareSampler(stratified=True, add_noise=add_noise), image_size)
         assert 0 <= target_class <= 9
-        self.target_class   = target_class
-        self.k_nn           = k_nn
         self.image_size     = image_size
+        self.target_class   = target_class
         self.noise_std      = noise_std
         self.n_noise_trials = n_noise_trials
         self.model          = torch.hub.load(hub_repo, hub_model, pretrained=True)
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad_(False)
-        self._nn_idx: torch.Tensor | None = None
-        self._nn_w:   torch.Tensor | None = None
         print(f"ClassActivationRegularizer: target='{self.CIFAR10_CLASSES[target_class]}' "
-              f"(class {target_class}), model={hub_model}, "
+              f"(class {target_class}), model={hub_model}, grid={image_size}x{image_size}, "
               f"noise_std={noise_std}, n_noise_trials={n_noise_trials}")
 
-    def update_coordinates(self, coords: torch.Tensor) -> None:
-        """Build FAISS KNN from pixel centres to quadrature points."""
-        self._nn_idx, self._nn_w = build_grid_weights(coords, self.k_nn, self.image_size)
-
     def _energy_from_atoms(self, tgt_coords, init, pushed, indices) -> torch.Tensor:
-        if self._nn_idx is None:
-            raise RuntimeError("update_coordinates must be called before compute_energy.")
-
         A, T   = pushed.shape[0], self.n_noise_trials
+        n      = self.image_size
         device = pushed.device
-        grid   = atoms_to_grid_images(pushed, self._nn_idx, self._nn_w, self.image_size)
 
-        # Min-max normalise to [0, 1]
-        vmin = grid.flatten(1).min(1).values[:, None, None, None]
-        vmax = grid.flatten(1).max(1).values[:, None, None, None]
-        grid = (grid - vmin) / (vmax - vmin + 1e-8)             # (A, 3, S, S)
+        # Direct reshape: pushed (A, n², 3) → (A, 3, n, n)
+        # Valid because SquareSampler uses indexing='ij': coords[i*n+j] = (x_i, y_j)
+        grid = pushed.reshape(A, n, n, 3).permute(0, 3, 1, 2)   # (A, 3, n, n)
+
+        # Clamp to [-1, 1] then rescale to [0, 1] for the classifier.
+        grid_clipped = (grid.clamp(-1, 1) + 1) / 2              # (A, 3, n, n)
 
         # Tile T copies per atom and add independent Gaussian noise to each
-        grid = grid.repeat_interleave(T, dim=0)                  # (A*T, 3, S, S)
-        grid = (grid + torch.randn_like(grid) * self.noise_std).clamp(0.0, 1.0)
+        grid_clipped = grid_clipped.repeat_interleave(T, dim=0)  # (A*T, 3, n, n)
+        grid_clipped = grid_clipped + torch.randn_like(grid_clipped) * self.noise_std
 
         mean  = self._MEAN.to(device)[None, :, None, None]
         std   = self._STD.to(device)[None, :, None, None]
-        batch = (grid - mean) / std
+        batch = (grid_clipped - mean) / std
 
         self.model.to(device)
+        range_penalty = (F.relu(-1 - grid) + F.relu(grid - 1)).mean(dim=(1, 2, 3))  # (A,)
+
         logits = self.model(batch)                               # (A*T, 10)
-        return -logits[:, self.target_class].reshape(A, T).mean(dim=1)  # (A,)
+        cls_energy = -logits[:, self.target_class].reshape(A, T).mean(dim=1)  # (A,)
+        return cls_energy + range_penalty
 
 
 class CLIPRegularizer(PushforwardRegularizer):
-    """Maximises CLIP cosine similarity with a per-atom text prompt derived from
-    the atom's multi-index.
+    """Maximises CLIP cosine similarity with a per-atom text embedding.
 
-    The prompt template is "A sitting {fur} {subject} colored in {color}":
+    A single prompt per color channel is encoded into a base embedding.  Each
+    atom's target is that base embedding perturbed by a small noise vector drawn
+    deterministically from a hash of its multi-index, then re-normalised.  This
+    encourages diversity: different atoms are pulled towards distinct
+    neighbourhoods of the CLIP text sphere while all remaining close to the base.
 
-      - **color** is determined by the last index component modulo 3:
-        0 → Red, 1 → Green, 2 → Blue.
-      - **fur**   is determined by the Chebyshev frequency radius
-        max(|k₁|, |k₂|, ...) of all index components except the last.
-        Low-radius atoms encode global/smooth content; high-radius atoms
-        encode fine detail — analogous to how much visible fur texture a cat
-        image would need to represent that atom faithfully:
-            radius < t0               → "Hairless"
-            t0 ≤ radius < t1          → "Short-haired"
-            t1 ≤ radius               → "Fluffy"
-        (t2 acts as a soft ceiling; radii ≥ t2 also map to "Fluffy".)
-
-    All 9 (fur × color) text embeddings are precomputed once at init and stored
-    on CPU. At each step atom images are splatted to a grid, min-max normalised,
-    then passed through T independent random spatial augmentations before a
-    single batched CLIP forward pass.
+    The last index component (channel) selects the color embedding:
+        0 → "Red",  1 → "Green",  2 → "Blue"
 
     Args:
-        subject:               Subject noun in the prompt template (default "Cat").
-        k_nn:                  Nearest quadrature points per pixel (default 8).
-        image_size:            Resolution of the intermediate KNN grid (default 32).
+        image_size:            Grid resolution; total quadrature points = image_size².
+        add_noise:             If True, adds per-epoch jitter to the stratified grid.
+        subject:               Subject noun used in the prompt (default "Cat").
         model_name:            OpenCLIP model architecture (default "ViT-B-32").
         pretrained:            OpenCLIP pretrained weights tag (default "openai").
-        n_augmentation_trials: Independently augmented views per atom per step
-                               (default 8).
-        hair_thresholds:       Three Chebyshev-radius boundaries that gate
-                               Hairless / Short-haired / Fluffy (default (1, 2, 3)).
+        n_augmentation_trials: Independently augmented views per atom per step.
+        bg_alpha:              Foreground opacity when compositing over random background.
+        embedding_noise_std:   Std of per-atom noise added in CLIP embedding space
+                               before re-normalisation.  0 disables diversity noise.
     """
 
-    _CLIP_MEAN  = torch.tensor([0.48145466, 0.4578275,  0.40821073])
-    _CLIP_STD   = torch.tensor([0.26862954, 0.26130258, 0.27577711])
-    _FUR_LEVELS = ["Hairless", "Short-haired", "Fluffy"]
-    _COLORS     = ["Red", "Green", "Blue"]
+    _CLIP_MEAN = torch.tensor([0.48145466, 0.4578275,  0.40821073])
+    _CLIP_STD  = torch.tensor([0.26862954, 0.26130258, 0.27577711])
+    _COLORS    = ["red", "green", "blue"]
+    _BANK_SIZE = 100_003   # prime — reduces hash collisions
 
     def __init__(
         self,
+        image_size: int = 64,
+        add_noise: bool = False,
         subject: str = "Cat",
-        k_nn: int = 8,
-        image_size: int = 32,
         model_name: str = "ViT-B-32",
         pretrained: str = "openai",
         n_augmentation_trials: int = 8,
-        hair_thresholds: tuple[float, float, float] = (1.0, 2.0, 3.0),
         bg_alpha: float = 0.8,
+        embedding_noise_std: float = 0.0,
+        range_penalty_weight: float = 1.0,
     ):
         import open_clip
         from torchvision.transforms import v2 as T
+        from infidictionary.domain_samplers import SquareSampler
 
-        self.subject               = subject
-        self.k_nn                  = k_nn
+        super().__init__(SquareSampler(stratified=True, add_noise=add_noise), image_size)
         self.image_size            = image_size
         self.n_augmentation_trials = n_augmentation_trials
-        self.hair_thresholds       = hair_thresholds
         self.bg_alpha              = bg_alpha
-        self._nn_idx: torch.Tensor | None = None
-        self._nn_w:   torch.Tensor | None = None
+        self.embedding_noise_std   = embedding_noise_std
+        self.range_penalty_weight  = range_penalty_weight
 
         self._model, _, _ = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
         self._model.eval()
@@ -224,31 +151,52 @@ class CLIPRegularizer(PushforwardRegularizer):
         if isinstance(self._clip_size, (list, tuple)):
             self._clip_size = self._clip_size[0]
 
-        # Precompute all 9 (fur × color) text embeddings and store on CPU.
+        # Precompute one text embedding per color and store on CPU.
         tokenizer = open_clip.get_tokenizer(model_name)
-        prompts = [
-            f"A sitting {fur} {subject} colored in {color}"
-            for fur in self._FUR_LEVELS
-            for color in self._COLORS
-        ]
+        prompts = [f"A {subject} colored in {color}, front view" for color in self._COLORS]
         with torch.no_grad():
-            feats = F.normalize(self._model.encode_text(tokenizer(prompts)), dim=-1)  # (9, D)
-        self._prompt_features = feats.reshape(3, 3, -1).cpu()  # (fur, color, D)
+            feats = F.normalize(self._model.encode_text(tokenizer(prompts)), dim=-1)  # (3, D)
+        self._color_features = feats.cpu()   # (3, D)
+
+        # Noise bank: large table of unit-normal vectors.  Each atom indexes into
+        # it via a polynomial hash of its multi-index — deterministic and vectorised.
+        D = self._color_features.shape[-1]
+        bank_gen = torch.Generator()
+        bank_gen.manual_seed(0)
+        self._noise_bank = torch.randn(self._BANK_SIZE, D, generator=bank_gen)  # (B, D)
 
         self._augment = T.Compose([
-            T.RandomResizedCrop(self._clip_size, scale=(0.5, 1.0), ratio=(0.75, 4.0 / 3.0)),
+            T.RandomResizedCrop(self._clip_size, scale=(0.25, 1.0), ratio=(0.5, 2.0)),
             T.RandomHorizontalFlip(p=0.5),
-            T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
+            T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+            T.RandomErasing(p=0.3, scale=(0.02, 0.15)),
         ])
 
         print(f"CLIPRegularizer: subject='{subject}', model={model_name}/{pretrained}, "
-              f"clip_size={self._clip_size}, n_augmentation_trials={n_augmentation_trials}, "
-              f"hair_thresholds={hair_thresholds}")
-        for i, prompt in enumerate(prompts):
-            print(f"  [{self._FUR_LEVELS[i // 3]}, {self._COLORS[i % 3]}] {prompt}")
+              f"clip_size={self._clip_size}, grid={image_size}x{image_size}, "
+              f"n_augmentation_trials={n_augmentation_trials}, "
+              f"embedding_noise_std={embedding_noise_std}")
+        for color, prompt in zip(self._COLORS, prompts):
+            print(f"  [{color}] {prompt}")
 
-    def update_coordinates(self, coords: torch.Tensor) -> None:
-        self._nn_idx, self._nn_w = build_grid_weights(coords, self.k_nn, self.image_size)
+    def _random_bg(self, g: torch.Tensor) -> torch.Tensor:
+        """Generate a random structured background (same shape as g).
+
+        Randomly selects between uniform noise and a Fourier sinusoidal texture.
+        Structured backgrounds force CLIP to respond to the spatial structure of
+        the foreground rather than background colour alone (Dream Fields finding).
+        """
+        A, C, H, W = g.shape
+        device = g.device
+        if torch.randint(0, 2, (1,)).item() == 0:
+            return torch.rand_like(g)
+        # Fourier sinusoidal background
+        freq = torch.randint(2, 6, (A, C, 1, 1), device=device).float()
+        ph_x = torch.rand(A, C, 1, 1, device=device) * 2 * math.pi
+        ph_y = torch.rand(A, C, 1, 1, device=device) * 2 * math.pi
+        xs = torch.linspace(0, 2 * math.pi, W, device=device)[None, None, None, :]
+        ys = torch.linspace(0, 2 * math.pi, H, device=device)[None, None, :, None]
+        return (0.5 + 0.5 * torch.sin(freq * xs + ph_x) * torch.sin(freq * ys + ph_y)).clamp(0, 1)
 
     def _clip_normalise(self, batch: torch.Tensor) -> torch.Tensor:
         device = batch.device
@@ -257,54 +205,57 @@ class CLIPRegularizer(PushforwardRegularizer):
         return (batch - mean) / std
 
     def _atom_text_features(self, indices: torch.Tensor) -> torch.Tensor:
-        """Return (A, D) text features for a batch of multi-indices.
+        """Return (A, D) per-atom text features.
 
-        Args:
-            indices: (A, d_idx) integer multi-indices — last component is channel,
-                     remaining components are frequency coordinates.
+        Base embedding is selected by channel (last index component % 3).
+        A deterministic per-atom noise vector — indexed via a polynomial hash
+        of the full multi-index — is added and the result is re-normalised.
         """
-        color_idx = indices[:, -1].long() % 3                                  # (A,)
+        color_idx = indices[:, -1].long() % 3                              # (A,)
+        base = self._color_features[color_idx.cpu()].to(indices.device)   # (A, D)
 
-        # Chebyshev radius: max absolute frequency component (excluding channel)
-        freq_radius = indices[:, :-1].abs().float().max(dim=-1).values          # (A,)
+        if self.embedding_noise_std <= 0.0:
+            return base
 
-        # 3 thresholds → up to 4 buckets; clamp to keep within 3 fur levels
-        boundaries = torch.tensor(list(self.hair_thresholds),
-                                  dtype=freq_radius.dtype, device=freq_radius.device)
-        fur_idx = torch.bucketize(freq_radius, boundaries).clamp(max=2)         # (A,)
+        # Polynomial hash of each index row → bank slot in [0, BANK_SIZE).
+        primes = torch.tensor([1_000_003, 2_000_003, 3_000_003],
+                              dtype=torch.long, device=indices.device)
+        row_hashes = (indices.long() * primes[:indices.shape[1]]).sum(dim=-1)  # (A,)
+        bank_idx   = row_hashes.abs() % self._BANK_SIZE                        # (A,)
+        noise      = self._noise_bank[bank_idx.cpu()].to(indices.device)       # (A, D)
 
-        return self._prompt_features[fur_idx.cpu(), color_idx.cpu()].to(indices.device)  # (A, D)
+        perturbed = base + self.embedding_noise_std * noise   # (A, D)
+        return F.normalize(perturbed, dim=-1)                 # (A, D)
 
     def _energy_from_atoms(self, tgt_coords, init, pushed, indices) -> torch.Tensor:
-        if self._nn_idx is None:
-            raise RuntimeError("update_coordinates must be called before compute_energy.")
-
         A, T   = pushed.shape[0], self.n_augmentation_trials
+        n      = self.image_size
         device = pushed.device
 
-        grid = atoms_to_grid_images(pushed, self._nn_idx, self._nn_w, self.image_size)
-        vmin = grid.flatten(1).min(1).values[:, None, None, None]
-        vmax = grid.flatten(1).max(1).values[:, None, None, None]
-        grid = (grid - vmin) / (vmax - vmin + 1e-8)    # (A, 3, S, S) in [0, 1]
+        # Direct reshape: pushed (A, n², 3) → (A, 3, n, n)
+        grid = pushed.reshape(A, n, n, 3).permute(0, 3, 1, 2)  # (A, 3, n, n)
 
-        # T independent augmented views; torch.cat along atom dim → (A*T, ...)
-        # Ordering: [a0t0, a1t0, ..., a(A-1)t0, a0t1, ..., a(A-1)t(T-1)]
-        # Each trial composites over a fresh random background before augmenting,
-        # forcing CLIP to respond to spatial cat structure rather than colour alone.
+        # Range penalty: push values into [-1, 1].
+        range_penalty = (F.relu(-1 - grid) + F.relu(grid - 1)).mean(dim=(1, 2, 3))  # (A,)
+
+        # Clamp to [-1, 1] then rescale to [0, 1] for CLIP.
+        grid_clipped = (grid.clamp(-1, 1) + 1) / 2  # (A, 3, n, n)
+
+        # T independent augmented views with random background compositing.
         def _one_view(g):
-            bg = torch.rand_like(g)
+            bg = self._random_bg(g)
             return self._augment(self.bg_alpha * g + (1 - self.bg_alpha) * bg)
 
-        views = torch.cat([_one_view(grid) for _ in range(T)], dim=0)
+        views = torch.cat([_one_view(grid_clipped) for _ in range(T)], dim=0)  # (A*T, 3, S, S)
         views = self._clip_normalise(views)
 
         self._model.to(device)
         img_features  = F.normalize(self._model.encode_image(views), dim=-1)  # (A*T, D)
         text_features = self._atom_text_features(indices).repeat(T, 1)        # (A*T, D)
 
-        sim = (img_features * text_features).sum(dim=-1)  # (A*T,)
-        return -sim.reshape(T, A).mean(dim=0)             # (A,)
-
+        sim = (img_features * text_features).sum(dim=-1)          # (A*T,)
+        clip_energy = -sim.reshape(T, A).mean(dim=0)              # (A,)
+        return clip_energy + self.range_penalty_weight * range_penalty
 
 class ImageTargetRegularizer(PushforwardRegularizer):
     """Penalises each pushed-forward atom for differing from a target image.
@@ -314,25 +265,24 @@ class ImageTargetRegularizer(PushforwardRegularizer):
     1. **MSE** — pixel-level L2 distance between the atom's grid image and the
        target (both min-max normalised to [0, 1]).
     2. **Perceptual** — L2 distance in the feature space of a frozen pretrained
-       MobileNetV3-Small (ImageNet weights), measuring semantic dissimilarity.
-       The grid image is optionally upsampled to ``feature_upsample_size`` before
-       the feature pass; set to ``None`` to pass the grid image directly without
-       any upsampling.
+       MobileNetV3-Small (ImageNet weights).
 
         E_a = mse_weight · MSE(grid_a, target)
             + perceptual_weight · ‖feat(grid_a) − feat(target)‖²
 
-    Minimising this energy pushes the atom images toward the target in both
-    pixel and semantic space.
+    Atoms are evaluated on a stratified ``image_size × image_size`` pixel grid
+    built internally; no KNN interpolation is needed.
 
     Args:
         target_image_path:     Path to the target image file (loaded with PIL).
-        image_size:            Side length of the comparison grid (default 32).
-        k_nn:                  Nearest quadrature points per pixel (default 8).
+        image_size:            Grid resolution and target resize resolution.
+        add_noise:             If True, adds per-epoch jitter to the stratified grid.
         mse_weight:            Weight for the MSE term (default 1.0).
         perceptual_weight:     Weight for the perceptual feature term (default 1.0).
         feature_upsample_size: Resolution fed to the feature extractor, or None to
-                               pass the grid image at its native resolution (default 64).
+                               use the grid image at native resolution (default 64).
+        noise_std:             Std of Gaussian noise added per trial.
+        n_noise_trials:        Number of noised copies per atom per step.
     """
 
     _IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406])
@@ -342,7 +292,7 @@ class ImageTargetRegularizer(PushforwardRegularizer):
         self,
         target_image_path: str,
         image_size: int = 32,
-        k_nn: int = 8,
+        add_noise: bool = False,
         mse_weight: float = 1.0,
         perceptual_weight: float = 1.0,
         feature_upsample_size: int | None = 64,
@@ -352,16 +302,15 @@ class ImageTargetRegularizer(PushforwardRegularizer):
         import torchvision.models as models
         import torchvision.transforms as T
         from PIL import Image
+        from infidictionary.domain_samplers import SquareSampler
 
+        super().__init__(SquareSampler(stratified=True, add_noise=add_noise), image_size)
         self.image_size            = image_size
-        self.k_nn                  = k_nn
         self.mse_weight            = mse_weight
         self.perceptual_weight     = perceptual_weight
         self.feature_upsample_size = feature_upsample_size
         self.noise_std             = noise_std
         self.n_noise_trials        = n_noise_trials
-        self._nn_idx: torch.Tensor | None = None
-        self._nn_w:   torch.Tensor | None = None
 
         # Load and resize the target image to [0, 1] (3, S, S)
         img = Image.open(target_image_path).convert("RGB")
@@ -369,8 +318,6 @@ class ImageTargetRegularizer(PushforwardRegularizer):
         self._target: torch.Tensor = transform(img)  # (3, S, S)
 
         # Frozen MobileNetV3-Small as feature extractor.
-        # Strip the classifier head; adaptive_avg_pool2d inside the backbone
-        # produces a (B, 576, 1, 1) tensor which we flatten to (B, 576).
         backbone = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.IMAGENET1K_V1)
         self._feature_extractor = torch.nn.Sequential(
             backbone.features,
@@ -393,50 +340,44 @@ class ImageTargetRegularizer(PushforwardRegularizer):
               f"mse_weight={mse_weight}, perceptual_weight={perceptual_weight}")
 
     def _imagenet_normalise(self, batch: torch.Tensor) -> torch.Tensor:
-        """Apply ImageNet mean/std normalisation to a (B, 3, H, W) batch."""
         device = batch.device
         mean = self._IMAGENET_MEAN.to(device)[None, :, None, None]
         std  = self._IMAGENET_STD.to(device)[None,  :, None, None]
         return (batch - mean) / std
 
     def _maybe_upsample(self, batch: torch.Tensor) -> torch.Tensor:
-        """Upsample to feature_upsample_size if set, otherwise return as-is."""
         if self.feature_upsample_size is None:
             return batch
         return F.interpolate(batch, size=self.feature_upsample_size,
                              mode="bilinear", align_corners=False)
 
-    def update_coordinates(self, coords: torch.Tensor) -> None:
-        self._nn_idx, self._nn_w = build_grid_weights(coords, self.k_nn, self.image_size)
-
     def _energy_from_atoms(self, tgt_coords, init, pushed, indices) -> torch.Tensor:
-        if self._nn_idx is None:
-            raise RuntimeError("update_coordinates must be called before compute_energy.")
-
         A, T   = pushed.shape[0], self.n_noise_trials
+        n      = self.image_size
         device = pushed.device
 
-        # Interpolate to (A, 3, S, S) and min-max normalise each atom to [0, 1]
-        grid = atoms_to_grid_images(pushed, self._nn_idx, self._nn_w, self.image_size)
-        vmin = grid.flatten(1).min(1).values[:, None, None, None]
-        vmax = grid.flatten(1).max(1).values[:, None, None, None]
-        grid = (grid - vmin) / (vmax - vmin + 1e-8)                # (A, 3, S, S)
+        # Direct reshape: pushed (A, n², 3) → (A, 3, n, n)
+        grid = pushed.reshape(A, n, n, 3).permute(0, 3, 1, 2)  # (A, 3, n, n)
+
+        # Range penalty on raw grid; clamp to [-1,1] then rescale to [0,1].
+        range_penalty = (F.relu(-1 - grid) + F.relu(grid - 1)).mean(dim=(1, 2, 3))  # (A,)
+        grid_clipped = (grid.clamp(-1, 1) + 1) / 2                # (A, 3, n, n)
 
         # Tile T copies per atom and add independent Gaussian noise to each
-        grid = grid.repeat_interleave(T, dim=0)                     # (A*T, 3, S, S)
-        grid = (grid + torch.randn_like(grid) * self.noise_std).clamp(0.0, 1.0)
+        grid_clipped = grid_clipped.repeat_interleave(T, dim=0)    # (A*T, 3, n, n)
+        grid_clipped = grid_clipped + torch.randn_like(grid_clipped) * self.noise_std
 
-        target = self._target.to(device)[None]                      # (1, 3, S, S)
+        target = self._target.to(device)[None]                      # (1, 3, n, n)
 
         # ── MSE term ──────────────────────────────────────────────────────────
-        mse = ((grid - target) ** 2).mean(dim=(1, 2, 3))            # (A*T,)
+        mse = ((grid_clipped - target) ** 2).mean(dim=(1, 2, 3))   # (A*T,)
         mse = mse.reshape(A, T).mean(dim=1)                         # (A,)
 
         if self.perceptual_weight > 0:
             # ── Perceptual term ───────────────────────────────────────────────
             self._feature_extractor.to(device)
             atom_feats = self._feature_extractor(
-                self._imagenet_normalise(self._maybe_upsample(grid))
+                self._imagenet_normalise(self._maybe_upsample(grid_clipped))
             ).reshape(A * T, -1)                                     # (A*T, F)
 
             tgt_feats  = self._target_features.to(device)[None]     # (1, F)
@@ -445,4 +386,4 @@ class ImageTargetRegularizer(PushforwardRegularizer):
         else:
             perceptual = 0
 
-        return self.mse_weight * mse + self.perceptual_weight * perceptual
+        return self.mse_weight * mse + self.perceptual_weight * perceptual + range_penalty

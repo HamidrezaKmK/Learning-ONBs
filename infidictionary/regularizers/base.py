@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 from abc import ABC, abstractmethod
 
 class _PushedAtomsCache:
@@ -108,23 +107,38 @@ def _eval_pushed_atoms(
 
 
 class Regularizer(ABC):
-    def update_coordinates(self, coords: torch.Tensor) -> None:
-        """Called once per epoch when target-domain coordinates change.
+    """Base class for all regularizers.
 
-        Subclasses may override to pre-compute coordinate-dependent quantities
-        (e.g. KNN graphs, diffusivity maps).  Default implementation is a no-op.
+    Each regularizer owns its domain sampler and samples coordinates
+    internally when ``update_coordinates`` is called.
 
-        Args:
-            coords: (N, d) the new spatial coordinates.
+    Args:
+        domain_sampler:    A ``DomainSampler`` used to draw quadrature points.
+        domain_sample_size: Passed as ``n_per_dim`` to ``domain_sampler.sample``;
+                            the total number of quadrature points is
+                            ``domain_sample_size ** d`` where d is the domain
+                            dimension.
+    """
+
+    def __init__(self, domain_sampler, domain_sample_size: int) -> None:
+        self.domain_sampler = domain_sampler
+        self.domain_sample_size = domain_sample_size
+        self._coords: torch.Tensor | None = None
+
+    def update_coordinates(self) -> None:
+        """Sample fresh quadrature coordinates from the domain sampler.
+
+        Subclasses may override to additionally pre-compute
+        coordinate-dependent quantities (e.g. KNN graphs, diffusivity maps).
+        Overrides must call ``super().update_coordinates()`` first.
         """
-        pass
+        self._coords = self.domain_sampler.sample(self.domain_sample_size)
 
     @abstractmethod
     def compute_energy(
         self,
         neural_isometry,
         initial_dictionary,
-        tgt_coords: torch.Tensor,
         indices: torch.Tensor,
         pushforward_kwargs: dict,
     ) -> torch.Tensor:
@@ -133,7 +147,6 @@ class Regularizer(ABC):
         Args:
             neural_isometry:    The isometry Q being optimised.
             initial_dictionary: Source atom dictionary.
-            tgt_coords:         (N, d) target-domain quadrature points.
             indices:            (A, ...) atom multi-indices.
             pushforward_kwargs: Forwarded to pullback / pushforward.
 
@@ -151,10 +164,11 @@ class PushforwardRegularizer(Regularizer):
     """
 
     def compute_energy(
-        self, neural_isometry, initial_dictionary, tgt_coords, indices, pushforward_kwargs
+        self, neural_isometry, initial_dictionary, indices, pushforward_kwargs
     ) -> torch.Tensor:
+        coords = self._coords.to(indices.device)
         init, pushed, tgt_pf = _base_push_cache.get_or_compute(
-            neural_isometry, initial_dictionary, tgt_coords, indices, pushforward_kwargs
+            neural_isometry, initial_dictionary, coords, indices, pushforward_kwargs
         )
         return self._energy_from_atoms(tgt_pf, init, pushed, indices)
 
@@ -178,4 +192,3 @@ class PushforwardRegularizer(Regularizer):
             energy: (A,) per-atom energy.
         """
         pass
-

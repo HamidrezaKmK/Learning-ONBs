@@ -1,4 +1,4 @@
-_target_: infidictionary.utils.FFNeuralField
+_target_: infidictionary.networks.FFNeuralField
 input_dim: 2
 output_dim: 1
 n_features: 64

@@ -25,7 +25,6 @@ regularizers:
     _target_: infidictionary.regularizers.ImageTargetRegularizer
     target_image_path: assets/Joseph_Fourier.jpg
     image_size: 32
-    k_nn: 8
     mse_weight: 1.0
     perceptual_weight: 0.0
     feature_upsample_size: 64
@@ -35,10 +34,6 @@ regularizers:
 tail_probability: 0.0001
 num_tail_samples: 32
 grad_accumulation_steps: 8
-
-# Use enough quadrature points to give the pixel-to-quadrature KNN
-# sufficient spatial coverage across [0, 1]^2.
-domain_sample_size: 32
 
 n_epochs: 5000
 

@@ -39,7 +39,7 @@ from abc import abstractmethod
 
 from torchdiffeq import odeint, odeint_adjoint
 from infidictionary.diffeomorphisms.base import Diffeomorphism
-from infidictionary.utils import SinusoidalTimeEmbedding
+from infidictionary.networks import SinusoidalTimeEmbedding
 
 
 class CTDiffeomorphism(Diffeomorphism):

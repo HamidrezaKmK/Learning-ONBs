@@ -2,7 +2,7 @@ import torch
 
 from abc import ABC, abstractmethod
 from infidictionary.neural_isometries import NeuralIsometry
-from infidictionary.utils import NeuralField
+from infidictionary.networks import NeuralField
 
 class Callback(ABC):
 

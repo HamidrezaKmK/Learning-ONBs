@@ -3,7 +3,7 @@ from torch.func import functional_call
 from tqdm import tqdm
 import math as _math
 
-from infidictionary.utils import NeuralField
+from infidictionary.networks import NeuralField
 
 
 def estimate_ntk(

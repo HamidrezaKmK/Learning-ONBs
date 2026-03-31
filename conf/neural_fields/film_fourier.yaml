@@ -1,0 +1,18 @@
+_target_: infidictionary.networks.FiLMFourierField
+# coords_dim and output_dim are injected by EulerianIsometry via _partial_
+
+hidden_dims:
+  - 256
+  - 256
+  - 256
+  - 256
+n_fourier_features: 256
+min_freq: 0.5
+max_freq: 8.0
+n_time_freqs: 16
+time_hidden_dims:
+  - 256
+  - 256
+activation:
+  _target_: torch.nn.SiLU
+  _partial_: true

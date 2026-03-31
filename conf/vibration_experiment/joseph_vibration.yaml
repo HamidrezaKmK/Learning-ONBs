@@ -26,12 +26,22 @@ regularizers:
     smoothing_t: 0.05
     n_diffusion_samples: 4
     material: ${material}
+    domain_sampler:
+      _target_: infidictionary.domain_samplers.SquareSampler
+      stratified: true
+      add_noise: true
+    domain_sample_size: 32
 
   masking:
     weight: 1.0
     _target_: infidictionary.regularizers.MaskingRegularizer
     mass_threshold: 0.5
     material: ${regularizers.reg.material}
+    domain_sampler:
+      _target_: infidictionary.domain_samplers.SquareSampler
+      stratified: true
+      add_noise: true
+    domain_sample_size: 32
 
 callbacks:
   isometry_check:

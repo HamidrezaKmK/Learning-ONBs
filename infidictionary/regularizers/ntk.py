@@ -13,11 +13,22 @@ class NTKRegularizer(Regularizer):
     the isometry parameters via ``create_graph=True``.
 
     Args:
-        ntk_model: A ``NeuralField`` whose parameters define the NTK.  The
-                   model is kept in eval mode and its weights are not updated.
+        domain_sampler:         A ``DomainSampler`` providing quadrature points.
+        domain_sample_size:     Passed as n_per_dim to domain_sampler.sample.
+        ntk_model:              A ``NeuralField`` whose parameters define the NTK.
+                                The model is kept in eval mode and its weights are
+                                not updated.
+        ntk_model_weights_path: Optional path to a checkpoint to load into ntk_model.
     """
 
-    def __init__(self, ntk_model, ntk_model_weights_path: str | None = None) -> None:
+    def __init__(
+        self,
+        domain_sampler,
+        domain_sample_size: int,
+        ntk_model,
+        ntk_model_weights_path: str | None = None,
+    ) -> None:
+        super().__init__(domain_sampler, domain_sample_size)
         self.ntk_model = ntk_model
         if ntk_model_weights_path is not None:
             ckpt = torch.load(ntk_model_weights_path, weights_only=False, map_location="cpu")
@@ -25,12 +36,13 @@ class NTKRegularizer(Regularizer):
         self.ntk_model.eval()
 
     def compute_energy(
-        self, neural_isometry, initial_dictionary, tgt_coords, indices, pushforward_kwargs
+        self, neural_isometry, initial_dictionary, indices, pushforward_kwargs
     ) -> torch.Tensor:
         from torch.func import functional_call
         from infidictionary.neural_isometries import EulerianIsometry
         from infidictionary.utils import pairwise_inner_product
 
+        tgt_coords = self._coords.to(indices.device)
         N = tgt_coords.shape[0]
         device = tgt_coords.device
         dtype = tgt_coords.dtype
@@ -87,4 +99,3 @@ class NTKRegularizer(Regularizer):
 
         # Return the *negative* so that minimising energy = maximising the NTK QF.
         return -qf
-

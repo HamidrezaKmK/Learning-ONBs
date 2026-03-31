@@ -6,7 +6,7 @@ from .base import Callback
 from .plot_utils import make_trace
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.neural_isometries import NeuralIsometry
-from infidictionary.utils import NeuralField
+from infidictionary.networks import NeuralField
 from infidictionary.domain_samplers import DomainSampler
 
 class VisualizeMeanFunction(Callback):

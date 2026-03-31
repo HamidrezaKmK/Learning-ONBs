@@ -3,7 +3,8 @@ from .base import PushforwardRegularizer
 import torch
 
 class EntropyRegularizer(PushforwardRegularizer):
-    def __init__(self, sigma: float = 0.01):
+    def __init__(self, domain_sampler, domain_sample_size: int, sigma: float = 0.01):
+        super().__init__(domain_sampler, domain_sample_size)
         self.sigma = sigma
 
     def _energy_from_atoms(self, tgt_coords, init, pushed, indices):
@@ -15,7 +16,14 @@ class EntropyRegularizer(PushforwardRegularizer):
 
 
 class GraphLaplacianRegularizer(PushforwardRegularizer):
-    def __init__(self, sigma: float = 0.1, neighbourhood_r: float = 0.1):
+    def __init__(
+        self,
+        domain_sampler,
+        domain_sample_size: int,
+        sigma: float = 0.1,
+        neighbourhood_r: float = 0.1,
+    ):
+        super().__init__(domain_sampler, domain_sample_size)
         self.sigma = sigma
         self.neighbourhood_r = neighbourhood_r
 
@@ -38,13 +46,24 @@ class TVMaterialRegularizer(PushforwardRegularizer):
     apply globally.
 
     Args:
-        material:        Any ``Material`` used to derive the inside mask.
-        mass_threshold:  Points with ``mass >= mass_threshold`` are *inside*.
-        sigma:           Gaussian bandwidth for the neighbourhood edge weights.
-        k:               Number of nearest neighbours per point in the KNN graph.
+        domain_sampler:    A ``DomainSampler`` providing quadrature points.
+        domain_sample_size: Passed as n_per_dim to domain_sampler.sample.
+        material:          Any ``Material`` used to derive the inside mask.
+        mass_threshold:    Points with ``mass >= mass_threshold`` are *inside*.
+        sigma:             Gaussian bandwidth for the neighbourhood edge weights.
+        k:                 Number of nearest neighbours per point in the KNN graph.
     """
 
-    def __init__(self, material, mass_threshold: float = 0.5, sigma: float = 0.05, k: int = 8):
+    def __init__(
+        self,
+        domain_sampler,
+        domain_sample_size: int,
+        material,
+        mass_threshold: float = 0.5,
+        sigma: float = 0.05,
+        k: int = 8,
+    ):
+        super().__init__(domain_sampler, domain_sample_size)
         self.material = material
         self.mass_threshold = mass_threshold
         self.sigma = sigma
@@ -67,13 +86,14 @@ class TVMaterialRegularizer(PushforwardRegularizer):
         I = I[:, 1:]
         src = np.repeat(np.arange(N), k)
         dst = I.reshape(-1)
-        device = coords.device
         return (
-            torch.from_numpy(src).long().to(device),
-            torch.from_numpy(dst).long().to(device),
+            torch.from_numpy(src).long(),
+            torch.from_numpy(dst).long(),
         )
 
-    def update_coordinates(self, coords: torch.Tensor) -> None:
+    def update_coordinates(self) -> None:
+        super().update_coordinates()
+        coords = self._coords
         with torch.no_grad():
             src, dst = self._build_knn_edges(coords, self.k)
             edge_sq_dist = (coords[src] - coords[dst]).pow(2).sum(dim=-1)
@@ -90,6 +110,9 @@ class TVMaterialRegularizer(PushforwardRegularizer):
             raise RuntimeError(
                 "TVMaterialRegularizer.update_coordinates must be called before compute_energy."
             )
-        src, dst = self._src, self._dst
+        device = pushed.device
+        src      = self._src.to(device)
+        dst      = self._dst.to(device)
+        w_inside = self._w_inside.to(device)
         edge_norms = (pushed[:, src, :] - pushed[:, dst, :]).norm(dim=-1)  # (A, E)
-        return (self._w_inside[None] * edge_norms).mean(dim=-1)            # (A,)
+        return (w_inside[None] * edge_norms).mean(dim=-1)                   # (A,)
