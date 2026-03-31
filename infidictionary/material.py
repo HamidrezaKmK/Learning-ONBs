@@ -18,10 +18,10 @@ class Material(ABC):
 
     ``__call__`` returns a ``(diffusivity, mass)`` pair:
       * ``diffusivity`` (N,) — the spatially varying diffusivity D(x).
-      * ``mass``        (N,) — the integration weight ρ(x) for the mass-
-                               corrected eigenvalue problem  Lφ = λ ρ φ.
-                               Points inside the material's domain have ρ = 1;
-                               exterior / background points may have ρ ≪ 1.
+      * ``mass``        (N,) — the integration weight \rho(x) for the mass-
+                               corrected eigenvalue problem  Lφ = λ \rho φ.
+                               Points inside the material's domain have \rho = 1;
+                               exterior / background points may have \rho ≪ 1.
 
     Subclasses must implement ``__call__``.
     """
@@ -39,7 +39,7 @@ class Material(ABC):
 
         Returns:
             diffusivity: (N,) positive tensor — D(x).
-            mass:        (N,) positive tensor — ρ(x) for the mass matrix.
+            mass:        (N,) positive tensor — \rho(x) for the mass matrix.
         """
         raise NotImplementedError
 
@@ -111,14 +111,14 @@ class JosephFourierMaterial(Material):
         max_diffusivity:  Diffusivity assigned to pixel value 1 (brightest / above
                           threshold).
         threshold:        If given, defines the inside/outside boundary for the
-                          mass map: pixels ≤ threshold → inside (ρ = 1),
-                          pixels > threshold → outside (ρ = exterior_mass).
+                          mass map: pixels ≤ threshold → inside (\rho = 1),
+                          pixels > threshold → outside (\rho = exterior_mass).
                           The diffusivity is always the continuous pixel intensity
                           mapped to [min_diffusivity, max_diffusivity].
         sigma:            Gaussian smoothing standard deviation in [0, 1] world
                           coordinates (converted to ``sigma * image_size`` pixels).
                           0 disables smoothing.
-        exterior_mass:    ρ value assigned to pixels outside the material (i.e.
+        exterior_mass:    \rho value assigned to pixels outside the material (i.e.
                           pixels > threshold when threshold is set).  1.0 means
                           no mass correction.
         square_sampler_kwargs: Extra keyword arguments forwarded to ``SquareSampler``.
@@ -212,7 +212,7 @@ class FramedMaterial(Material):
         frame_diffusivity: Diffusivity assigned to points inside the frame.
         frame_width:       Width of the frame in [0, 1] world coordinates.
                            Defaults to 0.05 (5 % on each side).
-        exterior_mass:     ρ value for frame points.  1.0 = no correction.
+        exterior_mass:     \rho value for frame points.  1.0 = no correction.
     """
 
     def __init__(
@@ -274,7 +274,7 @@ class AirplaneMaterial(Material):
         min_diffusivity: Diffusivity of the airplane structure.
         max_diffusivity: Diffusivity of the background.
         length:          Controls the proportions of the airplane shape.
-        exterior_mass:   ρ value for background points outside the airplane.
+        exterior_mass:   \rho value for background points outside the airplane.
                          1.0 = no mass correction.
     """
 

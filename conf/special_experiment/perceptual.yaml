@@ -2,13 +2,8 @@
 #
 # Regularized change-of-basis using the perceptual + MSE image-target regularizer.
 #
-# The neural isometry is trained to rearrange Fourier atoms so that, when
-# splatted onto an image-sized RGB grid, they resemble a target portrait of
-# Joseph Fourier in both pixel space (MSE) and feature space (ResNet-18
-# perceptual loss with ImageNet weights).
-#
 # Usage:
-#   python regularized_change_of_basis.py +experiment=special_perceptual
+#   python reg_cob.py +special_experiment=perceptual
 defaults:
   - _self_
 
@@ -19,17 +14,15 @@ initial_dictionary:
 neural_isometry:
   channels_dim: 3
 
-regularizers:
-  fourier:
-    weight: 1.0
-    _target_: infidictionary.regularizers.ImageTargetRegularizer
-    target_image_path: assets/Joseph_Fourier.jpg
-    image_size: 32
-    mse_weight: 1.0
-    perceptual_weight: 0.0
-    feature_upsample_size: 64
-    noise_std: 0.05
-    n_noise_trials: 8
+regularizer:
+  _target_: infidictionary.regularizers.ImageTargetRegularizer
+  target_image_path: assets/Joseph_Fourier.jpg
+  image_size: 32
+  mse_weight: 1.0
+  perceptual_weight: 0.0
+  feature_upsample_size: 64
+  noise_std: 0.05
+  n_noise_trials: 8
 
 tail_probability: 0.0001
 num_tail_samples: 32
@@ -38,9 +31,6 @@ grad_accumulation_steps: 8
 n_epochs: 5000
 
 atom_batch_size: null
-
-adaptive_weighting:
-  enabled: false
 
 callbacks:
   isometry_check:
@@ -59,7 +49,6 @@ callbacks:
       - [ 0,  0, 2]
       - [-1,  0, 2]
       - [ 0, -1, 2]
-
 
 wandb:
   tags:

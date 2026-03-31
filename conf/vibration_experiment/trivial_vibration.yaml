@@ -1,4 +1,9 @@
 # @package _global_
+#
+# Vibrational-modes experiment on the torus, should be the Fourier basis
+#
+# Usage:
+#   python reg_cob.py +vibration_experiment=trivial_vibration
 defaults:
   - _self_
 
@@ -16,7 +21,7 @@ callbacks:
     domain_sampler:
       _target_: infidictionary.domain_samplers.SquareSampler
     frequency: 100
-    density: 1000
+    density: 100
     indices:
       - [ 0,  0, 0]
       - [-1,  0, 0]
@@ -25,6 +30,7 @@ callbacks:
       - [ 0,  1, 0]
 
 wandb:
+  project: BasisLearning-trivial
   tags:
-    experiment: vibrational_modes
-    material: airplane_constant
+    material: torus
+    method: heat_qform

@@ -91,8 +91,8 @@ class TVMaterialRegularizer(PushforwardRegularizer):
             torch.from_numpy(dst).long(),
         )
 
-    def update_coordinates(self) -> None:
-        super().update_coordinates()
+    def update_coordinates(self, neural_isometry, pushforward_kwargs) -> None:
+        super().update_coordinates(neural_isometry, pushforward_kwargs)
         coords = self._coords
         with torch.no_grad():
             src, dst = self._build_knn_edges(coords, self.k)

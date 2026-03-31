@@ -1,10 +1,10 @@
 # @package _global_
 #
 # Vibrational-modes experiment on the Joseph Fourier portrait material, using
-# the HeatQuadraticFormRegularizer via regularized_change_of_basis.py.
+# the HeatQuadraticFormRegularizer via reg_cob.py.
 #
 # Usage:
-#   python regularized_change_of_basis.py +experiment=fourierer
+#   python reg_cob.py +vibration_experiment=joseph_vibration
 defaults:
   - _self_
 
@@ -19,29 +19,18 @@ material:
   sigma: 0.002
   exterior_mass: 0.1
 
-regularizers:
-  reg:
-    weight: 1.0
-    _target_: infidictionary.regularizers.HeatQuadraticFormRegularizer
-    smoothing_t: 0.05
-    n_diffusion_samples: 4
-    material: ${material}
-    domain_sampler:
-      _target_: infidictionary.domain_samplers.SquareSampler
-      stratified: true
-      add_noise: true
-    domain_sample_size: 32
-
-  masking:
-    weight: 1.0
-    _target_: infidictionary.regularizers.MaskingRegularizer
-    mass_threshold: 0.5
-    material: ${regularizers.reg.material}
-    domain_sampler:
-      _target_: infidictionary.domain_samplers.SquareSampler
-      stratified: true
-      add_noise: true
-    domain_sample_size: 32
+regularizer:
+  _target_: infidictionary.regularizers.HeatQuadraticFormRegularizer
+  smoothing_t: 0.05
+  n_diffusion_samples: 4
+  material: ${material}
+  masking_weight: 1.0
+  mass_threshold: 0.5
+  domain_sampler:
+    _target_: infidictionary.domain_samplers.SquareSampler
+    stratified: true
+    add_noise: true
+  domain_sample_size: 32
 
 callbacks:
   isometry_check:
@@ -59,6 +48,7 @@ callbacks:
       - [ 0,  1, 0]
 
 wandb:
+  project: BasisLearning-vibration-modes
   tags:
-    experiment: vibrational_modes
-    material: joseph_fourier
+    material: joseph
+    method: heat_qform

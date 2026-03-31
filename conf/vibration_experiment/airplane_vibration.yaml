@@ -1,43 +1,47 @@
 # @package _global_
 #
 # Vibrational-modes experiment on the airplane material, using the
-# HeatQuadraticFormRegularizer via regularized_change_of_basis.py.
+# HeatQuadraticFormRegularizer via reg_cob.py.
 #
 # Usage:
-#   python regularized_change_of_basis.py +experiment=airplane_vibration
+#   python reg_cob.py +vibration_experiment=airplane_vibration
+
 defaults:
+  - override /neural_fields@neural_isometry.scalar_field_partial: old # fourier_mixture # old # fourier_mixture
   - _self_
 
-material:
-  _target_: infidictionary.material.AirplaneMaterial
-  length: 2.0
-  min_diffusivity: 1.0 # 0.01
-  max_diffusivity: 1.0
-  exterior_mass: 0.01 #1.0e-8
+initial_dictionary:
+  num_channels: 1
+  p: 0.1
 
-regularizers:
-  reg:
-    weight: 1.0
-    _target_: infidictionary.regularizers.HeatQuadraticFormRegularizer
-    smoothing_t: 0.05
-    n_diffusion_samples: 4
-    material: ${material}
-    domain_sampler:
-      _target_: infidictionary.domain_samplers.SquareSampler
-      stratified: true
-      add_noise: true
-    domain_sample_size: 32
+neural_isometry:
+  channels_dim: 1
 
-  masking:
-    weight: 1.0
-    _target_: infidictionary.regularizers.MaskingRegularizer
-    mass_threshold: 0.5
-    material: ${regularizers.reg.material}
-    domain_sampler:
-      _target_: infidictionary.domain_samplers.SquareSampler
-      stratified: true
-      add_noise: true
-    domain_sample_size: 32
+model_state_kwargs:
+  num_steps: 50
+
+tail_probability: 0.0007
+num_tail_samples: 32
+grad_accumulation_steps: 8
+max_grad_norm: 1.0
+
+regularizer:
+  _target_: infidictionary.regularizers.HeatQuadraticFormRegularizer
+  smoothing_t: 0.05
+  n_diffusion_samples: 4
+  material: 
+    _target_: infidictionary.material.AirplaneMaterial
+    length: 2.0
+    min_diffusivity: 1.000
+    max_diffusivity: 0.001
+    exterior_mass: 1. # 0.01
+  masking_weight: 0
+  mass_threshold: 0.5
+  domain_sampler:
+    _target_: infidictionary.domain_samplers.SquareSampler
+    stratified: true
+    add_noise: true
+  domain_sample_size: 32
 
 # Isometry-check domain sampler must match the airplane domain
 callbacks:
@@ -46,8 +50,8 @@ callbacks:
     dictionary: ${initial_dictionary}
     domain_sampler:
       _target_: infidictionary.domain_samplers.SquareSampler
-    frequency: 500
-    density: 1000
+    frequency: 100
+    density: 100
     indices:
       - [ 0,  0, 0]
       - [-1,  0, 0]
@@ -56,6 +60,7 @@ callbacks:
       - [ 0,  1, 0]
 
 wandb:
+  project: BasisLearning-vibration-modes
   tags:
-    experiment: vibrational_modes
-    material: airplane_constant
+    material: airplane
+    method: heat_qform

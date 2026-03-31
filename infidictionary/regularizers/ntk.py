@@ -39,33 +39,23 @@ class NTKRegularizer(Regularizer):
         self, neural_isometry, initial_dictionary, indices, pushforward_kwargs
     ) -> torch.Tensor:
         from torch.func import functional_call
-        from infidictionary.neural_isometries import EulerianIsometry
         from infidictionary.utils import pairwise_inner_product
 
-        tgt_coords = self._coords.to(indices.device)
+        if self._coords is None:
+            raise RuntimeError(
+                "NTKRegularizer.update_coordinates must be called before compute_energy."
+            )
+
+        device = indices.device
+        tgt_coords = self._coords.to(device)
         N = tgt_coords.shape[0]
-        device = tgt_coords.device
         dtype = tgt_coords.dtype
 
         self.ntk_model.to(device)
 
-        # Pull back tgt_coords → src_coords so we can evaluate source atoms.
-        # Gradients are not needed through this step.
-        if isinstance(neural_isometry, EulerianIsometry):
-            src_coords = tgt_coords
-            src_logabsdet = torch.zeros(N, device=device, dtype=dtype)
-            tgt_logabsdet = torch.zeros(N, device=device, dtype=dtype)
-        else:
-            with torch.no_grad():
-                src_coords, src_logabsdet, _ = neural_isometry.pullback(
-                    tgt_coords=tgt_coords,
-                    tgt_logabsdet=torch.zeros(N, device=device, dtype=dtype),
-                    tgt_field=torch.zeros(1, N, 1, device=device, dtype=dtype),
-                    **pushforward_kwargs,
-                )
-            src_coords = src_coords.detach()
-            src_logabsdet = src_logabsdet.detach()
-            tgt_logabsdet = torch.zeros(N, device=device, dtype=dtype)
+        src_coords = self._pulled_back_coords.to(device)
+        src_logabsdet = self._pulled_back_logabsdet.to(device)
+        tgt_logabsdet = torch.zeros(N, device=device, dtype=dtype)
 
         A = indices.shape[0]
         phi_src = initial_dictionary.get_atoms(src_coords, indices)  # (A, N, C)

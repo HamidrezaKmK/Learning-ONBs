@@ -14,19 +14,16 @@ initial_dictionary:
 neural_isometry:
   channels_dim: 3
 
-
-regularizers:
-  clip:
-    weight: 1.0
-    _target_: infidictionary.regularizers.CLIPRegularizer
-    subject: "cat's face"
-    image_size: 64
-    model_name: ViT-B-32
-    pretrained: openai
-    n_augmentation_trials: 8
-    bg_alpha: 0.8
-    embedding_noise_std: 0.0
-    range_penalty_weight: 1.0
+regularizer:
+  _target_: infidictionary.regularizers.CLIPRegularizer
+  subject: "cat's face"
+  image_size: 64
+  model_name: ViT-B-32
+  pretrained: openai
+  n_augmentation_trials: 8
+  bg_alpha: 0.8
+  embedding_noise_std: 0.0
+  range_penalty_weight: 1.0
 
 tail_probability: 0.001
 num_tail_samples: 32
@@ -34,9 +31,6 @@ atom_batch_size: 32
 grad_accumulation_steps: 8
 
 n_epochs: 10000
-
-adaptive_weighting:
-  enabled: false
 
 callbacks:
   isometry_check:
@@ -53,6 +47,7 @@ callbacks:
       - [ 0,  0, 2]
 
 wandb:
+  project: BasisLearning-ML-Basis
   tags:
-    experiment: regularized_change_of_basis
-    regularizer: clip
+    concept: cat
+    method: CLIP

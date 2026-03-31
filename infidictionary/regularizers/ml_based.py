@@ -268,7 +268,7 @@ class ImageTargetRegularizer(PushforwardRegularizer):
        MobileNetV3-Small (ImageNet weights).
 
         E_a = mse_weight · MSE(grid_a, target)
-            + perceptual_weight · ‖feat(grid_a) − feat(target)‖²
+            + perceptual_weight · ‖feat(grid_a) - feat(target)‖²
 
     Atoms are evaluated on a stratified ``image_size × image_size`` pixel grid
     built internally; no KNN interpolation is needed.

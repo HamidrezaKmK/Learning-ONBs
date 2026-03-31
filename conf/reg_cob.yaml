@@ -43,14 +43,6 @@ checkpointing:
 n_epochs: 500000
 domain_sample_size: 32
 
-# Adaptive loss balancing via EMA of each term's energy magnitude.
-# When enabled, the effective weight for term i = configured_weight_i / EMA_i,
-# so every term contributes at roughly its configured scale regardless of
-# the raw magnitude of its energy.
-adaptive_weighting:
-  enabled: true
-  ema_decay: 0.99
-
 wandb:
   tags:
     experiment: regularized_change_of_basis

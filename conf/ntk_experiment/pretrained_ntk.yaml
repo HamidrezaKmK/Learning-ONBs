@@ -7,25 +7,57 @@
 # evaluated at those learned parameters (ntk_sigma = 0 equivalent).
 #
 # Usage:
-#   python regularized_change_of_basis.py +ntk_experiment=pretrained_ntk
+#   python reg_cob.py +ntk_experiment=pretrained_ntk
 defaults:
+  # NOTE: only the old architecture works here!
+  - override /neural_fields@neural_isometry.scalar_field_partial: old
   - _self_
 
-regularizers:
-  ntk:
-    weight: 1.0
-    _target_: infidictionary.regularizers.NTKRegularizer
-    ntk_model_weights_path: ./outputs/neural_field_fit/joseph_fourier_mlp.pt
-    ntk_model:
-      _target_: infidictionary.networks.MLPNeuralField
-      input_dim: 2
-      output_dim: 1
-      hidden_dims:
-        a: 256
-        b: 256
-        c: 256
+# Two-channel dictionary so atoms have shape (N, 2); isometry must match.
+initial_dictionary:
+  num_channels: 1
+  p: 0.15
+
+neural_isometry:
+  channels_dim: 1
+
+model_state_kwargs:
+  num_steps: 200
+
+tail_probability: 0.0007
+num_tail_samples: 32
+grad_accumulation_steps: 1
+
+atom_batch_size: 128
+
+regularizer:
+  _target_: infidictionary.regularizers.NTKRegularizer
+  ntk_model_weights_path: ./outputs/neural_field_fit/joseph_fourier_mlp.pt
+  ntk_model:
+    _target_: infidictionary.networks.MLPNeuralField
+    input_dim: 2
+    output_dim: 1
+    hidden_dims:
+      a: 256
+      b: 256
+      c: 256
+  domain_sampler:
+    _target_: infidictionary.domain_samplers.SquareSampler
+    stratified: true
+    add_noise: true
+  domain_sample_size: 32
+
+callbacks:
+  isometry_check:
+    _target_: infidictionary.callbacks.IsometryCheck
+    dictionary: ${initial_dictionary}
     domain_sampler:
       _target_: infidictionary.domain_samplers.SquareSampler
-      stratified: true
-      add_noise: true
-    domain_sample_size: 32
+    frequency: 100
+    density: 100
+    indices:
+      - [ 0,  0, 0]
+      - [-1,  0, 0]
+      - [ 0, -1, 0]
+      - [ 1,  0, 0]
+      - [ 0,  1, 0]

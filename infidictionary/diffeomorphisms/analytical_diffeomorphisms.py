@@ -29,11 +29,11 @@ class PolarTransform(Diffeomorphism):
     The mapping uses a square-root radius to preserve area element:
 
     * ``u ∈ [0, 1]`` → radius ``r = √u``  (so that ``r²`` is uniform, preserving area)
-    * ``v ∈ [0, 1]`` → angle ``θ = 2πv − π``  (linearly mapped to ``[−π, π]``)
+    * ``v ∈ [0, 1]`` → angle ``θ = 2πv - π``  (linearly mapped to ``[-π, π]``)
     * Cartesian output: ``(x, y) = (r cos θ, r sin θ)``
 
     The Jacobian determinant of this map is the constant ``π``, so
-    ``logabsdet = log π`` for :meth:`forward` and ``−log π`` for :meth:`inverse`.
+    ``logabsdet = log π`` for :meth:`forward` and ``-log π`` for :meth:`inverse`.
     """
 
     def __init__(self):
@@ -81,7 +81,7 @@ class PolarTransform(Diffeomorphism):
         Returns:
             Tuple ``(u_square, logabsdet)`` where ``u_square`` has shape ``(N, 2)``
             with values in ``[0, 1]^2`` and ``logabsdet`` has shape ``(N,)`` filled
-            with ``−log π``.
+            with ``-log π``.
         """
         x = xy_disk[:, 0]
         y = xy_disk[:, 1]
@@ -107,12 +107,12 @@ class ShirlyChiu(Diffeomorphism):
     """Low-distortion diffeomorphism between ``[0, 1]^2`` and the unit disk.
 
     Uses the Shirley–Chiu *concentric* mapping, which partitions the canonical square
-    ``[−1, 1]^2`` into four sectors (East, North, West, South) and maps each sector to
+    ``[-1, 1]^2`` into four sectors (East, North, West, South) and maps each sector to
     the corresponding quarter of the disk while preserving area.  This reduces the
     angular shear that the simpler polar transform introduces near the corners.
 
     The Jacobian determinant is the constant ``π`` (same as :class:`PolarTransform`),
-    so ``logabsdet = log π`` for :meth:`forward` and ``−log π`` for :meth:`inverse`.
+    so ``logabsdet = log π`` for :meth:`forward` and ``-log π`` for :meth:`inverse`.
 
     Reference:
         Shirley & Chiu, "A Low Distortion Map Between Disk and Square", 1997.
@@ -132,7 +132,7 @@ class ShirlyChiu(Diffeomorphism):
     def forward(self, xy: torch.Tensor):
         """Map from the unit square ``[0, 1]^2`` to the unit disk.
 
-        Internally the input is rescaled to the canonical square ``[−1, 1]^2``, then
+        Internally the input is rescaled to the canonical square ``[-1, 1]^2``, then
         the concentric mapping assigns each point to one of four sectors (East, North,
         West, South) and maps it to the corresponding disk sector.
 
@@ -200,14 +200,14 @@ class ShirlyChiu(Diffeomorphism):
 
         Converts Cartesian disk coordinates to polar ``(r, φ)``, classifies the angle
         into one of four sectors, inverts the concentric mapping, then rescales from
-        ``[−1, 1]^2`` to ``[0, 1]^2``.
+        ``[-1, 1]^2`` to ``[0, 1]^2``.
 
         Args:
             uv: Tensor of shape ``(N, 2)`` with Cartesian coordinates inside the unit disk.
 
         Returns:
             Tuple ``(xy, logabsdet)`` where ``xy`` has shape ``(N, 2)`` with values in
-            ``[0, 1]^2`` and ``logabsdet`` has shape ``(N,)`` filled with ``−log π``.
+            ``[0, 1]^2`` and ``logabsdet`` has shape ``(N,)`` filled with ``-log π``.
         """
         u, v = uv[:, 0], uv[:, 1]
         # 1. Cartesian -> Polar

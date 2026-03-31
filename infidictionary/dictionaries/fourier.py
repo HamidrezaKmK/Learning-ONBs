@@ -55,7 +55,7 @@ class FourierDictionary(InfiDictionary):
         """Number of integer vectors in Z^d with L∞ norm exactly m.
 
         shell_size(0) = 1
-        shell_size(m) = (2m+1)^d − (2m−1)^d   for m ≥ 1
+        shell_size(m) = (2m+1)^d - (2m-1)^d   for m ≥ 1
         """
         d = self.domain_dim
         return torch.where(
