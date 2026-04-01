@@ -1,0 +1,86 @@
+defaults:
+  - neural_isometry: eulerian
+  - /dictionaries@initial_dictionary: fourier_2d
+  - /neural_fields@mean_function: ff
+  - hydra: default
+  - wandb: disabled
+  - _self_
+  - override hydra/hydra_logging: none
+  - override hydra/job_logging: none
+
+# Three-channel dictionary to produce RGB images.
+initial_dictionary:
+  num_channels: 3
+
+neural_isometry:
+  channels_dim: 3
+
+# Mean function: a learnable neural field that produces the base image.
+# The basis encodes linear variations around this mean (affine subspace).
+# Set to null to disable and use a pure linear subspace instead.
+mean_function:
+  output_dim: 3
+  
+# ── Concept alignment ─────────────────────────────────────────────────────────
+# Text concept to align the basis with.  The concept_loss block (including
+# _target_) is provided by the experiment override, e.g.:
+#   python concept_basis.py +concept_experiment=sds_cat
+#   python concept_basis.py +concept_experiment=clip_cat
+caption: "a cat"
+
+# ── Basis sampling settings ───────────────────────────────────────────────────
+# Truncation level: uses all atoms with L∞ shell radius ≤ K, giving (2K+1)²×C atoms.
+K: 8
+# Spectral decay exponent α: std(c_j) = pmf(i_j)^α.
+# α=0 → uniform standard deviation; α>0 → low-frequency atoms get larger coefficients.
+coefficient_decay: 0.5
+# Number of independently drawn coefficient vectors (images) per forward pass.
+batch_size: 1
+# Number of forward/backward passes before an optimizer step (gradient accumulation).
+grad_accumulation_steps: 16
+
+# ── Rendering grid ────────────────────────────────────────────────────────────
+# Side length of the square pixel grid used to render linear combinations.
+# Total quadrature points = image_size².
+image_size: 64
+
+# ── Optimisation ──────────────────────────────────────────────────────────────
+isometry_optimizer_callable:
+  _target_: torch.optim.Adam
+  lr: 0.001
+  _partial_: true
+isometry_scheduler_callable: null
+
+mean_function_optimizer_callable:
+  _target_: torch.optim.Adam
+  lr: 0.001
+  _partial_: true
+mean_function_scheduler_callable: null
+
+max_grad_norm: null
+# Weight for the hinge penalty that keeps pixel values in [-1, 1].
+# Increase if atom values drift far outside range; decrease if it dominates training.
+range_penalty_weight: 1.0
+
+pushforward_kwargs:
+  start_time: 0.0
+  end_time: 1.0
+
+model_state_kwargs:
+  num_steps: 200
+
+# ── Training ──────────────────────────────────────────────────────────────────
+n_epochs: 10000
+
+# ── Checkpointing ─────────────────────────────────────────────────────────────
+resume_training:
+  enabled: false
+  checkpoint_path: null
+
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 10
+
+wandb:
+  tags:
+    experiment: concept_basis

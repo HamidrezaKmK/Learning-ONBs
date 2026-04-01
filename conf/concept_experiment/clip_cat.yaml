@@ -1,0 +1,52 @@
+# @package _global_
+#
+# CLIP-based concept basis: learn a basis whose random K-sparse linear
+# combinations render as a cat, guided by CLIP cosine similarity with
+# augmented views (Dream Fields-style).
+#
+# Usage:
+#   python concept_basis.py +concept_experiment=clip_cat
+#   python concept_basis.py +concept_experiment=clip_cat wandb=enabled
+
+defaults:
+  - override /neural_fields@neural_isometry.scalar_field_partial: factored
+  - _self_
+
+caption: "a cat"
+
+concept_loss:
+  _target_: infidictionary.concept.CLIPLoss
+  model_name: ViT-B-32
+  pretrained: openai
+  n_augmentation_trials: 8
+  bg_alpha: 0.8
+
+K: 2
+coefficient_decay: 0.5
+batch_size: 4
+grad_accumulation_steps: 8
+
+callbacks:
+  isometry_check:
+    _target_: infidictionary.callbacks.IsometryCheck
+    dictionary: ${initial_dictionary}
+    domain_sampler:
+      _target_: infidictionary.domain_samplers.SquareSampler
+      stratified: True
+      add_noise: False
+      height: 1.
+      width: 1.
+    frequency: 100
+    density: 100
+    indices:
+      - [ 0,  0, 0]
+      - [ 1,  0, 0]
+      - [ 0,  0, 1]
+      - [-1,  0, 1]
+      - [ 0,  0, 2]
+
+wandb:
+  project: BasisLearning-ConceptBasis
+  tags:
+    concept: cat
+    method: CLIP

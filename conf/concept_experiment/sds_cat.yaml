@@ -1,0 +1,54 @@
+# @package _global_
+#
+# SDS-based concept basis: learn a basis whose random K-sparse linear
+# combinations render as a cat, using Score Distillation Sampling.
+#
+# Usage:
+#   python concept_basis.py +concept_experiment=sds_cat
+#   python concept_basis.py +concept_experiment=sds_cat wandb=enabled
+
+defaults:
+  - override /neural_fields@neural_isometry.scalar_field_partial: factored
+  - _self_
+
+caption: "a cat"
+
+concept_loss:
+  _target_: infidictionary.concept.SDSLoss
+  model_id: "runwayml/stable-diffusion-v1-5"
+  guidance_scale: 50.0 # TODO: check if the cranking up is actually important or not 7.5
+  t_range: [0.02, 0.98]
+  render_size: 512
+  mode: sds
+  n_augmentation_trials: 0
+
+
+K: 2
+coefficient_decay: 0.5
+batch_size: 4
+grad_accumulation_steps: 8
+
+callbacks:
+  isometry_check:
+    _target_: infidictionary.callbacks.IsometryCheck
+    dictionary: ${initial_dictionary}
+    domain_sampler:
+      _target_: infidictionary.domain_samplers.SquareSampler
+      stratified: True
+      add_noise: False
+      height: 1.
+      width: 1.
+    frequency: 100
+    density: 100
+    indices:
+      - [ 0,  0, 0]
+      - [ 1,  0, 0]
+      - [ 0,  0, 1]
+      - [-1,  0, 1]
+      - [ 0,  0, 2]
+
+wandb:
+  project: BasisLearning-ConceptBasis
+  tags:
+    concept: cat
+    method: SDS
