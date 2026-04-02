@@ -19,4 +19,4 @@ class FFNeuralField(NeuralField):
 
     def forward(self, coords):
         z = self.ff(coords)
-        return self.net(z) # + 1.0 / (torch.norm(coords - 0.5, dim=-1, keepdim=True) + 0.5)
+        return self.net(z)

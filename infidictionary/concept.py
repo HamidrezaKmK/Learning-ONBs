@@ -117,18 +117,19 @@ class SDSLoss(ConceptLoss):
         guidance_scale: float = 7.5,
         t_range: tuple[float, float] = (0.02, 0.98),
         render_size: int = 512,
-        mode: str = "sds",
         n_augmentation_trials: int = 1,
+        t_batch_size: int = 1,
+        weighted_loss: bool = False,
     ):
         from diffusers import DDPMScheduler, AutoencoderKL, UNet2DConditionModel
         from transformers import CLIPTextModel, CLIPTokenizer
         from transformers import logging as hf_transformers_logging
         from torchvision.transforms import v2 as T
-
-        assert mode in ("sds", "direct"), f"mode must be 'sds' or 'direct', got '{mode}'"
-        self.mode = mode
+        
         self.guidance_scale = guidance_scale
         self.render_size = render_size
+        self.t_batch_size = t_batch_size
+        self.weighted_loss = weighted_loss
 
         # Random crop + flip applied before VAE encoding.  Exposing the model
         # to differently-cropped views at each step prevents SD from locking
@@ -181,11 +182,11 @@ class SDSLoss(ConceptLoss):
         # Cache alphas_cumprod on CPU; will be moved to device in __call__.
         self._alphas_cumprod: torch.Tensor = self.noise_scheduler.alphas_cumprod.clone()
 
-        print(self.t_min, self.t_max, "*************")
         print(
-            f"SDSLoss: model={model_id}, mode={mode}, guidance_scale={guidance_scale}, "
+            f"SDSLoss: model={model_id}, guidance_scale={guidance_scale}, "
             f"t_range=({self.t_min}, {self.t_max}), render_size={render_size}, "
-            f"n_augmentation_trials={n_augmentation_trials}"
+            f"n_augmentation_trials={n_augmentation_trials}, "
+            f"t_batch_size={t_batch_size}, weighted_loss={weighted_loss}"
         )
 
     def encode_text(self, prompt: str, device: torch.device) -> torch.Tensor:
@@ -244,29 +245,29 @@ class SDSLoss(ConceptLoss):
                 [self._sds_augment(img_clamped) for _ in range(T_aug)], dim=0
             )  # (B * T_aug, 3, render_size, render_size)
         with torch.no_grad():
-            B_eff = views.shape[0]
+            B_views = views.shape[0]
 
-            # ── Encode the batch to latents z ─────────────────────────────────────
+            # ── Encode once, then repeat for t_batch_size independent (t, ε) draws ──
             # scaling_factor (0.18215 for SD v1-5) is mandatory: the DDPM noise
             # schedule, UNet weights, and alphas_cumprod are all calibrated for
             # this specific latent scale.  Omitting it makes z ~5.5× too large,
             # which produces completely wrong UNet noise predictions.
-            z = self.vae.encode(views).latent_dist.mode() * self.vae.config.scaling_factor
-            # z: (B_eff, 4, render_size/8, render_size/8),  requires_grad=True
+            z_single = self.vae.encode(views).latent_dist.mode() * self.vae.config.scaling_factor
+            # (B_views, 4, H/8, W/8)
 
-            # ── Sample one random timestep per view and add noise ─────────────────
+            B_eff = B_views * self.t_batch_size
+            z = z_single.repeat(self.t_batch_size, 1, 1, 1)  # (B_eff, 4, H/8, W/8)
+
+            # ── Sample B_eff independent (t, ε) pairs ────────────────────────────
             alphas  = self._alphas_cumprod.to(device)
             t_idx   = torch.randint(self.t_min, self.t_max, (B_eff,), device=device)
             noise   = torch.randn_like(z)
 
-            # print(alphas[t_idx], "\n*******")
             alpha_t = alphas[t_idx].sqrt().view(B_eff, 1, 1, 1)
             sigma_t = (1.0 - alphas[t_idx]).sqrt().view(B_eff, 1, 1, 1)
-            # print(z.std(), z.mean(), sigma_t.mean(), "\nSTATS")
-            z_t     = noise * sigma_t +  alpha_t * z #  + 
+            z_t     = noise * sigma_t + alpha_t * z
 
             # ── Build batched UNet inputs for CFG ─────────────────────────────────
-            w_t     = sigma_t ** 2
             z_t_in  = z_t.repeat(2, 1, 1, 1)
             t_in    = t_idx.repeat(2)
             text_in = torch.cat([
@@ -274,32 +275,21 @@ class SDSLoss(ConceptLoss):
                 text_encoded[1:].expand(B_eff, -1, -1),
             ], dim=0)
 
-            # if self.mode == "sds":
-            #     with torch.no_grad():
-            #         noise_pred   = self.unet(z_t_in, t_in, encoder_hidden_states=text_in).sample
-            #         noise_uncond, noise_cond = noise_pred[:B_eff], noise_pred[B_eff:]
-            #         noise_cfg    = noise_uncond + self.guidance_scale * (noise_cond - noise_uncond)
-
-            #     sds_grad = w_t * (noise_cfg - noise)
-            #     # nan_to_num: UNet can produce NaN predictions for out-of-distribution
-            #     # latents early in training; without this the NaN propagates all the
-            #     # way back through the neural isometry (dreamfusionacc does the same).
-            #     sds_grad = torch.nan_to_num(sds_grad).detach()
-            #     # Pseudo-loss: ∂loss/∂z = sds_grad.  Dividing by B_eff keeps the
-            #     # per-image gradient scale constant regardless of n_augmentation_trials.
-            #     loss = (sds_grad * z).sum() / B_eff
-
-            # else:  # "direct"
             noise_pred   = self.unet(z_t_in, t_in, encoder_hidden_states=text_in).sample
             noise_uncond, noise_cond = noise_pred[:B_eff], noise_pred[B_eff:]
             noise_cfg    = noise_uncond + self.guidance_scale * (noise_cond - noise_uncond)
             z0_pred = (z_t - sigma_t * noise_cfg) / alpha_t
-        # loss = (w_t * (z - z0_pred.detach()) ** 2).mean()
-            decoder_output = self.vae.decode(z0_pred / self.vae.config.scaling_factor)
-            # breakpoint()
-            x0_pred = decoder_output.sample.detach()
-        loss = (w_t * (views - x0_pred) ** 2).mean() # * 
-        return loss, x0_pred, self.vae.decode(z_t / self.vae.config.scaling_factor).sample.detach()
+            x0_pred  = self.vae.decode(z0_pred / self.vae.config.scaling_factor).sample.detach()
+            
+        # views repeated to match the B_eff layout (t_batch_size copies per view)
+        views_rep = views.repeat(self.t_batch_size, 1, 1, 1)  # (B_eff, 3, H, W)
+
+        if self.weighted_loss:
+            loss = ((sigma_t ** 2) * (views_rep - x0_pred)).mean()
+        else:
+            loss = ((views_rep - x0_pred) ** 2).mean()
+
+        return loss
 
 
 # ─────────────────────────────────────────────────────────────────────────────

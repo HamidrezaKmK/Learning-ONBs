@@ -260,7 +260,7 @@ def concept_basis_training(
 
 @hydra.main(version_base=None, config_path="conf", config_name="concept_basis")
 def main(conf: DictConfig):
-
+    # TODO: if things work out, we don't need the mean_function anymore
     neural_isometry: NeuralIsometry = instantiate(conf.neural_isometry)
     initial_dictionary: InfiDictionary = instantiate(conf.initial_dictionary)
     mean_function: NeuralField | None = (
@@ -391,7 +391,7 @@ def main(conf: DictConfig):
         range_penalty_weight=conf.get("range_penalty_weight", 1.0),
         max_grad_norm=conf.get("max_grad_norm", None),
         grad_accumulation_steps=conf.get("grad_accumulation_steps", 1),
-        variation_strength=conf.get("variation_strength", 0.0),
+        variation_strength=conf.get("variation_strength", 1.0),
     )
 
     if conf.wandb.enabled:

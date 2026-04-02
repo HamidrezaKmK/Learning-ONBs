@@ -8,10 +8,10 @@
 #   python concept_basis.py +concept_experiment=sds_cat wandb=enabled
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: factored
+  - override /neural_fields@neural_isometry.scalar_field_partial: factored # might change to old, but currently using factored
   - _self_
 
-caption: "a cat in the center of the image"
+caption: "A painting in the style of Vincent Van Gogh"
 
 concept_loss:
   _target_: infidictionary.concept.SDSLoss
@@ -23,11 +23,12 @@ concept_loss:
   t_batch_size: 1
   weighted_loss: false
 
-
-K: 4
+variation_strength: 1.0
+K: 2
 coefficient_decay: 0.5
 batch_size: 2
 grad_accumulation_steps: 16
+mean_function: null
 
 # callbacks:
 #   isometry_check:
@@ -51,5 +52,5 @@ grad_accumulation_steps: 16
 wandb:
   project: BasisLearning-ConceptBasis
   tags:
-    concept: cat
+    concept: van_gogh
     method: SDS
