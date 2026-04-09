@@ -2,6 +2,7 @@ defaults:
   - neural_isometry: eulerian
   - /dictionaries@initial_dictionary: fourier_2d
   - /neural_fields@mean_function: ff
+  - /coefficient_model@coefficient_model: softmax
   - hydra: default
   - wandb: disabled
   - _self_
@@ -11,6 +12,7 @@ defaults:
 # Three-channel dictionary to produce RGB images.
 initial_dictionary:
   num_channels: 3
+  p: 0.15
 
 neural_isometry:
   channels_dim: 3
@@ -31,11 +33,12 @@ mean_function:
 caption: "a cat"
 
 # ── Basis sampling settings ───────────────────────────────────────────────────
-# Truncation level: uses all atoms with L∞ shell radius ≤ K, giving (2K+1)²×C atoms.
-K: 8
-# Spectral decay exponent α: std(c_j) = pmf(i_j)^α.
-# α=0 → uniform standard deviation; α>0 → low-frequency atoms get larger coefficients.
-coefficient_decay: 0.5
+# Stratified index selection:
+#   exact stratum  — all atoms with pmf(k) ≥ tail_probability (zero variance).
+#   tail stratum   — num_tail_samples random draws from the full infinite PMF.
+tail_probability: 1e-3
+num_tail_samples: 64
+
 # Number of independently drawn coefficient vectors (images) per forward pass.
 batch_size: 1
 # Number of forward/backward passes before an optimizer step (gradient accumulation).
@@ -60,9 +63,6 @@ mean_function_optimizer_callable:
 mean_function_scheduler_callable: null
 
 max_grad_norm: null
-# Weight for the hinge penalty that keeps pixel values in [-1, 1].
-# Increase if atom values drift far outside range; decrease if it dominates training.
-range_penalty_weight: 1.0
 
 pushforward_kwargs:
   start_time: 0.0

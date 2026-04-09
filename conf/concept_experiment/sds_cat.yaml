@@ -8,7 +8,8 @@
 #   python concept_basis.py +concept_experiment=sds_cat wandb=enabled
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: factored
+  - override /neural_fields@neural_isometry.scalar_field_partial: gated # old
+  - override /coefficient_model@coefficient_model: spike_and_slab
   - _self_
 
 caption: "a cat in the center of the image"
@@ -23,9 +24,13 @@ concept_loss:
   t_batch_size: 1
   weighted_loss: false
 
+mean_function: null
 
-K: 4
-coefficient_decay: 0.5
+initial_dictionary:
+  p: 0.05
+
+tail_probability: 1e-3
+num_tail_samples: 64
 batch_size: 2
 grad_accumulation_steps: 16
 

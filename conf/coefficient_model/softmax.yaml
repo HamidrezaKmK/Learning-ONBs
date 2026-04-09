@@ -1,0 +1,4 @@
+_target_: infidictionary.concept.SoftmaxCoefficientModel
+coefficient_decay: 0.5
+truncation: 4
+_partial_: true

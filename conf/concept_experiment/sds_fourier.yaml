@@ -1,17 +1,14 @@
 # @package _global_
 #
-# SDS-based concept basis: learn a basis whose random K-sparse linear
-# combinations render as a cat, using Score Distillation Sampling.
-#
 # Usage:
-#   python concept_basis.py +concept_experiment=sds_cat
-#   python concept_basis.py +concept_experiment=sds_cat wandb=enabled
+#   python concept_basis.py +concept_experiment=sds_fourier
+#   python concept_basis.py +concept_experiment=sds_fourier wandb=enabled
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: factored # might change to old, but currently using factored
+  - override /neural_fields@neural_isometry.scalar_field_partial: old
   - _self_
 
-caption: "Joseph Fourier"
+caption: "Joseph Fourier's Face"
 
 concept_loss:
   _target_: infidictionary.concept.SDSLoss
@@ -23,12 +20,12 @@ concept_loss:
   t_batch_size: 1
   weighted_loss: false
 
-variation_strength: 1.0
-K: 2
+mean_function: null
+
+K: 1
 coefficient_decay: 0.5
 batch_size: 2
 grad_accumulation_steps: 16
-mean_function: null
 
 # callbacks:
 #   isometry_check:
@@ -52,5 +49,5 @@ mean_function: null
 wandb:
   project: BasisLearning-ConceptBasis
   tags:
-    concept: van_gogh
+    concept: Fourier
     method: SDS

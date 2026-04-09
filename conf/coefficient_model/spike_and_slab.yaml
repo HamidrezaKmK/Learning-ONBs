@@ -1,0 +1,4 @@
+_target_: infidictionary.concept.SpikeAndSlabCoefficientModel
+inclusion_exponent: 1.5
+coefficient_decay: 0.5
+_partial_: true

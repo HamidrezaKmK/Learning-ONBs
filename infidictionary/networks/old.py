@@ -1,8 +1,8 @@
-from .base import NeuralField, FourierFeatures, _init_orthogonal
+from .base import NeuralField, FourierFeatures, RMSNorm, _init_orthogonal
 from .time_embedding import SinusoidalTimeEmbedding
 
 import torch
-from torch import nn
+from torch import einsum, nn
 
 class OldTimeEvolvingField(NeuralField):
     """v(t, x) = post_mlp( BN(spatial_mlp(FF(x))) @ W(t) ).
@@ -29,6 +29,13 @@ class OldTimeEvolvingField(NeuralField):
         n_time_freqs:          sinusoidal frequency count for the time embedding.
         activation:            activation constructor (default nn.ReLU).
         post_combination_dims: hidden widths for post-combination MLP; empty = no MLP.
+        adaptive_modulation:   if True, the Fourier frequency matrix B becomes
+                               time-dependent: B(t) = B_fixed + freq_mlp(t_emb),
+                               so the network can tune which frequencies it attends
+                               to at each time.  Ignored when use_fourier_features
+                               is False.  Default: False (original behaviour).
+        freq_hidden_dims:      hidden widths for the frequency-modulation MLP;
+                               only used when adaptive_modulation=True.
     """
     def __init__(
         self,
@@ -43,6 +50,8 @@ class OldTimeEvolvingField(NeuralField):
         n_time_freqs: int = 8,
         activation=nn.ReLU,
         post_combination_dims: tuple = (),
+        adaptive_modulation: bool = False,
+        freq_hidden_dims: tuple = (256,),
     ):
         super().__init__(input_dim=coords_dim, output_dim=output_dim)
         D, C = feature_dim, output_dim
@@ -50,13 +59,40 @@ class OldTimeEvolvingField(NeuralField):
         self._C = C
         self.time_embedding = SinusoidalTimeEmbedding(n_time_freqs)
 
+        self._n_fourier = n_fourier_features
+        self._coords_dim = coords_dim
+
         # ── Spatial MLP + BN ─────────────────────────────────────────────────
         if use_fourier_features:
             self.ff = FourierFeatures(coords_dim, n_fourier_features, fourier_sigma)
             spatial_in = 2 * n_fourier_features + coords_dim  # FF(x) ++ x
         else:
             self.ff = None
+            adaptive_modulation = False  # no FF → nothing to modulate
             spatial_in = coords_dim
+
+        self.skip = nn.Linear(spatial_in, C, bias=False)
+        nn.init.zeros_(self.skip.weight)  # zero-init so it starts as identity residual
+
+
+        # ── Frequency-modulation MLP: t_emb → ΔB(t) ∈ ℝᵈˣᴷ ─────────────────
+        # B(t) = B_fixed + ΔB(t).  Last layer zero-inited so ΔB(0) ≈ 0 and
+        # the network starts identical to the fixed-FF baseline.
+        self.adaptive_modulation = adaptive_modulation
+        if adaptive_modulation:
+            freq_layers = []
+            prev = self.time_embedding.out_dim
+            for h in freq_hidden_dims:
+                freq_layers += [nn.Linear(prev, h), activation()]
+                prev = h
+            last = nn.Linear(prev, coords_dim * n_fourier_features)
+            nn.init.zeros_(last.weight)
+            nn.init.zeros_(last.bias)
+            freq_layers += [last]
+            self.freq_mlp = nn.Sequential(*freq_layers)
+            self.freq_mlp[:-1].apply(_init_orthogonal)  # hidden layers only
+        else:
+            self.freq_mlp = None
 
         spatial_layers = []
         prev = spatial_in
@@ -100,14 +136,27 @@ class OldTimeEvolvingField(NeuralField):
 
     def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         # t: (N,), x: (N, d)
-        x_in = torch.cat([self.ff(x), x], dim=-1) if self.ff is not None else x  # (N, spatial_in)
+        t_emb = self.time_embedding(t)                                      # (N, D_t)
+
+        if self.ff is not None:
+            if self.adaptive_modulation:
+                # B(t) = B_fixed + ΔB(t),  shape (N, d, K)
+                delta_B = self.freq_mlp(t_emb).reshape(-1, self._coords_dim, self._n_fourier)
+                B_t = self.ff.B.unsqueeze(0) + delta_B                     # (N, d, K)
+                proj = 2 * torch.pi * torch.einsum('nd,ndk->nk', x, B_t)  # (N, K)
+                ff_out = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)  # (N, 2K)
+            else:
+                ff_out = self.ff(x)                                         # (N, 2K)
+            x_in = torch.cat([ff_out, x], dim=-1)                          # (N, spatial_in)
+        else:
+            x_in = x
         g = self.spatial_bn(self.spatial_mlp(x_in))                        # (N, D)
 
-        t_emb = self.time_embedding(t)                                      # (N, D_t)
         W_raw = self.time_mlp(t_emb).reshape(-1, self._D, self._C)         # (N, D, C)
         W = W_raw / (W_raw.pow(2).sum(dim=(-2, -1), keepdim=True).sqrt() + 1e-8)
 
-        v = torch.einsum('nd,ndc->nc', g, W)                               # (N, C)
+        
+        v = einsum('nd,ndc->nc', g, W) + self.skip(x_in)       # (N, C)
 
         if self.post_combination is not None:
             v = v + self.post_combination(v)

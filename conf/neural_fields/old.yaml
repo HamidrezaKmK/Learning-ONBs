@@ -3,8 +3,8 @@ _target_: infidictionary.networks.OldTimeEvolvingField
 
 spatial_hidden_dims:
   - 256
-  # - 256
-  # - 256
+  - 256
+  - 256
   - 256
 time_hidden_dims:
   - 256
@@ -12,10 +12,17 @@ time_hidden_dims:
 feature_dim: 256
 use_fourier_features: true
 n_fourier_features: 256
-fourier_sigma: 2.0  # high sigma biases v(t,x) to very high spatial freq
+fourier_sigma: 5.0  # high sigma biases v(t,x) to very high spatial freq
 n_time_freqs: 16
 post_combination_dims:
   - 64
 activation:
   _target_: torch.nn.SiLU
   _partial_: true
+
+
+adaptive_modulation: True
+freq_hidden_dims:
+  - 256
+  - 256
+

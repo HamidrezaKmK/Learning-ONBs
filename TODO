@@ -1,14 +1,21 @@
-[] Use the Cayley ODE solver method with alpha and beta
+[] keep the old architecture and move all of the other experimental ones to the temp and remove their configs.
+[] Get a natural PMF version running and also think about how to move the coefficient model inside the Infidictionary maybe? 
+    Otherwise, I can just revamp it to use the PMFs but just create a new PMF
+[] Re-run FPCA
+[] Use the Cayley ODE solver method with alpha and beta and test it on FPCA, NTK, Cat basis
+
+[] Try to get a good result with heat equation or remove it
+[] Get a two-moons result for NTK interpretability and replace it with the current thing I have
+[] Get the concept basis experiment working
+[] Get a good TV basis
+
 [] Check if all of the notebooks work or not
 [] Start writing stuff (in parallel)
-[] Is the current geometric distribution the best? The x and y axis bases are always dominant.
-[] Improve the architecture of the Eulerian thing with RMSNorm or LayerNorm instead of the Frobenius normalization stuff
 [] Laplacian eigenfunctions (Shape Space Spectra)
 [] Merge the refactor changes
 
-Adding the new experiments:
-[] Use a simple Haar wavelet basis instead of the Fourier basis for the celeba example.
 
 Side Experiments:
 [] For the Monte-carlo methods, try a mix of pushforward pullback rather than just pushforward
 [] Implement the Adjoint method of the Cayley ODE solver in case I increase the number of steps
+[] Use a simple Haar wavelet basis instead of the Fourier basis for the celeba example.

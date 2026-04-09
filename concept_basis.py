@@ -5,14 +5,13 @@ import matplotlib
 matplotlib.use("Agg")
 import hydra
 import torch
-import torch.nn.functional as F
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 import wandb
 
 from infidictionary.checkpointing import Checkpointer
-from infidictionary.concept import ConceptLoss
+from infidictionary.concept import ConceptLoss, CoefficientModel
 from infidictionary.dictionaries.base import InfiDictionary
 from infidictionary.domain_samplers import SquareSampler
 from infidictionary.neural_isometries import NeuralIsometry
@@ -42,8 +41,9 @@ def concept_basis_training(
     device: torch.device,
     optim_isometry: torch.optim.Optimizer,
     scheduler_isometry: torch.optim.lr_scheduler._LRScheduler | None,
-    K: int,
-    coefficient_decay: float,
+    tail_probability: float,
+    num_tail_samples: int,
+    coefficient_model: CoefficientModel,
     image_size: int,
     wandb_enabled: bool,
     model_state_kwargs: dict,
@@ -55,7 +55,6 @@ def concept_basis_training(
     mean_function: NeuralField | None = None,
     optim_mean_function: torch.optim.Optimizer | None = None,
     scheduler_mean_function: torch.optim.lr_scheduler._LRScheduler | None = None,
-    range_penalty_weight: float = 1.0,
     max_grad_norm: float | None = None,
     grad_accumulation_steps: int = 1,
     variation_strength: float = 0.0,
@@ -67,23 +66,25 @@ def concept_basis_training(
     Each gradient step proceeds as follows (repeated ``grad_accumulation_steps``
     times before the optimizer step, for gradient accumulation):
 
-      1. Fix the atom index set via get_truncated_indices(K) (same atoms every
-         accumulation sub-step within an epoch; the grid is resampled each epoch).
-      2. Sample ``batch_size × len(indices)`` coefficients grouped into a batch:
-           coefficients ~ N(0, pmf(i_j)^{2·coefficient_decay})  ∈ R^{B × K}
-         so that each of the B images in the mini-batch gets its own independent
-         coefficient draw over the same K atoms.
+      1. Build the atom index set once per epoch via stratified sampling:
+           - Exact stratum: all indices with pmf(k) ≥ tail_probability (zero variance).
+           - Tail stratum:  num_tail_samples indices drawn from the full PMF,
+             deduplicated and filtered to exclude the exact stratum.
+         Together they cover the infinite dictionary without a hard truncation.
+      2. Draw batch_size coefficient vectors from coefficient_model (same atom set
+         across all accumulation sub-steps within an epoch).
       3. Sample target-domain coordinates on a regular grid, pull back (no-grad)
          to source-domain coordinates.
-      4. Evaluate the initial atoms ψ_j = dict[i_j] at the source coordinates:  (K, N, C).
-      5. Push forward all K atoms through Q_θ:  φ_j = Q_θ ψ_j  ∈ R^{K × N × C}.
+      4. Evaluate the initial atoms ψ_j = dict[i_j] at the source coordinates.
+      5. Push forward all atoms through Q_θ.
       6. Form B linear combinations via einsum → (B, N, C), reshape to (B, C, H, W).
       7. Apply tanh, then compute the diffusion guidance loss over the whole batch.
 
     Args:
-        K:                      Truncation level — uses the first (2K+1)² × C atoms.
-        coefficient_decay:      Exponent α: std(c_j) = pmf(i_j)^α.
-                                α=0 → equal std; α>0 → low-freq atoms get larger coefficients.
+        tail_probability:       PMF threshold separating the exact and tail strata.
+                                Smaller → more atoms in the exact stratum.
+        num_tail_samples:       Number of random index draws for the tail stratum.
+        coefficient_model:      Prior distribution over linear-combination coefficients.
         batch_size:             Number of independently drawn coefficient sets (images)
                                 per forward pass.
         grad_accumulation_steps: Number of forward/backward passes before an optimizer
@@ -134,19 +135,26 @@ def concept_basis_training(
             src_coords = src_coords.detach()
             src_logabsdet = src_logabsdet.detach()
 
-        # Fix the atom index set once per epoch (same across accumulation steps).
-        indices = initial_dictionary.get_truncated_indices(K).to(device)  # (A, d+1)
-        pmfs    = initial_dictionary.get_index_pmfs(indices).to(device)   # (A,)
+        # ── Build atom index set once per epoch (same across accumulation steps) ─
+        # Exact stratum: all high-probability indices (deterministic, zero variance).
+        idx_exact = initial_dictionary.get_high_probability_indices(tail_probability).to(device)
+
+        # Tail stratum: random draws from the full PMF, deduped and filtered.
+        idx_tail_raw = initial_dictionary.sample_indices(num_tail_samples).to(device)
+        in_exact = (idx_tail_raw[:, None, :] == idx_exact[None, :, :]).all(dim=-1).any(dim=-1)
+        idx_tail = torch.unique(idx_tail_raw[~in_exact], dim=0)
+
+        indices = torch.cat([idx_exact, idx_tail], dim=0)               # (A, d+1)
+        pmfs    = initial_dictionary.get_index_pmfs(indices).to(device) # (A,)
         A       = indices.shape[0]
 
         init_atoms = initial_dictionary.get_atoms(src_coords, indices)  # (A, N, C)
         C = init_atoms.shape[-1]
 
-        total_iso_loss      = 0.0
-        total_iso_range     = 0.0
-        total_iso_concept   = 0.0
-        total_mean_loss     = 0.0
-        total_mean_concept  = 0.0
+        total_iso_loss    = 0.0
+        total_iso_concept = 0.0
+        total_mean_loss   = 0.0
+        total_mean_concept = 0.0
 
         for _ in range(grad_accumulation_steps):
 
@@ -193,9 +201,7 @@ def concept_basis_training(
                     **pushforward_kwargs,
                 )  # (A, N, C)
 
-                coeff_std    = pmfs.pow(coefficient_decay)                            # (A,)
-                coefficients = torch.randn(batch_size, A, device=device) * coeff_std # (B, A)
-                coefficients = coefficients / torch.norm(coefficients, dim=-1, keepdim=True)
+                coefficients = coefficient_model.sample(indices, batch_size, device)  # (B, A)
 
                 combo     = torch.einsum("ba,anc->bnc", coefficients, pushed_atoms)
                 combo_img = combo.reshape(batch_size, image_size, image_size, C).permute(0, 3, 1, 2)
@@ -204,12 +210,10 @@ def concept_basis_training(
                 if mean_img_detached is not None:
                     images = images + mean_img_detached.unsqueeze(0)
 
-                iso_range = (F.relu(-1.0 - images) + F.relu(images - 1.0)).mean()
-                iso_concept_val = concept_loss(images.clamp(-1, 1), text_embeds)
-                iso_step = (iso_concept_val + range_penalty_weight * iso_range) / grad_accumulation_steps
+                iso_concept_val = concept_loss(images.tanh(), text_embeds)
+                iso_step = iso_concept_val / grad_accumulation_steps
                 iso_step.backward()
                 total_iso_loss    += iso_step.item()
-                total_iso_range   += iso_range.item()       / grad_accumulation_steps
                 total_iso_concept += iso_concept_val.item() / grad_accumulation_steps
 
         if variation_strength > 0.0 and max_grad_norm is not None:
@@ -224,7 +228,6 @@ def concept_basis_training(
                 wandb.log({"train/avg_lr_mean_function":     get_avg_lr(optim_mean_function)}, step=epoch_i)
             if variation_strength > 0.0:
                 wandb.log({"train/isometry_total_loss":   total_iso_loss},    step=epoch_i)
-                wandb.log({"train/isometry_range_loss":   total_iso_range},   step=epoch_i)
                 wandb.log({"train/isometry_concept_loss": total_iso_concept}, step=epoch_i)
                 wandb.log({"train/grad_norm_isometry":    get_grad_norm(neural_isometry)},  step=epoch_i)
                 wandb.log({"train/param_norm_isometry":   get_param_norm(neural_isometry)}, step=epoch_i)
@@ -366,6 +369,9 @@ def main(conf: DictConfig):
     concept_loss: ConceptLoss = instantiate(conf.concept_loss)
     text_embeds = concept_loss.encode_text(conf.caption, device)
 
+    coefficient_model: CoefficientModel = instantiate(conf.coefficient_model)(infidictionary=initial_dictionary)
+    
+
     concept_basis_training(
         neural_isometry=neural_isometry,
         initial_dictionary=initial_dictionary,
@@ -375,8 +381,9 @@ def main(conf: DictConfig):
         device=device,
         optim_isometry=optim_isometry,
         scheduler_isometry=sched_isometry,
-        K=conf.K,
-        coefficient_decay=conf.coefficient_decay,
+        tail_probability=conf.tail_probability,
+        num_tail_samples=conf.num_tail_samples,
+        coefficient_model=coefficient_model,
         image_size=conf.image_size,
         wandb_enabled=conf.wandb.enabled,
         model_state_kwargs=conf.get("model_state_kwargs", {}) or {},
@@ -388,7 +395,6 @@ def main(conf: DictConfig):
         mean_function=mean_function,
         optim_mean_function=optim_mean_function,
         scheduler_mean_function=sched_mean_function,
-        range_penalty_weight=conf.get("range_penalty_weight", 1.0),
         max_grad_norm=conf.get("max_grad_norm", None),
         grad_accumulation_steps=conf.get("grad_accumulation_steps", 1),
         variation_strength=conf.get("variation_strength", 1.0),

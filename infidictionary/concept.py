@@ -24,7 +24,7 @@ from abc import ABC, abstractmethod
 
 import torch
 import torch.nn.functional as F
-
+from infidictionary.dictionaries import InfiDictionary
 
 class ConceptLoss(ABC):
     """Abstract base class for concept alignment losses.
@@ -436,3 +436,201 @@ class CLIPLoss(ConceptLoss):
         clip_energy = -sim.reshape(T, B).mean(dim=0)      # (B,)
 
         return clip_energy.mean()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CoefficientModel
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CoefficientModel(ABC):
+    """Abstract prior distribution over linear-combination coefficients.
+
+    A ``CoefficientModel`` encapsulates a prior belief about how basis atoms
+    should be combined to form images.  The caller builds the index set by
+    concatenating a deterministic high-probability exact stratum and a randomly
+    sampled tail stratum (see :func:`concept_basis_training`), then hands both
+    ``indices`` and their PMF weights to this model.
+
+    Subclasses implement different priors ranging from simple i.i.d. Gaussian to
+    the infinite-dimensional Bernoulli-Gaussian spike-and-slab.
+    """
+
+    def __init__(self, infidictionary: InfiDictionary):
+        self.infidictionary = infidictionary
+
+    @abstractmethod
+    def sample(
+        self,
+        indices: torch.Tensor,  # (A, d+1)  concatenated exact + tail multi-indices
+        batch_size: int,
+        device: torch.device,
+    ) -> torch.Tensor:          # (B, A)
+        """Draw ``batch_size`` coefficient vectors over ``A`` atoms.
+
+        Args:
+            indices:    ``(A, d+1)`` integer multi-indices (exact stratum first,
+                        then tail samples).
+            batch_size: Number of independent draws.
+            device:     Target device.
+
+        Returns:
+            ``(batch_size, A)`` coefficient tensor (dtype float32).
+        """
+
+
+class GaussianCoefficientModel(CoefficientModel):
+    """i.i.d. Gaussian coefficients scaled by PMF, L2-normalised.
+
+    Each coefficient is drawn as  c_j ~ N(0, pmf(j)^{2α})  independently,
+    then the whole vector is rescaled to unit L2 norm.  This is the simplest
+    isotropic prior: every atom can receive positive or negative weight, and
+    energy is spread across all atoms according to the spectral PMF.
+
+    Args:
+        coefficient_decay: Exponent α.  α=0 → uniform variance; α>0 → low-
+                           frequency atoms (higher PMF) get larger coefficients.
+    """
+
+    def __init__(
+        self, 
+        infidictionary: InfiDictionary,
+        truncation: int,
+        coefficient_decay: float = 0.5,
+    ):
+        super().__init__(infidictionary)
+        self.coefficient_decay = coefficient_decay
+        self._truncated_indices = self.infidictionary.get_truncated_indices(truncation)
+
+    def sample(self, indices, batch_size, device):
+        # remove the indices that are not in the truncated set
+        pmfs = self.infidictionary.get_index_pmfs(indices)  # (A,)
+        coeff_std = pmfs.pow(self.coefficient_decay)                        # (A,)
+        coefficients = torch.randn(batch_size, pmfs.shape[0], device=device) * coeff_std
+        norms = coefficients.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        coefficients = coefficients / norms
+        coefficients = coefficients.abs()  # make strictly positive
+
+        truncated_indices = self._truncated_indices.to(device)
+        mask = torch.zeros(indices.shape[0], dtype=torch.bool, device=device)
+        for idx in truncated_indices:
+            mask |= (indices == idx).all(dim=1)
+            
+        return torch.where(
+            mask.unsqueeze(0).expand(batch_size, -1),
+            coefficients,
+            torch.zeros_like(coefficients),
+        )
+
+
+class SoftmaxCoefficientModel(CoefficientModel):
+    """Sparse convex combinations via softmax over PMF-scaled Gaussian logits.
+
+    Logits are drawn as z_j ~ N(0, (pmf_rel(j))^{2α}) and then passed through
+    softmax, yielding strictly positive coefficients summing to 1.  PMFs are
+    normalised relative to the maximum in the selected set so that the behaviour
+    is independent of the absolute normalisation constant of the infinite dictionary.
+
+    Args:
+        coefficient_decay: Exponent α.  Higher α → stronger low-frequency bias
+                           and sharper (sparser) softmax peaks.
+    """
+
+    def __init__(
+        self, 
+        infidictionary: InfiDictionary,
+        truncation: int,
+        coefficient_decay: float = 0.5,
+    ):
+        super().__init__(infidictionary)
+        self.coefficient_decay = coefficient_decay
+        self._truncated_indices = self.infidictionary.get_truncated_indices(truncation)
+
+    def sample(self, indices, batch_size, device):
+        # remove the indices that are not in the truncated set
+        pmfs = self.infidictionary.get_index_pmfs(indices)  # (A,)
+        coeff_std = pmfs.pow(self.coefficient_decay)                        # (A,)
+        logits = torch.randn(batch_size, pmfs.shape[0], device=device) * coeff_std
+        coefficients = torch.softmax(logits, dim=-1)
+        # divide by norm to preserve energy
+        coefficients = coefficients / coefficients.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+
+        truncated_indices = self._truncated_indices.to(device)
+        mask = torch.zeros(indices.shape[0], dtype=torch.bool, device=device)
+        for idx in truncated_indices:
+            mask |= (indices == idx).all(dim=1)
+            
+        return torch.where(
+            mask.unsqueeze(0).expand(batch_size, -1),
+            coefficients,
+            torch.zeros_like(coefficients),
+        )                                 # (B, A)
+
+
+class SpikeAndSlabCoefficientModel(CoefficientModel):
+    """Infinite-dimensional Bernoulli-Gaussian (spike-and-slab) prior with
+    natural-image spectral weighting.
+
+    Each atom j is independently either *silent* (c_j = 0) or *active*:
+
+        z_j  ~  Bernoulli((‖k_j‖² + 1)^{-γ})        [inclusion indicator]
+        c_j   =  z_j · |N(0, (‖k_j‖² + 1)^{-2α})|   [half-normal when active]
+
+    Both the inclusion probability and the coefficient variance follow the
+    power-law spectrum of natural images.  With α=0.5 the variance envelope
+    matches the 1/f² spectrum; the DC atom (‖k‖=0) always has inclusion
+    probability 1 and the largest coefficient variance.
+
+    **Convergence (2-D Fourier basis).**  The expected number of active atoms is
+
+        E[active] = Σ_k (‖k‖² + 1)^{-γ}
+                  ≈ Σ_{m=0}^{∞} (2πm) · (m² + 1)^{-γ}   (circular shell count)
+
+    which converges for γ > 1.  The expected total power likewise converges for
+    γ + α > 1.  Choosing γ > 1 gives a prior whose infinite-dimensional limit is
+    well-defined with probability 1.
+
+    The active coefficients are L2-normalised after masking; a uniform unit-norm
+    fallback fires on the rare occasion all atoms happen to be silent.
+
+    Args:
+        coefficient_decay:  Exponent α.  α=0 → uniform magnitude for active atoms;
+                            α=0.5 → 1/f² natural-image spectrum (recommended).
+        inclusion_exponent: Exponent γ.  γ→0 → all atoms active (dense Gaussian);
+                            γ=1 → DC always active, shell-m prob ~ m^{-2};
+                            γ>1 → sparse, well-defined infinite-dimensional limit.
+    """
+
+    def __init__(
+        self,
+        infidictionary: InfiDictionary,
+        coefficient_decay: float = 0.5,
+        inclusion_exponent: float = 1.5,
+    ):
+        super().__init__(infidictionary)
+        self.inclusion_exponent = inclusion_exponent
+        self.coefficient_decay  = coefficient_decay
+
+    def sample(self, indices, batch_size, device):
+        spatial  = indices[:, :-1].float().to(device)                       # (A, d)
+        freq_sq  = (spatial ** 2).sum(dim=-1)                               # (A,)  ‖k‖²
+        A        = indices.shape[0]
+
+        # Inclusion probability: (‖k‖² + 1)^{-γ} — DC atom always included (prob=1),
+        # higher-frequency atoms included less often following a power law.
+        incl_probs = (freq_sq + 1.0).pow(-self.inclusion_exponent)          # (A,) in (0, 1]
+        mask = torch.bernoulli(incl_probs.unsqueeze(0).expand(batch_size, -1))  # (B, A)
+
+        # Coefficient magnitude: half-normal with std (‖k‖² + 1)^{-α},
+        # matching the 1/f² natural-image spectral envelope at α=0.5.
+        coeff_std    = (freq_sq + 1.0).pow(-self.coefficient_decay)         # (A,)
+        raw          = torch.randn(batch_size, A, device=device).abs()      # (B, A) half-normal
+        coefficients = mask * raw * coeff_std                               # (B, A)
+
+        # L2-normalise; uniform unit-norm fallback when all atoms are silent.
+        norms  = coefficients.norm(dim=-1, keepdim=True)                    # (B, 1)
+        silent = norms < 1e-8
+        return torch.where(
+            silent,
+            torch.full_like(coefficients, A ** -0.5),
+            coefficients / norms.clamp(min=1e-8),
+        )

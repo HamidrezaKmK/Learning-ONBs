@@ -8,7 +8,7 @@
 #   python concept_basis.py +concept_experiment=sds_cat wandb=enabled
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: factored # might change to old, but currently using factored
+  - override /neural_fields@neural_isometry.scalar_field_partial: old # might change to old, but currently using factored
   - _self_
 
 caption: "A painting in the style of Vincent Van Gogh"

@@ -6,3 +6,4 @@ from .factored_time_evolving_field import FactoredTimeEvolvingField
 from .fourier_mixture_field import FourierMixtureField
 from .time_evolving_field import TimeEvolvingField
 from .old import OldTimeEvolvingField
+from .gated import GatedTimeEvolvingField
