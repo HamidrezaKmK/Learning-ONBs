@@ -5,5 +5,6 @@ from .ntk_mlp_neural_field import NTKMLPNeuralField
 from .factored_time_evolving_field import FactoredTimeEvolvingField
 from .fourier_mixture_field import FourierMixtureField
 from .time_evolving_field import TimeEvolvingField
-from .old import OldTimeEvolvingField
+from .old import OldTimeEvolvingField, NewTimeEvolvingField, FullSpectrumTimeEvolvingField
 from .gated import GatedTimeEvolvingField
+from .experimental import NeRFAndPWCField, FourierTimeEvolvingField, ExperimentalTimeEvolvingField

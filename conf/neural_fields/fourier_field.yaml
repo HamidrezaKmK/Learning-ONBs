@@ -1,0 +1,16 @@
+_target_: infidictionary.networks.FourierTimeEvolvingField
+# coords_dim and output_dim are injected by EulerianIsometry via _partial_
+
+# Rule of thumb: n_modes ≈ 2 × (max atom frequency to scramble).
+# Larger n_modes → richer functions but smaller per-step rotations (∝ 1/√M).
+# For atoms up to k=7: n_modes=16 gives ⟨φₖ, v_norm⟩ ≈ 0.25 per step.
+# For atoms up to k=7: n_modes=256 gives ⟨φₖ, v_norm⟩ ≈ 0.04 per step.
+n_modes: 256 #5
+
+time_hidden_dims:
+  - 256
+  - 256
+n_time_freqs: 256
+activation:
+  _target_: torch.nn.SiLU
+  _partial_: true

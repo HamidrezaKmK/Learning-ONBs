@@ -7,7 +7,7 @@
 #   python reg_cob.py +vibration_experiment=airplane_vibration
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: old # fourier_mixture # old # fourier_mixture
+  - override /neural_fields@neural_isometry.scalar_field_partial: new # old # fourier_mixture # old # fourier_mixture
   - _self_
 
 initial_dictionary:
@@ -44,24 +44,24 @@ regularizer:
   domain_sample_size: 32
 
 # Isometry-check domain sampler must match the airplane domain
-callbacks:
-  isometry_check:
-    _target_: infidictionary.callbacks.IsometryCheck
-    dictionary: ${initial_dictionary}
-    domain_sampler:
-      _target_: infidictionary.domain_samplers.SquareSampler
-    frequency: 100
-    density: 100
-    indices:
-      - [ 0,  0, 0]
-      - [-1,  0, 0]
-      - [ 0, -1, 0]
-      - [ 1,  0, 0]
-      - [ 0,  1, 0]
+# callbacks:
+#   isometry_check:
+#     _target_: infidictionary.callbacks.IsometryCheck
+#     dictionary: ${initial_dictionary}
+#     domain_sampler:
+#       _target_: infidictionary.domain_samplers.SquareSampler
+#     frequency: 100
+#     density: 100
+#     indices:
+#       - [ 0,  0, 0]
+#       - [-1,  0, 0]
+#       - [ 0, -1, 0]
+#       - [ 1,  0, 0]
+#       - [ 0,  1, 0]
 
 checkpointing:
   checkpoint_dir: outputs/checkpoints
-  checkpoint_every_n_steps: 10
+  checkpoint_every_n_steps: 2
 
 wandb:
   project: BasisLearning-vibration-modes

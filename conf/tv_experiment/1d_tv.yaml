@@ -1,0 +1,64 @@
+# @package _global_
+#
+#
+# Minimises E_a = ∫ D(x) ‖∇(Qφ_a)(x)‖_1 dx, finds the 1-Laplacians
+#
+# Usage:
+#   python reg_cob.py +tv_experiment=1d_tv
+defaults:
+  - override /neural_fields@neural_isometry.scalar_field_partial: new # experimental2 # fourier_field # experimental
+  - _self_
+
+neural_isometry:
+  coords_dim: 1
+  channels_dim: 1
+
+initial_dictionary:
+  num_channels: 1
+  domain_dim: 1
+  p: 0.1
+
+model_state_kwargs:
+  num_steps: 50
+
+isometry_optimizer_callable:
+  lr: 0.0005
+
+tail_probability: 0.085
+num_tail_samples: 0
+grad_accumulation_steps: 16
+
+      
+# regularizer:
+#   _target_: infidictionary.regularizers.EntropyRegularizer
+#   domain_sampler: 
+#     _target_: infidictionary.domain_samplers.LineSegmentSampler
+#     stratified: true
+#     add_noise: true
+#   domain_sample_size: 100
+#   sigma: 0.01
+
+regularizer:
+
+  _target_: infidictionary.regularizers.TVMaterialRegularizer
+  domain_sampler: 
+    _target_: infidictionary.domain_samplers.LineSegmentSampler
+    stratified: true
+    add_noise: true
+  domain_sample_size: 100
+  material: 
+    _target_: infidictionary.material.ConstantMaterial
+    diffusivity: 1.0
+    domain_sampler: ${regularizer.domain_sampler}
+  mass_threshold: 0.01
+  sigma: 0.1
+
+
+checkpointing:
+  checkpoint_every_n_steps: 10
+
+wandb:
+  project: BasisLearning-tv
+  tags:
+    material: rod
+    method: tv-dirichlet

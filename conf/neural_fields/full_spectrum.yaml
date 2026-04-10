@@ -1,0 +1,9 @@
+_target_: infidictionary.networks.FullSpectrumTimeEvolvingField
+n_modes: 128
+low_freq: 0.0
+high_freq: 32.0
+time_hidden_dims: [256, 256, 256]
+n_time_freqs: 8
+activation:
+  _target_: torch.nn.SiLU
+  _partial_: true

@@ -1,0 +1,13 @@
+_target_: infidictionary.networks.NeRFAndPWCField
+
+n_fourier_freqs: 256 #20
+n_pwc_bases: 128
+
+time_hidden_dims:
+  - 256
+  - 256
+n_time_freqs: 256
+pwc_steepness: 50.0
+activation:
+  _target_: torch.nn.SiLU
+  _partial_: true
