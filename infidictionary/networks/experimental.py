@@ -1,670 +1,423 @@
 import itertools
 import math
 import torch
-import torch.nn.functional as F
-from torch import nn, einsum
-
-from .base import NeuralField, FourierFeatures, RMSNorm, _init_orthogonal
-from .time_embedding import SinusoidalTimeEmbedding
-
-# ── V1: Sparse softmax mode selector (fragile to init_logit_scale / n_components) ──
-#
-from .base import NeuralField, _init_orthogonal
-from .time_embedding import SinusoidalTimeEmbedding
-
-import torch
-import torch.nn.functional as F
 from torch import nn
-import math
 
-class FourierTimeEvolvingField(NeuralField):
-    """Separable Fourier field for arbitrary spatial dimension d.
+from .base import NeuralField, _init_orthogonal, RMSNorm
+from .time_embedding import SinusoidalTimeEmbedding
 
-    v_c(t, x) = Σ_{k,m}  Ã_{k,m,c}(t) · ∏_{i=1}^d [ a_{k,m,i,c}·sin(2π·f_{m,i}·x_i)
-                                                       + b_{k,m,i,c}·cos(2π·f_{m,i}·x_i) ]
 
-    f_m = (f_{m,1},...,f_{m,d}) are fixed integer frequency vectors from the Fourier
-    lattice (sorted by L2 magnitude, DC excluded).
+class FiLMedMLP(nn.Module):
+    """Feedforward MLP with Feature-wise Linear Modulation (FiLM) at every hidden layer.
 
-    Per-dimension factors a·sin + b·cos (with (a,b) unit-normalised) cover ALL types
-    of axis-aligned Fourier atoms simultaneously:
-      d=1: sin and cos
-      d=2: sin·sin, sin·cos, cos·sin, cos·cos
-      d=k: all 2^k combinations
+    At each hidden layer the conditioning vector ``cond`` is projected to a
+    per-feature scale ``γ`` and shift ``β``, applied after RMSNorm::
 
-    Parseval norm (after per-dim unit normalisation):
-      ||∏_i (a_i·sin + b_i·cos)||²_L2 = (1/2)^d   (factors are independent)
-    so  ||v_c||²_L2 ≈ Σ_{k,m} A_{k,m,c}² · (1/2)^d = 1  after amplitude normalisation.
+        h = activation( (1 + γ(cond)) · RMSNorm(linear(x)) + β(cond) )
 
-    Sliding window sweeps active frequency magnitude from low_freq to high_freq
-    as t goes from 0 to 1.
+    The ``(1 + γ)`` residual parameterisation means zero-initialised projection
+    weights leave the network as a plain MLP at startup; conditioning is
+    gradually learned on top of that baseline.  The output layer applies
+    ``BatchNorm1d(affine=False)`` for zero-mean unit-variance output.
+
+    Args:
+        in_dim:      Input feature dimension.
+        out_dim:     Output feature dimension.
+        hidden_dims: Width of each hidden layer.
+        cond_dim:    Dimension of the conditioning vector.
+        activation:  Activation class applied after each FiLM step.
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        hidden_dims: tuple,
+        cond_dim: int,
+        activation,
+    ):
+        super().__init__()
+        self.linears    = nn.ModuleList()
+        self.norms      = nn.ModuleList()
+        self.film_projs = nn.ModuleList()
+        self.acts       = nn.ModuleList()
+
+        prev = in_dim
+        for h in hidden_dims:
+            self.linears.append(nn.Linear(prev, h))
+            self.norms.append(RMSNorm())
+            proj = nn.Linear(cond_dim, 2 * h)
+            nn.init.zeros_(proj.weight)
+            nn.init.zeros_(proj.bias)
+            self.film_projs.append(proj)
+            self.acts.append(activation())
+            prev = h
+
+        self.out_linear = nn.Linear(prev, out_dim)
+        self.out_bn     = nn.BatchNorm1d(out_dim, affine=False)
+
+    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+        # x:    (N, in_dim)
+        # cond: (N, cond_dim)
+        for linear, norm, film_proj, act in zip(
+            self.linears, self.norms, self.film_projs, self.acts
+        ):
+            h = norm(linear(x))
+            gamma, beta = film_proj(cond).chunk(2, dim=-1)
+            x = act((1.0 + gamma) * h + beta)
+        return self.out_bn(self.out_linear(x))
+
+class FourierDistortedField(NeuralField):
+    """A time-conditioned neural field that adds a random-Fourier distortion to an inner field.
+
+    Wraps an ``inner_field`` and adds a structured spectral distortion whose
+    frequency sweeps from ``low_freq`` to ``high_freq`` as the ODE integrates
+    from ``low_t`` to ``high_t``.  The distortion is mixed with the RMS-normalised
+    inner field output at a fixed 45° angle::
+
+        feat_i(t, x) = sin(freq(t) · w_i^T x + phase_i(t))
+        v_distortion  = Σ_i  coeff_i(t, c) · feat_i(t, x)        shape (N, C)
+        out = cos(π/4) · (v_inner / RMS(v_inner)) + sin(π/4) · v_distortion
+
+    **Modes.**  The actual number of modes is ``n_modes^d`` (a tensor-product
+    grid) rather than ``n_modes``.
+
+    **Direction vectors.**  Each ``w_i`` is a random Gaussian vector perturbed
+    to introduce both directional diversity and magnitude variation::
+
+        w_i = w_raw / ‖w_raw‖ + ε,   ε ~ N(0, I)
+
+    These are fixed non-trainable buffers.
+
+    **Frequency schedule.**  The shared scalar frequency follows a
+    ``gamma``-shaped curve::
+
+        t_scaled  = (clamp(t, low_t, high_t) - low_t) / (high_t - low_t)
+        freq(t)   = low_freq + (1 - (1 - t_scaled)^gamma) · (high_freq - low_freq)
+
+    Higher ``gamma`` → frequency ramps up slowly then accelerates;
+    ``gamma = 1`` → linear sweep.
+
+    **Coefficient normalisation.**  ``coeff_i(t, c)`` are unit-normalised over
+    the modes axis per output channel before the weighted sum, so the distortion
+    energy is independent of the MLP output scale.
+
+    **Learnable flag.**  When ``learnable=False`` both ``time_to_phases`` and
+    ``time_to_coeffs`` are frozen at random initialisation.  Only ``inner_field``
+    is optimised, and it must learn to compensate for the fixed distortion.
+
+    Args:
+        coords_dim:          Spatial dimension ``d``.
+        output_dim:          Number of output channels ``C``.
+        inner_field_partial: Callable ``(coords_dim, output_dim) → NeuralField``
+                             that constructs the wrapped inner field.
+        n_modes:             Base number of modes; actual count is ``n_modes^d``.
+        learnable:           If ``False``, phase and coefficient MLPs are frozen.
+        time_hidden_dims:    Hidden layer widths for both time-conditioned MLPs.
+        n_time_freqs:        Number of sinusoidal frequencies in the time embedding.
+        low_freq:            Spatial frequency at the start of the sweep (``t = low_t``).
+        high_freq:           Spatial frequency at the end of the sweep (``t = high_t``).
+        low_t:               ODE time value corresponding to ``freq = low_freq``.
+        high_t:              ODE time value corresponding to ``freq = high_freq``.
+        gamma:               Exponent controlling the frequency ramp shape (``γ > 0``).
+        activation:          Activation class used between hidden layers of both MLPs.
     """
 
     def __init__(
         self,
         coords_dim: int,
         output_dim: int,
-        n_modes: int = 32,
-        n_components: int = 2,
+        inner_field_partial: callable,
+        n_modes: int,
+        learnable: bool = True,
         time_hidden_dims: tuple = (64, 64),
         n_time_freqs: int = 8,
         low_freq: float = 1.0,
         high_freq: float = 32.0,
-        bandwidth: float = 6.0,
+        low_t: float = 0.0,
+        high_t: float = 1.0,
+        gamma: float = 1.0,
         activation=nn.SiLU,
     ):
         super().__init__(input_dim=coords_dim, output_dim=output_dim)
-        assert low_freq + bandwidth <= high_freq, "bandwidth too large for the given freq bounds"
 
-        self.n_modes = n_modes
-        self.n_components = n_components
-        self.C = output_dim
-        self.d = coords_dim
-        self.low_freq = low_freq
+        self.inner_field: NeuralField = inner_field_partial(coords_dim=coords_dim, output_dim=output_dim)
+        self.n_modes   = n_modes ** coords_dim
+        self.C         = output_dim
+        self.d         = coords_dim
+        self.low_freq  = low_freq
         self.high_freq = high_freq
-        self.bandwidth = bandwidth
+        self.low_t     = low_t
+        self.high_t    = high_t
+        self.learnable = learnable
+        self.gamma     = gamma 
+        
+        # Fixed unit-norm random direction vectors w_i ~ Gaussian with d dimensions.
+        w = torch.randn(self.n_modes, coords_dim) 
+        w = w / torch.norm(w, dim=-1, keepdim=True).clamp(1e-8) + torch.randn_like(w)
+        self.register_buffer("w", w)
 
+        # Time embedding has no learnable parameters (only a frequency buffer).
         self.time_embedding = SinusoidalTimeEmbedding(n_time_freqs)
+        emb_dim = self.time_embedding.out_dim
 
-        # MLP output layout per sample: (N, K, 1 + 2d, M, C)
-        #   [:, :,    0,     :, :] = amplitude A    → (N, K, M, C)
-        #   [:, :,  1:1+d,   :, :] = sin-weights a  → (N, K, d, M, C)
-        #   [:, :, 1+d:1+2d, :, :] = cos-weights b  → (N, K, d, M, C)
-        self._n_params = n_components * (1 + 2 * coords_dim) * n_modes * output_dim
+        # MLP: t_emb → self.n_modes phases
+        self.time_to_phases = self._build_mlp(emb_dim, self.n_modes, time_hidden_dims, activation)
+        # MLP: t_emb → self.n_modes * C combination coefficients (one per mode-channel pair)
+        self.time_to_coeffs = self._build_mlp(emb_dim, self.n_modes * output_dim, time_hidden_dims, activation)
 
-        layers = []
-        prev = self.time_embedding.out_dim
-        for h in time_hidden_dims:
-            layers += [nn.Linear(prev, h), activation()]
-            prev = h
-        last = nn.Linear(prev, self._n_params)
-        _init_orthogonal(last)
-        layers.append(last)
-        self.time_mlp = nn.Sequential(*layers)
-        self.time_mlp[:-1].apply(_init_orthogonal)
-
-        # Integer frequency lattice: (M, d), sorted by L2 magnitude, DC excluded.
-        freq_vecs = self._make_freq_grid(coords_dim, n_modes)   # (M, d)
-        freq_mags = freq_vecs.norm(dim=-1)                       # (M,)
-        self.register_buffer("_freq_vecs", freq_vecs, persistent=False)
-        self.register_buffer("_freq_mags", freq_mags, persistent=False)
+        if learnable:
+            self.time_to_phases.apply(_init_orthogonal)
+            self.time_to_coeffs.apply(_init_orthogonal)
+        else:
+            # Freeze both MLPs — distortion is a fixed random function of t.
+            for p in itertools.chain(self.time_to_phases.parameters(),
+                                     self.time_to_coeffs.parameters()):
+                p.requires_grad_(False)
 
     @staticmethod
-    def _make_freq_grid(d: int, n_modes: int) -> torch.Tensor:
-        """Return (n_modes, d) integer frequency vectors sorted by L2 norm (DC excluded)."""
-        K = int(math.ceil(n_modes ** (1.0 / d))) + 2
-        all_freqs = list(itertools.product(range(-K, K + 1), repeat=d))
-        freqs = torch.tensor(all_freqs, dtype=torch.float32)   # ((2K+1)^d, d)
-        mags  = freqs.norm(dim=-1)
-        freqs = freqs[mags > 0]
-        mags  = mags[mags > 0]
-        order = mags.argsort(stable=True)
-        freqs = freqs[order]
-        if freqs.shape[0] >= n_modes:
-            return freqs[:n_modes]
-        repeats = (n_modes + freqs.shape[0] - 1) // freqs.shape[0]
-        return freqs.repeat(repeats, 1)[:n_modes]
+    def _build_mlp(in_dim: int, out_dim: int, hidden_dims: tuple, activation) -> nn.Sequential:
+        layers: list[nn.Module] = []
+        prev = in_dim
+        for h in hidden_dims:
+            layers += [nn.Linear(prev, h), activation()]
+            prev = h
+        layers.append(nn.Linear(prev, out_dim))
+        return nn.Sequential(*layers)
 
     def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        # t: (N,)   x: (N, d)
         N = x.shape[0]
-        K, M, C, d = self.n_components, self.n_modes, self.C, self.d
 
+        # Per-point time embedding: (N, emb_dim)
         t_emb = self.time_embedding(t)
-        raw   = self.time_mlp(t_emb)                            # (N, K*(1+2d)*M*C)
 
-        params = raw.reshape(N, K, 1 + 2 * d, M, C)
-        amps   = params[:, :,       0,     :, :]                # (N, K, M, C)
-        sc_sin = params[:, :,   1:1+d,     :, :]                # (N, K, d, M, C)
-        sc_cos = params[:, :, 1+d:1+2*d,   :, :]                # (N, K, d, M, C)
+        # Per-point normalised time and centre frequency: both (N, 1)
+        t_scaled = ((t.clamp(self.low_t, self.high_t) - self.low_t)
+                    / (self.high_t - self.low_t)).unsqueeze(-1)
+        freq_scale = 1 - (1 - t_scaled) ** self.gamma
+        freq = self.low_freq + freq_scale * (self.high_freq - self.low_freq)  # (N, 1)
 
-        # Unit-normalise (a, b) per dimension so each per-dim factor has L2 norm 1/√2
-        # regardless of the MLP output scale.  This decouples amplitude from direction.
-        sc_norm = (sc_sin.pow(2) + sc_cos.pow(2)).sqrt().clamp(min=1e-8)  # (N, K, d, M, C)
-        sc_sin  = sc_sin / sc_norm                              # (N, K, d, M, C)
-        sc_cos  = sc_cos / sc_norm
+        # Random projections w_i^T x_n: (N, n_modes)
+        proj = x @ self.w.T
 
-        # Sliding frequency window on mode magnitudes.
-        # Clamp the sweep range to [grid_min, grid_max] so the window never
-        # drifts outside the actual frequency grid (which would zero-out v).
-        freq_mags   = self._freq_mags.to(dtype=x.dtype)         # (M,)
-        grid_min    = freq_mags.min()
-        grid_max    = freq_mags.max()
+        if self.learnable:
+            phases = self.time_to_phases(t_emb)                                # (N, n_modes)
+            coeffs = self.time_to_coeffs(t_emb).view(N, self.n_modes, self.C) # (N, n_modes, C)
+        else:
+            with torch.no_grad():
+                phases = self.time_to_phases(t_emb)
+                coeffs = self.time_to_coeffs(t_emb).view(N, self.n_modes, self.C)
 
-        t_scaled    = t.view(N, 1, 1).clamp(0, 1)
-        c0          = self.low_freq  + self.bandwidth / 2.0
-        c1          = self.high_freq - self.bandwidth / 2.0
-        c0          = c0.clamp(grid_min, grid_max) if isinstance(c0, torch.Tensor) else max(c0, grid_min.item())
-        c1          = c1.clamp(grid_min, grid_max) if isinstance(c1, torch.Tensor) else min(c1, grid_max.item())
-        target_freq = c0 + t_scaled * (c1 - c0)                # (N, 1, 1)
-        mode_dist   = freq_mags.view(1, 1, M) - target_freq     # (N, 1, M)
-        sigma       = self.bandwidth / 3.0
-        freq_w      = torch.exp(-0.5 * (mode_dist / sigma) ** 2)
-        freq_w      = freq_w / (freq_w.sum(dim=-1, keepdim=True) + 1e-8)  # (N, 1, M)
-        amps        = amps * freq_w.unsqueeze(-1)               # (N, K, M, C)
+        # Fourier features: sin(freq * w_i^T x + phase_i(t)) → (N, n_modes)
+        features = torch.sin(freq * proj + phases)
 
-        # Parseval normalisation AFTER windowing so the active-band energy is always
-        # unit norm — prevents the network from hiding amplitude in off-window modes.
-        parseval_norm = ((0.5 ** d) * amps.pow(2).sum(dim=(1, 2))).sqrt().clamp(min=1e-8)
-        amps = amps / parseval_norm[:, None, None, :]           # (N, K, M, C)
+        # Normalise coefficients over the modes axis so each output channel has
+        # unit-norm weights regardless of the MLP output scale.
+        coeffs = coeffs / coeffs.norm(dim=1, keepdim=True).clamp_min(1e-8)
 
-        # Per-dimension base angles: base[n, m, i] = 2π · f_{m,i} · x_{n,i}
-        freq_vecs   = self._freq_vecs.to(dtype=x.dtype)         # (M, d)
-        base_angles = 2.0 * math.pi * x[:, None, :] * freq_vecs[None, :, :]  # (N, M, d)
+        # Weighted sum over modes → (N, C)
+        v_distortion = (features.unsqueeze(-1) * coeffs).sum(dim=1)
 
-        # Expand for (N, K, M, d, C) broadcasting
-        S = torch.sin(base_angles)[:, None, :, :, None]         # (N, 1, M, d, 1)
-        Cv = torch.cos(base_angles)[:, None, :, :, None]        # (N, 1, M, d, 1)
 
-        # Permute sc_sin/sc_cos from (N, K, d, M, C) → (N, K, M, d, C)
-        a = sc_sin.permute(0, 1, 3, 2, 4)                       # (N, K, M, d, C)
-        b = sc_cos.permute(0, 1, 3, 2, 4)                       # (N, K, M, d, C)
+        v_inner = self.inner_field(t, x)
+        v_inner_rms      = v_inner.pow(2).mean().sqrt().clamp(min=1e-8)
+        v_inner_rescaled = v_inner / v_inner_rms
 
-        # Per-dim factor: a·sin(2πf_i·x_i) + b·cos(2πf_i·x_i) → shape (N, K, M, d, C)
-        per_dim = a * S + b * Cv                                 # (N, K, M, d, C)
+        # return v_distortion
+        return math.cos(math.pi / 4) * v_inner_rescaled + math.sin(math.pi / 4) * v_distortion
 
-        # Separable product over d, then weighted sum over K and M
-        sin_prod = per_dim.prod(dim=3)                          # (N, K, M, C)
-        return (amps * sin_prod).sum(dim=(1, 2))                # (N, C)
-    
-# NOTE: Seemingly works!
-# class FourierTimeEvolvingField(NeuralField):
-#     def __init__(
-#         self,
-#         coords_dim: int,
-#         output_dim: int,
-#         n_modes: int = 32,
-#         n_components: int = 2,
-#         time_hidden_dims: tuple = (64, 64),
-#         n_time_freqs: int = 8,
-#         low_freq: float = 1.0,           # New: Starting frequency bound
-#         high_freq: float = 32.0,         # New: Ending frequency bound
-#         bandwidth: float = 6.0,          # New: Width of the active frequency window
-#         activation=nn.SiLU,
-#     ):
-#         super().__init__(input_dim=coords_dim, output_dim=output_dim)
-#         assert coords_dim == 1
-#         assert low_freq + bandwidth <= high_freq, "Bandwidth is too large for the specified frequency bounds."
 
-#         self.n_modes = n_modes
-#         self.n_components = n_components
-#         self.C = output_dim
-        
-#         self.low_freq = low_freq
-#         self.high_freq = high_freq
-#         self.bandwidth = bandwidth
+class FourierDistortedFieldV2(NeuralField):
+    """A frequency-sweeping Fourier neural field with a coarse-to-fine inductive bias.
 
-#         self.time_embedding = SinusoidalTimeEmbedding(n_time_freqs)
-#         self._n_amplitudes = n_components * 2 * n_modes * output_dim  
+    The core design principle is that as the ODE time ``t`` progresses from
+    ``low_t`` to ``high_t``, the network's spatial frequency ``freq(t)`` sweeps
+    from ``low_freq`` to ``high_freq``.  This encodes the inductive bias that
+    early in the flow the field should capture coarse, low-frequency structure,
+    while later timesteps progressively refine high-frequency detail — mirroring
+    the coarse-to-fine nature of many natural signals.
 
-#         layers = []
-#         prev = self.time_embedding.out_dim
-#         for h in time_hidden_dims:
-#             layers += [nn.Linear(prev, h), activation()]
-#             prev = h
-#         last = nn.Linear(prev, self._n_amplitudes)
-#         _init_orthogonal(last)
-#         layers.append(last)
-        
-#         self.time_mlp = nn.Sequential(*layers)
-#         self.time_mlp[:-1].apply(_init_orthogonal)
+    At each point ``(t_n, x_n)`` it computes ``n_modes^d`` random Fourier
+    features whose spatial directions and phases are both time-dependent, then
+    feeds them (together with ``x``) through a spatial MLP to produce the
+    output::
 
-#         # 1-based indexing for modes (1 to M)
-#         m = torch.arange(1, n_modes + 1, dtype=torch.float32)
-#         self.register_buffer("_modes", m, persistent=False)
+        W_i(t)    = time_to_freqs(t_emb)[i]  ∈ R^d,  normalised to unit norm
+        φ_i(t)    = time_to_phases(t_emb)[i] ∈ R
+        proj_i    = W_i(t)^T x
+        feat_i    = [sin(freq(t) · proj_i + φ_i),
+                     cos(freq(t) · proj_i + φ_i)]
+        v         = ff(cat([x, {feat_i}_i]))              shape (N, C)
 
-#     def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-#         N = x.shape[0]
-#         K, M, C = self.n_components, self.n_modes, self.C
+    **Modes.**  The actual number of modes is ``n_modes^d`` (tensor-product
+    grid); each mode produces one sin and one cos feature, so the ``ff`` MLP
+    receives ``d + 2 · n_modes^d`` inputs.
 
-#         t_emb = self.time_embedding(t)
-#         raw = self.time_mlp(t_emb)
+    **Time-dependent directions.**  ``W_i(t)`` is the output of ``time_to_freqs``
+    normalised to the unit sphere, so the projection ``proj_i = W_i(t)^T x`` is
+    always in ``[-‖x‖, ‖x‖]`` regardless of the MLP output scale.
 
-#         amps = raw.reshape(N, K, 2, M, C)
-#         amp_sin = amps[:, :, 0, :, :] 
-#         amp_cos = amps[:, :, 1, :, :] 
+    **Frequency schedule.**  The shape of the coarse-to-fine ramp is controlled
+    by ``gamma``::
 
-#         # ====================================================================
-#         # Parameterized sliding window
-#         # ====================================================================
-#         t_scaled = t.view(-1, 1, 1).clamp(0, 1) 
-        
-#         # Calculate the center of the window at t=0 and t=1
-#         c0 = self.low_freq + (self.bandwidth / 2.0)
-#         c1 = self.high_freq - (self.bandwidth / 2.0)
-        
-#         # Interpolate the center based on time
-#         target_mode = c0 + t_scaled * (c1 - c0)
-        
-#         # Distance of each mode from the target center
-#         mode_dist = self._modes.view(1, 1, M) - target_mode
-        
-#         # A sigma of bandwidth/3.0 ensures the weights drop near zero 
-#         # just as they hit the edges of your bandwidth window.
-#         sigma = self.bandwidth / 3.0 
-#         freq_w = torch.exp(-0.5 * (mode_dist / sigma) ** 2)
-        
-#         # Optional: If you want an ABSOLUTE hard cutoff instead of a smooth drop-off:
-#         # mask = (self._modes.view(1, 1, M) >= target_mode - self.bandwidth / 2.0) & \
-#         #        (self._modes.view(1, 1, M) <= target_mode + self.bandwidth / 2.0)
-#         # freq_w = freq_w * mask.float()
+        t_scaled = (clamp(t, low_t, high_t) - low_t) / (high_t - low_t)
+        freq(t)  = low_freq + freq_scale · (high_freq - low_freq)
 
-#         freq_w = freq_w / (freq_w.sum(dim=-1, keepdim=True) + 1e-8)
-#         # ====================================================================
+        freq_scale = t_scaled^gamma               if gamma ≥ 0   (slow start, accelerating)
+        freq_scale = 1 - (1 - t_scaled)^(-gamma)  if gamma < 0   (fast start, decelerating)
 
-#         freq_w_expanded = freq_w.view(-1, 1, M, 1) 
-#         amp_sin = amp_sin * freq_w_expanded
-#         amp_cos = amp_cos * freq_w_expanded
-
-#         m = self._modes.to(dtype=x.dtype)
-#         angles = 2.0 * math.pi * m[None, :] * x
-        
-#         S_all = torch.sin(angles)  
-#         C_all = torch.cos(angles)  
-
-#         S_j = torch.einsum("nkmc, nm -> nkc", amp_sin, S_all)
-#         C_j = torch.einsum("nkmc, nm -> nkc", amp_cos, C_all)
-
-#         components = S_j + C_j
-#         return components.sum(dim=1)
-    
-    
-class ExperimentalTimeEvolvingField(NeuralField):
-    """v(t, x) = post_mlp( BN(spatial_mlp(FF(x))) @ W(t) ).
-
-    Factored design: spatial and temporal pathways are completely separate.
-      - spatial_mlp:  FF(x) → g(x) ∈ ℝᴰ.  BatchNorm1d(affine=False) keeps Σ_g ≈ I
-                      (safe: spatial features are t-independent).
-      - time_mlp:     sinusoidal_emb(t) → vec(W) ∈ ℝᴰˣᶜ, reshaped to (N, D, C).
-                      Divided by per-sample Frobenius norm so ‖W(t_i)‖_F = 1.
-    At convergence: E_x[‖g @ W‖²] ≈ ‖W‖²_F = 1 for every t.
-    An optional post-combination MLP applies a residual nonlinearity on top;
-    its last layer is zero-initialised so it starts as identity.
-    All Linear layers use orthogonal weight initialisation.
+    **Spatial MLP.**  ``ff`` maps ``[x, features]`` to the output with
+    ``RMSNorm`` between hidden layers and a ``BatchNorm1d(affine=False)`` at the
+    output, ensuring zero-mean unit-variance output across the spatial batch.
 
     Args:
-        coords_dim:            coordinate dimension d.
-        output_dim:            output channels C.
-        spatial_hidden_dims:   hidden widths for the spatial MLP.
-        time_hidden_dims:      hidden widths for the time MLP.
-        feature_dim:           output width D of the spatial MLP (= rows of W).
-        use_fourier_features:  use FourierFeatures(x) as spatial input.
-        n_fourier_features:    Fourier feature pairs (spatial input = 2×this).
-        fourier_sigma:         bandwidth of random Fourier features.
-        n_time_freqs:          sinusoidal frequency count for the time embedding.
-        activation:            activation constructor (default nn.ReLU).
-        post_combination_dims: hidden widths for post-combination MLP; empty = no MLP.
-        adaptive_modulation:   if True, the Fourier frequency matrix B becomes
-                               time-dependent: B(t) = B_fixed + freq_mlp(t_emb),
-                               so the network can tune which frequencies it attends
-                               to at each time.  Ignored when use_fourier_features
-                               is False.  Default: False (original behaviour).
-        freq_hidden_dims:      hidden widths for the frequency-modulation MLP;
-                               only used when adaptive_modulation=True.
-    """
-    def __init__(
-        self,
-        coords_dim: int,
-        output_dim: int,
-        spatial_hidden_dims: tuple = (256, 256, 256, 256),
-        time_hidden_dims: tuple = (256, 256),
-        feature_dim: int = 256,
-        use_fourier_features: bool = True,
-        n_fourier_features: int = 64,
-        fourier_sigma: float = 10.0,
-        n_time_freqs: int = 8,
-        activation=nn.ReLU,
-        post_combination_dims: tuple = (),
-        adaptive_modulation: bool = False,
-        freq_hidden_dims: tuple = (256,),
-    ):
-        super().__init__(input_dim=coords_dim, output_dim=output_dim)
-        D, C = feature_dim, output_dim
-        self._D = D
-        self._C = C
-        self.time_embedding = SinusoidalTimeEmbedding(n_time_freqs)
-
-        self._n_fourier = n_fourier_features
-        self._coords_dim = coords_dim
-
-        # ── Spatial MLP + BN ─────────────────────────────────────────────────
-        if use_fourier_features:
-            self.ff = FourierFeatures(coords_dim, n_fourier_features, fourier_sigma)
-            spatial_in = 2 * n_fourier_features + coords_dim  # FF(x) ++ x
-        else:
-            self.ff = None
-            adaptive_modulation = False  # no FF → nothing to modulate
-            spatial_in = coords_dim
-
-        self.skip = nn.Linear(spatial_in, C, bias=False)
-        nn.init.zeros_(self.skip.weight)  # zero-init so it starts as identity residual
-
-
-        # ── Frequency-modulation MLP: t_emb → ΔB(t) ∈ ℝᵈˣᴷ ─────────────────
-        # B(t) = B_fixed + ΔB(t).  Last layer zero-inited so ΔB(0) ≈ 0 and
-        # the network starts identical to the fixed-FF baseline.
-        self.adaptive_modulation = adaptive_modulation
-        if adaptive_modulation:
-            freq_layers = []
-            prev = self.time_embedding.out_dim
-            for h in freq_hidden_dims:
-                freq_layers += [nn.Linear(prev, h), activation()]
-                prev = h
-            last = nn.Linear(prev, coords_dim * n_fourier_features)
-            nn.init.zeros_(last.weight)
-            nn.init.zeros_(last.bias)
-            freq_layers += [last]
-            self.freq_mlp = nn.Sequential(*freq_layers)
-            self.freq_mlp[:-1].apply(_init_orthogonal)  # hidden layers only
-        else:
-            self.freq_mlp = None
-
-        spatial_layers = []
-        prev = spatial_in
-        for h in spatial_hidden_dims:
-            spatial_layers += [nn.Linear(prev, h), activation()]
-            prev = h
-        spatial_layers += [nn.Linear(prev, D)]
-        self.spatial_mlp = nn.Sequential(*spatial_layers)
-        self.spatial_mlp.apply(_init_orthogonal)
-        self.spatial_bn = nn.BatchNorm1d(D, affine=False)
-
-        # ── Time MLP → W(t) ∈ ℝᴺˣᴰˣᶜ ────────────────────────────────────────
-        time_in = self.time_embedding.out_dim
-        time_layers = []
-        prev = time_in
-        for h in time_hidden_dims:
-            time_layers += [nn.Linear(prev, h), activation()]
-            prev = h
-        time_layers += [nn.Linear(prev, D * C)]
-        self.time_mlp = nn.Sequential(*time_layers)
-        self.time_mlp.apply(_init_orthogonal)
-
-        # ── Post-combination nonlinear MLP (optional, with residual) ─────────
-        # Last linear is zero-initialised so the residual starts as identity.
-        if post_combination_dims:
-            layers = []
-            prev = C
-            for h in post_combination_dims:
-                lin = nn.Linear(prev, h)
-                nn.init.orthogonal_(lin.weight)
-                nn.init.zeros_(lin.bias)
-                layers += [lin, activation()]
-                prev = h
-            last = nn.Linear(prev, C)
-            nn.init.zeros_(last.weight)
-            nn.init.zeros_(last.bias)
-            layers += [last]
-            self.post_combination = nn.Sequential(*layers)
-        else:
-            self.post_combination = None
-
-    def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        # t: (N,), x: (N, d)
-        t_emb = self.time_embedding(t)                                      # (N, D_t)
-
-        if self.ff is not None:
-            if self.adaptive_modulation:
-                # Inductive bias: Scale base frequencies linearly by time `t`
-                delta_B = self.freq_mlp(t_emb).reshape(-1, self._coords_dim, self._n_fourier)
-                B_t = (self.ff.B.unsqueeze(0) * t.view(-1, 1, 1)) + delta_B       # (N, d, K)
-                proj = 2 * torch.pi * torch.einsum('nd,ndk->nk', x, B_t)          # (N, K)
-                ff_out = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)    # (N, 2K)
-            else:
-                # Inductive bias: Extract the projection logic and scale it by `t`
-                proj = 2 * torch.pi * (x @ self.ff.B)
-                proj = proj * t.unsqueeze(-1)                                     # (N, K)
-                ff_out = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)    # (N, 2K)
-                
-            x_in = torch.cat([ff_out, x], dim=-1)                                 # (N, spatial_in)
-        else:
-            x_in = x
-            
-        g = self.spatial_bn(self.spatial_mlp(x_in))                               # (N, D)
-
-        W_raw = self.time_mlp(t_emb).reshape(-1, self._D, self._C)                # (N, D, C)
-        W = W_raw / (W_raw.pow(2).sum(dim=(-2, -1), keepdim=True).sqrt() + 1e-8)
-
-        v = einsum('nd,ndc->nc', g, W) + self.skip(x_in)                          # (N, C)
-
-        if self.post_combination is not None:
-            v = v + self.post_combination(v)
-
-        return v
-
-
-import torch
-import torch.nn as nn
-import math
-
-class NeRFAndPWCField(NeuralField):
-    """v(t, x) = w_fourier * Net_fourier + w_PWC * Net_PWC
-    
-    Net_fourier: NeRF-style positional encoding (powers of 2).
-                 Combines sine and cosine basis functions.
-    Net_PWC:     Coordinate-based hyperplanes. 
-                 Random linear combinations passed through a steep tanh.
+        coords_dim:          Spatial dimension ``d``.
+        output_dim:          Number of output channels ``C``.
+        n_modes:             Base number of modes; actual count is ``n_modes^d``.
+        spatial_hidden_dims: Hidden layer widths for the spatial MLP (``ff``).
+        time_hidden_dims:    Hidden layer widths for the two time-conditioned MLPs.
+        n_time_freqs:        Number of sinusoidal frequencies in the time embedding.
+        low_freq:            Spatial frequency at the start of the sweep (``t = low_t``).
+        high_freq:           Spatial frequency at the end of the sweep (``t = high_t``).
+        low_t:               ODE time value corresponding to ``freq = low_freq``.
+        high_t:              ODE time value corresponding to ``freq = high_freq``.
+        gamma:               Controls the ramp shape. Positive → slow start (more
+                             time spent at low frequencies); negative → fast start
+                             (quickly reaches high frequencies).
+        activation:          Activation class used between hidden layers.
     """
 
     def __init__(
         self,
         coords_dim: int,
         output_dim: int,
-        n_fourier_freqs: int = 8,    # 'L' in NeRF: 2^0 up to 2^7
-        n_pwc_bases: int = 128,      # Number of random hyperplanes for PWC
+        n_modes: int,
+        freq_strides: int = 1,
+        spatial_hidden_dims: tuple = (64, 64),
         time_hidden_dims: tuple = (64, 64),
         n_time_freqs: int = 8,
-        pwc_steepness: float = 50.0,
+        low_freq: float = 1.0,
+        high_freq: float = 32.0,
+        low_t: float = 0.0,
+        high_t: float = 1.0,
+        gamma: float = 1.0,
         activation=nn.SiLU,
     ):
         super().__init__(input_dim=coords_dim, output_dim=output_dim)
-        self.C = output_dim
-        self.pwc_steepness = pwc_steepness
 
+        self.n_modes   = n_modes ** coords_dim
+        self.C         = output_dim
+        self.d         = coords_dim
+        self.low_freq  = low_freq
+        self.high_freq = high_freq
+        self.low_t     = low_t
+        self.high_t    = high_t
+        self.gamma     = gamma 
+
+        if self.n_modes < self.d:
+            raise ValueError("n_modes must be at least as large as coords_dim for the QR orthogonalisation to work.")
+        
+        # Time embedding has no learnable parameters (only a frequency buffer).
         self.time_embedding = SinusoidalTimeEmbedding(n_time_freqs)
+        emb_dim = self.time_embedding.out_dim
+        self.freq_strides = freq_strides
+        self.K = 2 * self.freq_strides  # Number of fourier feature frequencies per timestep
 
-        # ==========================================
-        # 1. FOURIER SETUP (NeRF Powers of 2)
-        # ==========================================
-        # Frequencies: [2^0, 2^1, 2^2, ..., 2^(L-1)]
-        freqs = 2.0 ** torch.arange(n_fourier_freqs)
-        self.register_buffer("fourier_freqs", freqs, persistent=False)
-        
-        # Total Fourier modes = dimensions * number of frequencies
-        self.M_f = coords_dim * n_fourier_freqs 
+        # MLP: t_emb → self.n_modes phases
+        self.time_to_phases = self._build_mlp(
+            emb_dim,
+            self.n_modes * self.K, 
+            time_hidden_dims, 
+            activation, 
+            use_batchnorm=False, 
+            use_rmsnorm=True, 
+            bias=True,
+        )
+        # MLP: t_emb → self.n_modes * d combination coefficients (one per mode-coordinate pair)
+        self.time_to_freqs = self._build_mlp(
+            emb_dim, 
+            self.n_modes * coords_dim * self.K, 
+            time_hidden_dims, 
+            activation, 
+            use_batchnorm=False, 
+            use_rmsnorm=True, 
+            bias=False,
+        )
+        # Spatial MLP with FiLM conditioning from the time embedding.
+        self.ff = self._build_mlp(
+            emb_dim + coords_dim + self.n_modes * 2 * self.K, 
+            output_dim, 
+            spatial_hidden_dims, 
+            activation, 
+            use_batchnorm=True, 
+            use_rmsnorm=True, 
+            bias=True,
+        )
 
-        # ==========================================
-        # 2. PWC SETUP (Random Hyperplanes)
-        # ==========================================
-        self.M_p = n_pwc_bases
-        
-        # Wx + b random projections. 
-        # Biases initialized uniformly to ensure planes intersect the data domain.
-        W_pwc = torch.randn(n_pwc_bases, coords_dim)
-        b_pwc = torch.empty(n_pwc_bases).uniform_(-math.pi, math.pi)
-        
-        self.register_buffer("W_pwc", W_pwc, persistent=False)
-        self.register_buffer("b_pwc", b_pwc, persistent=False)
+        self.time_to_phases.apply(_init_orthogonal)
+        self.time_to_freqs.apply(_init_orthogonal)
 
-        # ==========================================
-        # 3. PHASE MLPs (Time -> Coefficients)
-        # ==========================================
-        def build_phase_mlp(out_features):
-            layers = []
-            prev = self.time_embedding.out_dim
-            for h in time_hidden_dims:
-                layers += [nn.Linear(prev, h), activation()]
-                prev = h
-            last = nn.Linear(prev, out_features)
-            _init_orthogonal(last)
-            layers.append(last)
-            
-            mlp = nn.Sequential(*layers)
-            mlp[:-1].apply(_init_orthogonal)
-            return mlp
+        # _init_orthogonal zeros all biases, so time_to_phases(t_emb) starts as
+        # a purely linear projection of t_emb: all modes' phases are correlated
+        # linear combinations of the same structured vector.  Re-randomising the
+        # last layer's bias spreads the initial outputs across [0, 2π] so each
+        # mode starts at an independent random phase.
+        nn.init.uniform_(self.time_to_phases[-1].bias, 0, 1)
 
-        # Fourier needs 2 values (cos_phi, sin_phi) per mode per channel
-        self.phase_mlp_fourier = build_phase_mlp(out_features = self.M_f * self.C * 2)
-        
-        # PWC only needs 1 weight per hyperplane per channel
-        self.phase_mlp_pwc = build_phase_mlp(out_features = self.M_p * self.C)
 
-        # Energy preserving mixing angle
-        self.mix_theta = nn.Parameter(torch.tensor([math.pi / 4]))
+    @staticmethod
+    def _build_mlp(in_dim: int, out_dim: int, hidden_dims: tuple, activation, use_batchnorm: bool, use_rmsnorm: bool, bias: bool) -> nn.Sequential:
+        layers: list[nn.Module] = []
+        prev = in_dim
+        for h in hidden_dims:
+            layers.append(nn.Linear(prev, h, bias=bias))
+            if use_rmsnorm:
+                layers.append(RMSNorm())
+            layers.append(activation())
+            prev = h
+        layers.append(nn.Linear(prev, out_dim, bias=bias))
+        if use_batchnorm:
+            layers.append(nn.BatchNorm1d(out_dim, affine=False))
+        return nn.Sequential(*layers)
 
+    def _compute_freq(self, t: torch.Tensor) -> torch.Tensor:
+        # Per-point normalised time and centre frequency: both (N, 1)
+        t_scaled = ((t.clamp(self.low_t, self.high_t) - self.low_t)
+                    / (self.high_t - self.low_t)).unsqueeze(-1)
+        t_scaled = t_scaled.repeat(1, self.freq_strides)  # (N, K/2)
+        t_scaled = t_scaled + torch.arange(self.freq_strides, device=t.device).unsqueeze(0) / self.freq_strides  # (N, K/2), add strides
+        t_scaled = t_scaled % 1.0  # Wrap around to [0, 1]
+        t_scaled = torch.cat([t_scaled, 1 - t_scaled], dim=-1)  # (N, K)
+        if self.gamma < 0:
+            freq_scale = 1 - (1 - t_scaled) ** (-self.gamma)
+        else:
+            freq_scale = t_scaled ** self.gamma
+        freq = self.low_freq + freq_scale * (self.high_freq - self.low_freq)  # (N, K)
+        return freq
+    
     def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        # t: (N,)   x: (N, D)
-        N, C = x.shape[0], self.C
+        # t: (N,)   x: (N, d)
+        N = x.shape[0]
+
+        # Per-point time embedding: (N, emb_dim)
         t_emb = self.time_embedding(t)
 
-        # ---------------------------------------------------------
-        # BRANCH A: Fourier (Multi-resolution Smooth Details)
-        # ---------------------------------------------------------
-        # 1. Project x into NeRF frequencies: [N, D] -> [N, D, L] -> [N, M_f]
-        x_expanded = x.unsqueeze(-1) * self.fourier_freqs
-        x_fourier = x_expanded.reshape(N, self.M_f)
+        phases = self.time_to_phases(t_emb).view(N, self.n_modes, self.K)   # (N, n_modes, K)
+        W = self.time_to_freqs(t_emb).view(N, self.n_modes, self.K, self.d) # (N, n_modes, K, d)
+        W_orth = W / W.norm(dim=-1, keepdim=True).clamp_min(1e-8)  # Normalize to unit vectors
         
-        angles = 2.0 * math.pi * x_fourier
-        S_f = torch.sin(angles)   # (N, M_f)
-        C_f = torch.cos(angles)   # (N, M_f)
+        freq = self._compute_freq(t).view(N, 1, self.K)  # (N, 1, K)
+        proj = torch.einsum('nmkd,nd->nmk', W_orth, x)  # (N, n_modes, K)
 
-        # 2. Get time-varying coefficients
-        phases_f = self.phase_mlp_fourier(t_emb).reshape(N, self.M_f, C, 2)
-        cos_phi_f = phases_f[..., 0]  # (N, M_f, C)
-        sin_phi_f = phases_f[..., 1]  # (N, M_f, C)
-
-        # 3. Combine
-        v_fourier = (S_f[:, :, None] * cos_phi_f + C_f[:, :, None] * sin_phi_f).sum(dim=1)
-        v_fourier = v_fourier / math.sqrt(self.M_f)
+        arg = 2 * math.pi * freq * (proj + phases)  # (N, n_modes, K)
+        sin_features = torch.sin(arg.view(N, self.n_modes * self.K)) # frequency adjusted features
+        cos_features = torch.cos(arg.view(N, self.n_modes * self.K)) # frequency adjusted features
 
 
-        # ---------------------------------------------------------
-        # BRANCH B: PWC (Coordinate-based Sharp Polytopes)
-        # ---------------------------------------------------------
-        # 1. Random linear projection: Wx + b -> (N, M_p)
-        preact = x @ self.W_pwc.T + self.b_pwc
+        # Concatenate Fourier features with input coordinates and pass through FiLM-conditioned MLP.
+        ff_input = torch.cat([t_emb, x, sin_features, cos_features], dim=-1)  # (N, emb_dim + d + 4 * n_modes)
+        v = self.ff(ff_input)  # (N, C)
         
-        # 2. Apply steep activation to create structural step functions
-        basis_pwc = torch.sign(self.pwc_steepness * preact)
+        return v
 
-        # 3. Get time-varying weights
-        weights_pwc = self.phase_mlp_pwc(t_emb).reshape(N, self.M_p, C)
-
-        # 4. Combine (No sines/cosines needed here)
-        v_pwc = (basis_pwc[:, :, None] * weights_pwc).sum(dim=1)
-        v_pwc = v_pwc / math.sqrt(self.M_p)
-
-
-        # ---------------------------------------------------------
-        # FINAL MIXING
-        # ---------------------------------------------------------
-        w_fourier = torch.cos(self.mix_theta)
-        w_pwc = torch.sin(self.mix_theta)
-
-        return (w_fourier * v_fourier) + (w_pwc * v_pwc)
-    
-# class MixedFourierPWCField(NeuralField):
-#     """v(t, x) = w_fourier * Net_fourier + w_PWC * Net_PWC
-    
-#     Net_fourier uses continuous sine/cosine bases.
-#     Net_PWC uses a differentiable soft-square-wave basis via high-gain tanh.
-    
-#     Args:
-#         coords_dim:       Spatial dimension D (e.g., 1, 2, 3).
-#         output_dim:       Output channels C.
-#         n_modes:          Number of fixed modes M.
-#         time_hidden_dims: Hidden widths of the phase MLPs.
-#         n_time_freqs:     Sinusoidal time-embedding frequencies.
-#         pwc_steepness:    Gain factor for the tanh approximation. Higher = sharper edges.
-#         freq_scale:       Standard deviation for the random frequency matrix B.
-#         activation:       Activation constructor.
-#     """
-
-#     def __init__(
-#         self,
-#         coords_dim: int,
-#         output_dim: int,
-#         n_modes: int = 16,
-#         time_hidden_dims: tuple = (64, 64),
-#         n_time_freqs: int = 8,
-#         pwc_steepness: float = 50.0,
-#         freq_scale: float = 1.0,
-#         activation=nn.SiLU,
-#     ):
-#         super().__init__(input_dim=coords_dim, output_dim=output_dim)
-
-#         self.n_modes = n_modes
-#         self.C = output_dim
-#         self.pwc_steepness = pwc_steepness
-
-#         self.time_embedding = SinusoidalTimeEmbedding(n_time_freqs)
-
-#         n_out = n_modes * output_dim * 2
-
-#         # Helper to build identical independent MLPs
-#         def build_phase_mlp():
-#             layers = []
-#             prev = self.time_embedding.out_dim
-#             for h in time_hidden_dims:
-#                 layers += [nn.Linear(prev, h), activation()]
-#                 prev = h
-#             last = nn.Linear(prev, n_out)
-#             _init_orthogonal(last)
-#             layers.append(last)
-            
-#             mlp = nn.Sequential(*layers)
-#             mlp[:-1].apply(_init_orthogonal)
-#             return mlp
-
-#         self.phase_mlp_fourier = build_phase_mlp()
-#         self.phase_mlp_pwc = build_phase_mlp()
-
-#         # Learnable mixing angle theta
-#         self.mix_theta = nn.Parameter(torch.tensor([math.pi / 4]))
-
-#         # N-dimensional frequency matrix B
-#         # Shape: (M, D). Sampled from Gaussian to allow isotropic high-frequency content.
-#         B = torch.randn(n_modes, coords_dim, dtype=torch.float64) * freq_scale
-#         self.register_buffer("_B", B, persistent=False)
-
-#     def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-#         # t: (N,)   x: (N, D)
-#         N, M, C = x.shape[0], self.n_modes, self.C
-
-#         t_emb = self.time_embedding(t)
-
-#         # --- Fourier Network Path ---
-#         phases_f = self.phase_mlp_fourier(t_emb).reshape(N, M, C, 2)
-#         cos_phi_f = phases_f[..., 0]                             
-#         sin_phi_f = phases_f[..., 1]                             
-
-#         # --- PWC Network Path ---
-#         phases_p = self.phase_mlp_pwc(t_emb).reshape(N, M, C, 2)
-#         cos_phi_p = phases_p[..., 0]                             
-#         sin_phi_p = phases_p[..., 1]                             
-
-#         # Spatial frequencies in N-D
-#         # x is (N, D), _B is (M, D) -> angles is (N, M)
-#         B = self._B.to(dtype=x.dtype)
-#         angles = 2.0 * math.pi * (x @ B.T)
-        
-#         # Continuous Basis
-#         S_f = torch.sin(angles)
-#         C_f = torch.cos(angles)
-
-#         # Soft Piecewise Constant Basis (Differentiable Square Waves)
-#         # Using tanh(k * sin(x)) creates smooth, differentiable plateaus
-#         S_p = torch.sign(self.pwc_steepness * S_f)
-#         C_p = torch.sign(self.pwc_steepness * C_f)
-
-#         # Calculate respective fields
-#         v_fourier = (S_f[:, :, None] * cos_phi_f + C_f[:, :, None] * sin_phi_f).sum(dim=1)
-#         v_fourier = v_fourier / math.sqrt(M)
-
-#         v_pwc = (S_p[:, :, None] * cos_phi_p + C_p[:, :, None] * sin_phi_p).sum(dim=1)
-#         v_pwc = v_pwc / math.sqrt(M)
-
-#         # Apply learnable energy-preserving weights
-#         w_fourier = torch.cos(self.mix_theta)
-#         w_pwc = torch.sin(self.mix_theta)
-
-#         return  (w_pwc * v_pwc) # (0.001 * v_fourier) +

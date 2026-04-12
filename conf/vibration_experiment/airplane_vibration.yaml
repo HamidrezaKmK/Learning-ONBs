@@ -7,7 +7,7 @@
 #   python reg_cob.py +vibration_experiment=airplane_vibration
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: new # old # fourier_mixture # old # fourier_mixture
+  - override /neural_fields@neural_isometry.scalar_field_partial: experimental2 # old # fourier_mixture # old # fourier_mixture
   - _self_
 
 initial_dictionary:
@@ -18,11 +18,11 @@ neural_isometry:
   channels_dim: 1
 
 model_state_kwargs:
-  num_steps: 50
+  num_steps: 200
 
 tail_probability: 0.0007
 num_tail_samples: 32
-grad_accumulation_steps: 8
+grad_accumulation_steps: 1 # 8
 max_grad_norm: 1.0
 
 regularizer:

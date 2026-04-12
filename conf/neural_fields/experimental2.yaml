@@ -1,35 +1,21 @@
-# _target_: infidictionary.networks.FourierTimeEvolvingField
-# # coords_dim and output_dim are injected by EulerianIsometry via _partial_
 
-# n_modes: 64
-# n_components: 2
-# time_hidden_dims:
-#   - 256
-#   - 256 
-#   - 256  
-# n_time_freqs: 256
-# # init_logit_scale: 5.0 # float = 5.0,
+_target_: infidictionary.networks.FourierDistortedFieldV2
 
-# activation:
-#   _target_: torch.nn.SiLU
-#   _partial_: true
-  
-# mode_bandwidth: 0.001 # float = 0.25 # Controls how strictly to isolate the active frequencies
-
-
-_target_: infidictionary.networks.FourierTimeEvolvingField
-n_modes: 128
-n_components: 10
+n_modes: 32
+freq_strides: 3
+spatial_hidden_dims:
+  - 256
+  - 256
+  - 256
 time_hidden_dims:
   - 256
-  - 256 
-  - 256  
+  - 256
 n_time_freqs: 256
-# init_logit_scale: 5.0 # float = 5.0,
-
 low_freq: 0.0
-high_freq: 32.0 
-bandwidth: 2.0
+high_freq: 32.0
+low_t: 0.0
+high_t: 1.0
+gamma: 1.0
 
 activation:
   _target_: torch.nn.SiLU
