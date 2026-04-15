@@ -8,11 +8,14 @@
 #   python concept_basis.py +concept_experiment=sds_cat wandb=enabled
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: gated # old
+  - override /neural_fields@neural_isometry.scalar_field_partial: old # experimental2 # old
   - override /coefficient_model@coefficient_model: spike_and_slab
   - _self_
 
 caption: "a cat in the center of the image"
+
+neural_isometry:
+  acceleration: 500
 
 concept_loss:
   _target_: infidictionary.concept.SDSLoss

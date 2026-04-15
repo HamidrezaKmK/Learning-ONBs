@@ -15,7 +15,11 @@ class NeuralField(nn.Module, ABC):
     def forward(self, coords):
         raise NotImplementedError("Subclasses must implement this method")
 
-
+class TimeEvolvingField(NeuralField):
+    @abstractmethod
+    def forward(self, t: torch.Tensor, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        raise NotImplementedError("Subclasses must implement this method")
+    
 class MLPNeuralField(NeuralField):
     def __init__(self, input_dim: int, output_dim: int, hidden_dims: Dict[Any, int], activation=nn.ReLU):
         super().__init__(input_dim=input_dim, output_dim=output_dim)

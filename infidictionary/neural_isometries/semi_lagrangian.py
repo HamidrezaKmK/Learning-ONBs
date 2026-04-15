@@ -5,7 +5,7 @@ from torch import nn
 from .eulerian import EulerianIsometry
 from .lagrangian import LagrangianIsometry
 from .base import NeuralIsometry
-from infidictionary.networks import TimeEvolvingField, SinusoidalTimeEmbedding
+from infidictionary.networks import SinusoidalTimeEmbedding, TimeEvolvingField
 from infidictionary.diffeomorphisms import Diffeomorphism
 
 class SemiLagrangianIsometry(NeuralIsometry):
@@ -88,8 +88,8 @@ class SemiLagrangianIsometry(NeuralIsometry):
         gating: torch.Tensor, # (T, 2) binary tensor indicating whether to use Eulerian or Lagrangian step at each time step
     ):
         for t0, t1, p in zip(tspan[:-1], tspan[1:], gating):
-            f_eulerian = self.eulerian._householder_step(t1, coords, logabsdet, f)
-            f_eulerian = self.eulerian._householder_step(t0, coords, logabsdet, f_eulerian)
+
+            f = self.eulerian._cayley_step(t0, t1, coords, logabsdet, f)
             if t1 > t0:
                 coords_lagrangian, logabsdet_lagrangian, f_lagrangian = self.lagrangian.pushforward(coords, logabsdet, f, start_time=t0.item(), end_time=t1.item())
             else:

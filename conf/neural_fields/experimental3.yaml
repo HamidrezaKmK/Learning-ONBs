@@ -1,0 +1,14 @@
+
+_target_: infidictionary.networks.FourierDistortedFieldV3
+
+n_truncation: 3
+spatial_hidden_dims:
+  - 256
+  - 256
+  - 256
+n_time_freqs: 256
+low_t: 0.0
+high_t: 1.0
+activation:
+  _target_: torch.nn.SiLU
+  _partial_: true

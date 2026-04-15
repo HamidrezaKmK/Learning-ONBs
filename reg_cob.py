@@ -123,7 +123,7 @@ def reg_change_of_basis(
 
         if wandb_enabled:
             wandb.log({"train/energy": energy_item}, step=epoch_i)
-            wandb.log({"train/iteration": epoch_i}, step=epoch_i)
+            wandb.log({"train/iteration": epoch_i},  step=epoch_i)
             wandb.log({"train/grad_norm": get_grad_norm(neural_isometry)}, step=epoch_i)
             wandb.log({"train/param_norm": get_param_norm(neural_isometry)}, step=epoch_i)
             wandb.log({"train/avg_lr_isometry": get_avg_lr(optim_isometry)}, step=epoch_i)

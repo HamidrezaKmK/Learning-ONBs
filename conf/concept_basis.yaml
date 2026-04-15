@@ -81,7 +81,7 @@ resume_training:
 
 checkpointing:
   checkpoint_dir: outputs/checkpoints
-  checkpoint_every_n_steps: 10
+  checkpoint_every_n_steps: 2
 
 wandb:
   tags:

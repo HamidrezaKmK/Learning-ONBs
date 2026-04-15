@@ -56,7 +56,7 @@ class OldTimeEvolvingField(NeuralField):
         freq_hidden_dims: tuple = (256,),
     ):
         super().__init__(input_dim=coords_dim, output_dim=output_dim)
-        D, C = feature_dim, output_dim
+        D, C = feature_dim, output_dim * 2
         self._D = D
         self._C = C
         self.time_embedding = SinusoidalTimeEmbedding(n_time_freqs)
@@ -163,5 +163,5 @@ class OldTimeEvolvingField(NeuralField):
         if self.post_combination is not None:
             v = v + self.post_combination(v)
 
-        return v
+        return v[:, :self.output_dim], v[:, self.output_dim:]
 

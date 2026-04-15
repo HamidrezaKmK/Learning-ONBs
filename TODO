@@ -1,8 +1,11 @@
-[] keep the old architecture and move all of the other experimental ones to the temp and remove their configs.
-[] Get a natural PMF version running and also think about how to move the coefficient model inside the Infidictionary maybe? 
-    Otherwise, I can just revamp it to use the PMFs but just create a new PMF
-[] Re-run FPCA
-[] Use the Cayley ODE solver method with alpha and beta and test it on FPCA, NTK, Cat basis
+[] Create a very simple Laplacian experiment as the running example
+[] Add multiple options for the PMF of Infidictionary, apart from the geometric with a shell,
+    try adding an index sampler that samples proportional to (1/f)^d where f is the L^2 of the multi-index
+[] Make coefficient model and index model separate objects from the infidictionary but tightly linked to it.
+[] Test if everything works on NTK, FPCA, heat equation, and concept basis.
+[] Remove all of the dead code and all of the other architectures, just keep the debugging architecture,
+    the distorted Fourier architecture, and the old architecture that performs well
+[] Re-run the experiments with the dead code gone
 
 [] Try to get a good result with heat equation or remove it
 [] Get a two-moons result for NTK interpretability and replace it with the current thing I have
