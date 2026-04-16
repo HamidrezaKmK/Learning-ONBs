@@ -4,4 +4,4 @@ from .ff_neural_field import FFNeuralField
 from .ntk_mlp_neural_field import NTKMLPNeuralField
 from .factored_time_evolving_field import FactoredTimeEvolvingField
 from .old import OldTimeEvolvingField
-from .experimental import FourierDistortedFieldV2, FourierDistortedFieldV3
+from .experimental import FourierDistortedFieldV4, FourierDistortedFieldV5, FourierDistortedFieldV6

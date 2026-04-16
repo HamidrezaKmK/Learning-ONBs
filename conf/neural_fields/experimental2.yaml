@@ -1,7 +1,7 @@
 
 _target_: infidictionary.networks.FourierDistortedFieldV2
 
-n_modes: 32
+n_modes: 64
 freq_strides: 3
 spatial_hidden_dims:
   - 256

@@ -7,7 +7,7 @@
 #   python reg_cob.py +vibration_experiment=airplane_vibration
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: experimental2 # old # old # fourier_mixture # old # fourier_mixture
+  - override /neural_fields@neural_isometry.scalar_field_partial: experimental4 # bilinear # experimental2 # old # old # fourier_mixture # old # fourier_mixture
   - _self_
 
 initial_dictionary:
