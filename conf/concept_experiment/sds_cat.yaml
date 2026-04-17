@@ -15,10 +15,13 @@ defaults:
 caption: "a cat in the center of the image"
 
 neural_isometry:
-  acceleration: 500
+  acceleration: 5000
+  channels_dim: 3
+  sub_size: 32
+  use_spatial_clustering: true
 
 model_state_kwargs:
-  num_steps: 200
+  num_steps: 50
 
 concept_loss:
   _target_: infidictionary.concept.SDSLoss
@@ -37,7 +40,7 @@ initial_dictionary:
 
 tail_probability: 1e-3
 num_tail_samples: 64
-batch_size: 2
+batch_size: 1
 grad_accumulation_steps: 16
 
 # callbacks:

@@ -1,3 +1,5 @@
+[] There's something wrong with the multichannel code probably, the basis is not changing that much
+
 [] Create a very simple Laplacian experiment as the running example
 [] Add multiple options for the PMF of Infidictionary, apart from the geometric with a shell,
     try adding an index sampler that samples proportional to (1/f)^d where f is the L^2 of the multi-index

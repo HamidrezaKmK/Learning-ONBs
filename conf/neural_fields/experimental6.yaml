@@ -1,16 +1,20 @@
 
 _target_: infidictionary.networks.FourierDistortedFieldV6
-n_truncation: 4
+n_truncation: 6
 top_k: 5
 spatial_hidden_dims:
   - 256
   - 256
-  - 256
+time_hidden_dims:
+  - 64
+  - 64
 n_time_freqs: 256
+activation:
+  _target_: torch.nn.SiLU
+  _partial_: true
+
 nerf_n_levels: 8
 nerf_n_base: 64
 nerf_freq_min: 1.0
 nerf_freq_max: 64.0
-activation:
-  _target_: torch.nn.SiLU
-  _partial_: true
+residual_weight: 1.0

@@ -85,18 +85,25 @@ class FourierDistortedFieldV4(TimeEvolvingField):
         W = torch.randn(n_modes, self.K, coords_dim)
         W = W / W.norm(dim=-1, keepdim=True)         # unit-norm directions
         self.register_buffer('W_orth', W)
-
-        # Fixed random phases uniform in [0, 1): (n_modes, K).
         self.register_buffer('phases', torch.rand(n_modes, self.K))
-
-        ff_in_dim = emb_dim + coords_dim + n_modes * self.K
-        self.ff1 = self._build_mlp(
-            ff_in_dim, output_dim, spatial_hidden_dims, activation,
-            use_batchnorm=True, use_rmsnorm=True, bias=True,
+            
+        self.alpha_ff = self._build_mlp(
+            emb_dim + self.n_modes * self.K,
+            output_dim,
+            spatial_hidden_dims,
+            activation,
+            use_batchnorm=False,
+            use_rmsnorm=True,
+            bias=True,
         )
-        self.ff2 = self._build_mlp(
-            ff_in_dim, output_dim, spatial_hidden_dims, activation,
-            use_batchnorm=True, use_rmsnorm=True, bias=True,
+        self.beta_ff = self._build_mlp(
+            emb_dim + self.n_modes * self.K,
+            output_dim,
+            spatial_hidden_dims,
+            activation,
+            use_batchnorm=False,
+            use_rmsnorm=True,
+            bias=True,
         )
     
     @staticmethod
@@ -128,7 +135,8 @@ class FourierDistortedFieldV4(TimeEvolvingField):
             freq_scale = t_scaled ** self.gamma
         freq_scale = torch.cat([freq_scale, 1 - freq_scale], dim=-1)  # (N, K)
         freq = self.low_freq + freq_scale * (self.high_freq - self.low_freq)
-        return freq[:, :self.K // 2], freq[:, self.K // 2:]
+
+        return freq[:, :, :self.K // 2], freq[:, :, self.K // 2:]
 
     def forward(self, t: torch.Tensor, x: torch.Tensor):
         N = x.shape[0]
@@ -142,22 +150,23 @@ class FourierDistortedFieldV4(TimeEvolvingField):
         # Stream 1: first K/2 slots, coarse→fine frequency schedule
         K_half = self.K // 2
         proj1   = proj[:, :, :K_half]                            # (N, n_modes, K/2)
-        phases1 = self.phases[:, :K_half]                        # (n_modes, K/2)
-        arg1    = 2 * math.pi * freq1.unsqueeze(1) * (proj1 + phases1)
+        phases1 = self.phases[None, :, :K_half]                        # (n_modes, K/2)
+
+        arg1    = 2 * math.pi * freq1 * (proj1 + phases1)
         feat1   = torch.cat([torch.sin(arg1), torch.cos(arg1)], dim=-1)  # (N, n_modes, K)
         feat1   = feat1.reshape(N, self.n_modes * self.K)
 
         # Stream 2: second K/2 slots, fine→coarse (complementary) schedule
         proj2   = proj[:, :, K_half:]                            # (N, n_modes, K/2)
-        phases2 = self.phases[:, K_half:]                        # (n_modes, K/2)
-        arg2    = 2 * math.pi * freq2.unsqueeze(1) * (proj2 + phases2)
+        phases2 = self.phases[None, :, K_half:]                        # (n_modes, K/2)
+        arg2    = 2 * math.pi * freq2 * (proj2 + phases2)
         feat2   = torch.cat([torch.sin(arg2), torch.cos(arg2)], dim=-1)  # (N, n_modes, K)
         feat2   = feat2.reshape(N, self.n_modes * self.K)
 
-        field1 = self.ff1(torch.cat([t_emb, x, feat1], dim=-1))
-        field2 = self.ff2(torch.cat([t_emb, x, feat2], dim=-1))
+        alpha = self.alpha_ff(torch.cat([t_emb, feat1], dim=-1))
+        beta  = self.beta_ff( torch.cat([t_emb, feat2], dim=-1))
 
-        return field1, field2
+        return alpha, beta
 
 
 class FourierDistortedFieldV6(TimeEvolvingField):
