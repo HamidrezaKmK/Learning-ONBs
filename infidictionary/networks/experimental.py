@@ -136,7 +136,7 @@ class FourierDistortedFieldV4(TimeEvolvingField):
         freq_scale = torch.cat([freq_scale, 1 - freq_scale], dim=-1)  # (N, K)
         freq = self.low_freq + freq_scale * (self.high_freq - self.low_freq)
 
-        return freq[:, :, :self.K // 2], freq[:, :, self.K // 2:]
+        return freq[:, :self.K // 2], freq[:, self.K // 2:]
 
     def forward(self, t: torch.Tensor, x: torch.Tensor):
         N = x.shape[0]
@@ -152,14 +152,14 @@ class FourierDistortedFieldV4(TimeEvolvingField):
         proj1   = proj[:, :, :K_half]                            # (N, n_modes, K/2)
         phases1 = self.phases[None, :, :K_half]                        # (n_modes, K/2)
 
-        arg1    = 2 * math.pi * freq1 * (proj1 + phases1)
+        arg1    = 2 * math.pi * freq1[:, None, :] * (proj1 + phases1)
         feat1   = torch.cat([torch.sin(arg1), torch.cos(arg1)], dim=-1)  # (N, n_modes, K)
         feat1   = feat1.reshape(N, self.n_modes * self.K)
 
         # Stream 2: second K/2 slots, fine→coarse (complementary) schedule
         proj2   = proj[:, :, K_half:]                            # (N, n_modes, K/2)
         phases2 = self.phases[None, :, K_half:]                        # (n_modes, K/2)
-        arg2    = 2 * math.pi * freq2 * (proj2 + phases2)
+        arg2    = 2 * math.pi * freq2[:, None, :] * (proj2 + phases2)
         feat2   = torch.cat([torch.sin(arg2), torch.cos(arg2)], dim=-1)  # (N, n_modes, K)
         feat2   = feat2.reshape(N, self.n_modes * self.K)
 

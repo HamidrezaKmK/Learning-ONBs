@@ -15,10 +15,11 @@ defaults:
 caption: "a cat in the center of the image"
 
 neural_isometry:
-  acceleration: 5000
+  base_acceleration: 5000
   channels_dim: 3
-  sub_size: 32
-  use_spatial_clustering: true
+  sub_size: 128
+  clustering: spatial
+  multigrid_strategy: multigrid
 
 model_state_kwargs:
   num_steps: 50

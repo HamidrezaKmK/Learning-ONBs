@@ -1,7 +1,7 @@
 
 _target_: infidictionary.networks.FourierDistortedFieldV6
-n_truncation: 6
-top_k: 5
+n_truncation: 4
+top_k: 2
 spatial_hidden_dims:
   - 256
   - 256

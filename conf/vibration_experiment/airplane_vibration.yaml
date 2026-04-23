@@ -7,7 +7,7 @@
 #   python reg_cob.py +vibration_experiment=airplane_vibration
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: experimental4 # experimental4 # old # old # fourier_mixture # old # fourier_mixture
+  - override /neural_fields@neural_isometry.scalar_field_partial: experimental4 # old # old # fourier_mixture # old # fourier_mixture
   - _self_
 
 initial_dictionary:
@@ -15,10 +15,11 @@ initial_dictionary:
   p: 0.1
 
 neural_isometry:
-  acceleration: 500
+  base_acceleration: 50
   channels_dim: 1
   sub_size: 32
-  use_spatial_clustering: false
+  clustering: spatial
+  multigrid_strategy: multigrid
 
 model_state_kwargs:
   num_steps: 50
