@@ -17,7 +17,8 @@ class NeuralField(nn.Module, ABC):
 
 class TimeEvolvingField(NeuralField):
     @abstractmethod
-    def forward(self, t: torch.Tensor, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, t_emb: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """Returns U: (N, R, C). t_emb: (N, emb_dim) pre-computed by the caller."""
         raise NotImplementedError("Subclasses must implement this method")
     
 class MLPNeuralField(NeuralField):

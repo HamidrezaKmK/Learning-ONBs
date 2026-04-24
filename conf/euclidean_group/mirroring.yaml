@@ -14,7 +14,7 @@ initial_dictionary:
 neural_isometry:
   base_acceleration: 1
   channels_dim: 1
-  multigrid_strategy: just_global
+
 
 model_state_kwargs:
   num_steps: 100
