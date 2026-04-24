@@ -1,0 +1,41 @@
+# @package _global_
+#
+# Usage:
+#   python reg_cob.py +euclidean_group=translation
+
+defaults:
+  - override /neural_fields@neural_isometry.scalar_field_partial: atom_shuffling
+  - _self_
+
+initial_dictionary:
+  num_channels: 1
+  p: 0.05 #0.1
+
+neural_isometry:
+  base_acceleration: 1
+  channels_dim: 1
+  multigrid_strategy: just_global
+
+model_state_kwargs:
+  num_steps: 100
+
+tail_probability: 0.0001 # 0.011
+num_tail_samples: 32 # 0
+grad_accumulation_steps: 8
+max_grad_norm: 1.0
+
+regularizer:
+  _target_: infidictionary.regularizers.EuclideanGroup
+  domain_sample_size: 64
+  translation: [0.2, 0.1]
+  rotation_skew_symmetric: [0]
+  mirrors: [False, False]
+
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 2
+
+wandb:
+  project: BasisLearning-euclidean-group
+  tags:
+    method: euclidean_group

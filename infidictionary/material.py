@@ -1,3 +1,4 @@
+import math
 from abc import ABC, abstractmethod
 
 import numpy as np
@@ -5,84 +6,214 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-from infidictionary.domain_samplers import DomainSampler, SquareSampler
-
 
 class Material(ABC):
     """Abstract base class for spatially varying materials.
 
-    Each material carries a ``domain_sampler`` attribute that describes the
-    spatial domain on which the material is defined.  The vibrational modes of
-    the material are the eigenfunctions of the weighted Laplacian
-    -∇·(D(x) ∇), where D(x) > 0 is the diffusivity returned by ``__call__``.
+    The vibrational modes of the material are the eigenfunctions of the
+    weighted Laplacian -∇·(D(x) ∇), where D(x) > 0 is the diffusivity
+    returned by ``__call__``.
 
     ``__call__`` returns a ``(diffusivity, mass)`` pair:
       * ``diffusivity`` (N,) — the spatially varying diffusivity D(x).
-      * ``mass``        (N,) — the integration weight \rho(x) for the mass-
-                               corrected eigenvalue problem  Lφ = λ \rho φ.
-                               Points inside the material's domain have \rho = 1;
-                               exterior / background points may have \rho ≪ 1.
+      * ``mass``        (N,) — the integration weight ρ(x) for the
+                               mass-corrected eigenvalue problem Lφ = λ ρ φ.
 
-    Subclasses must implement ``__call__``.
+    Subclasses must implement ``project_to_domain`` to fold coordinates back
+    onto the material's domain (e.g. torus wrapping, reflection, clipping).
     """
-
-    domain_sampler: DomainSampler
 
     @abstractmethod
     def __call__(
         self, coords: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return the diffusivity and mass at the given coordinates.
+        raise NotImplementedError
+
+    @abstractmethod
+    def project_to_domain(self, coords: torch.Tensor) -> torch.Tensor:
+        """Project coordinates onto the material's domain.
 
         Args:
-            coords: (N, d) coordinates sampled from the material's domain.
+            coords: (N, d) coordinates, possibly outside the canonical domain.
 
         Returns:
-            diffusivity: (N,) positive tensor — D(x).
-            mass:        (N,) positive tensor — \rho(x) for the mass matrix.
+            (N, d) coordinates folded back to the canonical domain.
         """
         raise NotImplementedError
+
+    # ── Derived geometric utilities ────────────────────────────────────────────
+
+    def neighbourhood(
+        self,
+        coords: torch.Tensor,
+        K: int,
+        h: float = 1e-3,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return K symmetric neighbour-pairs around each coordinate.
+
+        For each of the N input coordinates, K random unit directions
+        δ_k ~ Uniform(S^{d-1}) are drawn and the pairs
+
+            x⁺_k = project_to_domain(x + h δ_k)
+            x⁻_k = project_to_domain(x − h δ_k)
+
+        are returned.  The shared directions are also returned so that callers
+        can reconstruct finite-difference gradients as
+        ``(f(x⁺) − f(x⁻)) / (2h)``.
+
+        Args:
+            coords: (N, d) base coordinates (already in the canonical domain).
+            K:      Number of neighbour pairs per point.
+            h:      Step size for the perturbation.
+
+        Returns:
+            coords_plus:  (N, K, d) perturbed coordinates x + h δ.
+            coords_minus: (N, K, d) perturbed coordinates x − h δ.
+            directions:   (N, K, d) unit directions δ.
+        """
+        N, d = coords.shape
+        device, dtype = coords.device, coords.dtype
+
+        directions = torch.randn(N, K, d, device=device, dtype=dtype)
+        directions = directions / directions.norm(dim=-1, keepdim=True)
+
+        coords_exp = coords.unsqueeze(1)  # (N, 1, d)
+        coords_plus  = self.project_to_domain(coords_exp + h * directions)
+        coords_minus = self.project_to_domain(coords_exp - h * directions)
+
+        return coords_plus, coords_minus, directions
+
+    def diffuse(
+        self,
+        coords: torch.Tensor,
+        K: int,
+        num_steps: int,
+        dt: float,
+        h_fd: float = 1e-3,
+    ) -> torch.Tensor:
+        """Run K independent Euler–Maruyama trajectories from each coordinate.
+
+        Simulates the Itô SDE
+
+            dX = (∇D(X) / ρ(X)) dt + √(2 D(X) / ρ(X)) dW
+
+        where ∇D is estimated with one random-direction centered FD step using
+        ``neighbourhood``.  After each step coordinates are projected back onto
+        the domain via ``project_to_domain``.
+
+        Args:
+            coords:    (N, d) starting coordinates.
+            K:         Number of independent trajectories per starting point.
+            num_steps: Number of Euler–Maruyama steps.
+            dt:        Time step size.
+            h_fd:      Finite-difference step size for the drift gradient.
+
+        Returns:
+            (N, K, d) terminal coordinates after ``num_steps`` steps.
+        """
+        N, d = coords.shape
+        device, dtype = coords.device, coords.dtype
+
+        # Replicate each starting point K times: (N*K, d)
+        x = coords.unsqueeze(1).expand(N, K, d).reshape(N * K, d).clone()
+
+        for _ in range(num_steps):
+            # Evaluate D(x) and ρ(x) at current positions
+            D, rho = self(x)  # each (N*K,)
+
+            # Estimate ∇D(x) via single random-direction centered FD
+            delta = torch.randn(N * K, d, device=device, dtype=dtype)
+            delta = delta / delta.norm(dim=-1, keepdim=True)
+            x_plus  = self.project_to_domain(x + h_fd * delta)
+            x_minus = self.project_to_domain(x - h_fd * delta)
+            D_plus,  _ = self(x_plus)
+            D_minus, _ = self(x_minus)
+            # ∇D · δ ≈ (D(x+hδ) − D(x−hδ)) / (2h)  →  ∇D ≈ d * grad_est * δ
+            grad_est = (D_plus - D_minus) / (2.0 * h_fd)  # (N*K,)
+            grad_D = d * grad_est.unsqueeze(-1) * delta    # (N*K, d)
+
+            # Itô drift: ∇D / ρ
+            drift = grad_D / rho.unsqueeze(-1)
+
+            # Diffusion coefficient: √(2 D / ρ)
+            diff_coef = torch.sqrt(2.0 * D / rho).unsqueeze(-1)  # (N*K, 1)
+
+            noise = torch.randn_like(x)
+            x = self.project_to_domain(x + drift * dt + diff_coef * math.sqrt(dt) * noise)
+
+        return x.reshape(N, K, d)
 
 
 # ── Concrete materials ─────────────────────────────────────────────────────────
 
 
-class ConstantMaterial(Material):
-    """Homogeneous material with spatially uniform diffusivity.
+class FourierTorusMaterial(Material):
+    """Torus material with a single Fourier-mode diffusivity pattern.
 
-    The domain is arbitrary and supplied via the ``domain_sampler`` argument,
-    making it easy to combine a flat diffusivity with non-trivial geometries
-    (e.g. an airplane silhouette):
+    The domain is the D-dimensional flat torus [0, 1]^D.  The diffusivity is
+    a single trigonometric mode:
 
-        ConstantMaterial(diffusivity=1.0, domain_sampler=AirplaneSampler())
+        D(x) = base_diffusivity
+               + amplitude · cos(2π Σᵢ kᵢ (xᵢ − phaseᵢ) + directionality)
+
+    The ``phaseᵢ`` parameters shift the cosine peak along axis i in torus
+    units (so ``phaseᵢ = 0.5`` centres the peak at the midpoint of axis i).
+    ``directionality`` (in radians) controls the overall sin/cos character:
+    at 0 the pattern is a pure cosine, at π/2 a pure (negative) sine.
+
+    Setting all ``frequencies`` to 0 gives a spatially uniform (constant)
+    diffusivity equal to ``base_diffusivity``.
+
+    Coordinates outside [0, 1]^D are wrapped periodically.  The mass is
+    uniform: ρ(x) = 1 everywhere.
 
     Args:
-        diffusivity:    Constant positive diffusivity value.
-        domain_sampler: Sampler that draws coordinates from the material domain.
+        frequencies:      List of integer frequencies [k₁, …, kD], one per
+                          spatial dimension.
+        phases:           List of spatial peak positions [φ₁, …, φD] in
+                          [0, 1] torus units, one per dimension.
+        directionality:   Global phase θ in radians (default 0).
+        base_diffusivity: Mean diffusivity D₀ > 0.
+        amplitude:        Amplitude of the cosine modulation.  For D(x) > 0
+                          everywhere one needs |amplitude| < base_diffusivity.
     """
 
-    def __init__(self, diffusivity: float, domain_sampler: DomainSampler):
-        self.diffusivity = diffusivity
-        self.domain_sampler = domain_sampler
+    def __init__(
+        self,
+        frequencies: list[float],
+        phases: list[float],
+        directionality: float = 0.0,
+        base_diffusivity: float = 1.0,
+        amplitude: float = 0.5,
+    ):
+        if len(frequencies) != len(phases):
+            raise ValueError(
+                f"frequencies and phases must have the same length, "
+                f"got {len(frequencies)} and {len(phases)}."
+            )
+        self.frequencies = list(frequencies)
+        self.phases = list(phases)
+        self.directionality = directionality
+        self.base_diffusivity = base_diffusivity
+        self.amplitude = amplitude
+
+    def project_to_domain(self, coords: torch.Tensor) -> torch.Tensor:
+        return coords % 1.0
 
     def __call__(
         self, coords: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return a constant diffusivity and unit mass for every coordinate.
+        coords = self.project_to_domain(coords)
 
-        Args:
-            coords: (N, d) coordinates.
+        freq  = torch.tensor(self.frequencies, dtype=coords.dtype, device=coords.device)
+        phase = torch.tensor(self.phases,      dtype=coords.dtype, device=coords.device)
 
-        Returns:
-            diffusivity: (N,) tensor filled with ``self.diffusivity``.
-            mass:        (N,) tensor of ones.
-        """
-        diffusivity = torch.full(
-            (coords.shape[0],),
-            self.diffusivity,
-            dtype=coords.dtype,
-            device=coords.device,
-        )
+        # arg_n = 2π Σᵢ kᵢ (xᵢ − φᵢ) + θ
+        arg = 2.0 * math.pi * ((coords - phase) @ freq) + self.directionality
+
+        diffusivity = self.base_diffusivity + self.amplitude * torch.cos(arg)
+        diffusivity = diffusivity.clamp(min=1e-6)
+
         mass = torch.ones_like(diffusivity)
         return diffusivity, mass
 
@@ -91,8 +222,9 @@ class JosephFourierMaterial(Material):
     """Material whose diffusivity is derived from the Joseph Fourier portrait.
 
     At initialisation the image is:
-      1. Optionally thresholded to a binary mask and rescaled to
-         [min_diffusivity, max_diffusivity].
+      1. Optionally thresholded to a binary mask; pixels inside/outside the
+         threshold are assigned ``interior_diffusivity`` / ``exterior_diffusivity``
+         respectively.
       2. Optionally smoothed with a Gaussian filter (``sigma`` in [0, 1]
          coordinates, converted to pixels internally).
 
@@ -103,38 +235,36 @@ class JosephFourierMaterial(Material):
         coords[:, 0] = x ∈ [0, 1]  — horizontal (left → right)
         coords[:, 1] = y ∈ [0, 1]  — vertical   (bottom → top)
 
+    Coordinates outside [0, 1]² are wrapped periodically before lookup.
+
     Args:
-        image_path:       Path to the Joseph Fourier portrait image.
-        image_size:       Resize the image to (image_size × image_size) pixels.
-        min_diffusivity:  Diffusivity assigned to pixel value 0 (darkest / below
-                          threshold).
-        max_diffusivity:  Diffusivity assigned to pixel value 1 (brightest / above
-                          threshold).
-        threshold:        If given, defines the inside/outside boundary for the
-                          mass map: pixels ≤ threshold → inside (\rho = 1),
-                          pixels > threshold → outside (\rho = exterior_mass).
-                          The diffusivity is always the continuous pixel intensity
-                          mapped to [min_diffusivity, max_diffusivity].
-        sigma:            Gaussian smoothing standard deviation in [0, 1] world
-                          coordinates (converted to ``sigma * image_size`` pixels).
-                          0 disables smoothing.
-        exterior_mass:    \rho value assigned to pixels outside the material (i.e.
-                          pixels > threshold when threshold is set).  1.0 means
-                          no mass correction.
-        square_sampler_kwargs: Extra keyword arguments forwarded to ``SquareSampler``.
+        image_path:            Path to the Joseph Fourier portrait image.
+        image_size:            Resize the image to (image_size × image_size) pixels.
+        interior_diffusivity:  Diffusivity assigned to pixel value 0 (darkest /
+                               below threshold).
+        exterior_diffusivity:  Diffusivity assigned to pixel value 1 (brightest /
+                               above threshold).
+        threshold:             If given, defines the inside/outside boundary for
+                               the mass map: pixels ≤ threshold → inside (ρ = 1),
+                               pixels > threshold → outside (ρ = exterior_mass).
+                               The diffusivity is always the continuous pixel
+                               intensity mapped to the two diffusivity values.
+        sigma:                 Gaussian smoothing standard deviation in [0, 1]
+                               world coordinates.  0 disables smoothing.
+        exterior_mass:         ρ value for pixels outside the material.
+                               1.0 = no mass correction.
     """
 
     def __init__(
         self,
         image_path: str,
         image_size: int = 256,
-        min_diffusivity: float = 0.1,
-        max_diffusivity: float = 1.0,
+        interior_diffusivity: float = 0.1,
+        exterior_diffusivity: float = 1.0,
         invert: bool = False,
         threshold: float | None = None,
         sigma: float = 0.0,
         exterior_mass: float = 1.0,
-        **square_sampler_kwargs,
     ):
         from scipy.ndimage import gaussian_filter
 
@@ -157,19 +287,21 @@ class JosephFourierMaterial(Material):
             torch.from_numpy(mass_np).unsqueeze(0).unsqueeze(0)
         )
 
-        # Diffusivity: always map raw pixel intensity → [min, max], no thresholding.
-        img_np = min_diffusivity + (max_diffusivity - min_diffusivity) * img_np
+        # Diffusivity: map raw pixel intensity → [interior, exterior].
+        img_np = interior_diffusivity + (exterior_diffusivity - interior_diffusivity) * img_np
         if invert:
-            img_np = max_diffusivity + min_diffusivity - img_np
+            img_np = exterior_diffusivity + interior_diffusivity - img_np
 
         # Gaussian smoothing in pixel space (sigma in world coords → pixels).
         if sigma > 0.0:
             img_np = gaussian_filter(img_np, sigma=sigma * image_size)
-            img_np = np.clip(img_np, min_diffusivity, max_diffusivity)
+            img_np = np.clip(img_np, interior_diffusivity, exterior_diffusivity)
 
         # (1, 1, H, W) for F.grid_sample
         self._image: torch.Tensor = torch.from_numpy(img_np).unsqueeze(0).unsqueeze(0)
-        self.domain_sampler = SquareSampler(**square_sampler_kwargs)
+
+    def project_to_domain(self, coords: torch.Tensor) -> torch.Tensor:
+        return coords % 1.0
 
     def __call__(
         self, coords: torch.Tensor
@@ -177,12 +309,14 @@ class JosephFourierMaterial(Material):
         """Nearest-neighbour lookup of the pre-smoothed diffusivity and mass maps.
 
         Args:
-            coords: (N, 2) coordinates in [0, 1]².
+            coords: (N, 2) coordinates; wrapped periodically to [0, 1]².
 
         Returns:
-            diffusivity: (N,) in [min_diffusivity, max_diffusivity].
+            diffusivity: (N,) in [interior_diffusivity, exterior_diffusivity].
             mass:        (N,) — 1.0 inside, exterior_mass outside.
         """
+        coords = self.project_to_domain(coords)
+
         # F.grid_sample expects grid in [-1, 1]² with (x, y) ordering,
         # shape (1, 1, N, 2) for point queries.
         grid = (coords * 2.0 - 1.0).unsqueeze(0).unsqueeze(0)  # (1, 1, N, 2)
@@ -195,106 +329,40 @@ class JosephFourierMaterial(Material):
         return diffusivity, mass
 
 
-class FramedMaterial(Material):
-    """Wraps a square-domain material with a thin frame of fixed diffusivity.
-
-    The base material's coordinates are linearly shrunk into
-    ``[frame_width, 1 - frame_width]²`` so that a border of width
-    ``frame_width`` (in [0, 1] world coordinates) is left around the
-    original content and filled with ``frame_diffusivity``.
-
-    The mass of the frame is ``exterior_mass``; the interior inherits the
-    base material's mass.
-
-    Args:
-        base_material:     A ``Material`` whose ``domain_sampler`` is a
-                           ``SquareSampler``.  Raises ``ValueError`` otherwise.
-        frame_diffusivity: Diffusivity assigned to points inside the frame.
-        frame_width:       Width of the frame in [0, 1] world coordinates.
-                           Defaults to 0.05 (5 % on each side).
-        exterior_mass:     \rho value for frame points.  1.0 = no correction.
-    """
-
-    def __init__(
-        self,
-        base_material: "Material",
-        frame_diffusivity: float,
-        frame_width: float = 0.05,
-        exterior_mass: float = 1.0,
-    ):
-        if not isinstance(base_material.domain_sampler, SquareSampler):
-            raise ValueError(
-                "FramedMaterial requires the base material to use a SquareSampler."
-            )
-        self.base_material = base_material
-        self.frame_diffusivity = frame_diffusivity
-        self.frame_width = frame_width
-        self.exterior_mass = exterior_mass
-        self.domain_sampler = base_material.domain_sampler
-
-    def __call__(
-        self, coords: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return diffusivity and mass: frame value on the border, base material inside.
-
-        Args:
-            coords: (N, 2) coordinates in [0, 1]².
-
-        Returns:
-            diffusivity: (N,) tensor.
-            mass:        (N,) tensor.
-        """
-        w = self.frame_width
-        in_frame = (
-            (coords[:, 0] < w)
-            | (coords[:, 0] > 1.0 - w)
-            | (coords[:, 1] < w)
-            | (coords[:, 1] > 1.0 - w)
-        )
-
-        # Map interior coords back to [0, 1] for the base material.
-        scale = 1.0 - 2.0 * w
-        inner_coords = (coords - w) / scale
-        inner_coords = inner_coords.clamp(0.0, 1.0)
-
-        diffusivity, mass = self.base_material(inner_coords)
-        diffusivity[in_frame] = self.frame_diffusivity
-        mass[in_frame] = self.exterior_mass
-        return diffusivity, mass
-
-
 class AirplaneMaterial(Material):
-    """
-    Material defined on the silhouette of an airplane, with diffusivity derived
-    from whether the point is in the body, wing, or tail. The diffusivity is higher
-    in the body and lower in the wings and tail, to create interesting vibrational
-    modes that capture the airplane's shape.
+    """Material defined on the silhouette of an airplane.
+
+    The diffusivity is higher inside the airplane structure (body/wing/tail)
+    and lower in the background, creating vibrational modes that capture the
+    airplane's shape.
+
+    Coordinates outside [0, 1]² are wrapped periodically before evaluation.
 
     Args:
-        min_diffusivity: Diffusivity of the airplane structure.
-        max_diffusivity: Diffusivity of the background.
-        length:          Controls the proportions of the airplane shape.
-        exterior_mass:   \rho value for background points outside the airplane.
-                         1.0 = no mass correction.
+        interior_diffusivity: Diffusivity of the airplane structure.
+        exterior_diffusivity: Diffusivity of the background.
+        length:               Controls the proportions of the airplane shape.
+        exterior_mass:        ρ value for background points outside the airplane.
+                              1.0 = no mass correction.
     """
 
     def __init__(
         self,
-        min_diffusivity: float = 0.1,
-        max_diffusivity: float = 1.0,
+        interior_diffusivity: float = 1.0,
+        exterior_diffusivity: float = 0.1,
         length: float = 2.0,
         exterior_mass: float = 1.0,
-        **square_sampler_kwargs,
     ):
         super().__init__()
-        self.min_diffusivity = min_diffusivity
-        self.max_diffusivity = max_diffusivity
+        self.interior_diffusivity = interior_diffusivity
+        self.exterior_diffusivity = exterior_diffusivity
         self.length = length
         self.exterior_mass = exterior_mass
-        self.domain_sampler = SquareSampler(**square_sampler_kwargs)
+
+    def project_to_domain(self, coords: torch.Tensor) -> torch.Tensor:
+        return coords % 1.0
 
     def _get_body(self, coords: torch.Tensor) -> torch.Tensor:
-        # Shift and scale [0, 1] coordinates to [-1, 1] for internal geometry
         t = (coords.clone() - 0.5) * 2.0
 
         t[:, 1] = t[:, 1] / max(self.length, 3)
@@ -353,19 +421,21 @@ class AirplaneMaterial(Material):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return diffusivity and mass.
 
-        Inside the airplane (body/wing/tail): min_diffusivity, mass = 1.
-        Outside (background): max_diffusivity, mass = exterior_mass.
+        Inside the airplane (body/wing/tail): interior_diffusivity, mass = 1.
+        Outside (background): exterior_diffusivity, mass = exterior_mass.
         """
+        coords = self.project_to_domain(coords)
+
         body_mask = self._get_body(coords)
         wing_mask = self._get_wing(coords)
         tail_mask = self._get_tail(coords)
         inside = body_mask | wing_mask | tail_mask
 
         diffusivity = torch.full(
-            (coords.shape[0],), self.min_diffusivity,
+            (coords.shape[0],), self.exterior_diffusivity,
             device=coords.device, dtype=torch.float32,
         )
-        diffusivity[inside] = self.max_diffusivity
+        diffusivity[inside] = self.interior_diffusivity
 
         mass = torch.ones(coords.shape[0], device=coords.device, dtype=torch.float32)
         mass[~inside] = self.exterior_mass

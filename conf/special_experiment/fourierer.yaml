@@ -37,8 +37,8 @@ regularizer:
     _target_: infidictionary.material.JosephFourierMaterial
     image_path: assets/Joseph_Fourier.jpg
     image_size: 256
-    min_diffusivity: 1.0
-    max_diffusivity: 1.0
+    interior_diffusivity: 1.0
+    exterior_diffusivity: 1.0
     invert: false
     threshold: 0.5
     sigma: 0.002

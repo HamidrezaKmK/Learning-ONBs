@@ -1,0 +1,54 @@
+# @package _global_
+#
+# Usage:
+#   python reg_cob.py +vibration_experiment=wavy_material
+
+defaults:
+  - override /neural_fields@neural_isometry.scalar_field_partial: atom_shuffling # old # old # fourier_mixture # old # fourier_mixture
+  - _self_
+
+initial_dictionary:
+  num_channels: 1
+  p: 0.1
+
+neural_isometry:
+  base_acceleration: 1
+  channels_dim: 1
+  multigrid_strategy: just_global
+
+model_state_kwargs:
+  num_steps: 20
+
+tail_probability: 0.011
+num_tail_samples: 0 # 32
+grad_accumulation_steps: 8
+max_grad_norm: 1.0
+
+regularizer:
+  _target_: infidictionary.regularizers.HeatQuadraticFormRegularizer
+  smoothing_t: 0.01
+  n_diffusion_samples: 4
+  material: 
+    _target_: infidictionary.material.FourierTorusMaterial
+    frequencies: [0.5, 1]
+    phases: [0.3, 0.3]
+    directionality: 1.0
+    base_diffusivity: 1.0
+    amplitude: 0.5
+  masking_weight: 0
+  mass_threshold: 0.5
+  domain_sampler:
+    _target_: infidictionary.domain_samplers.SquareSampler
+    stratified: true
+    add_noise: true
+  domain_sample_size: 32
+
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 2
+
+wandb:
+  project: BasisLearning-vibration-modes
+  tags:
+    material: wavy
+    method: heat_qform

@@ -2,6 +2,7 @@ from .base import Regularizer, _eval_pushed_atoms
 import torch
 
 from infidictionary.utils import norm2, parallel_inner_product
+from infidictionary.material import Material
 
 class DirichletEnergyRegularizer(Regularizer):
     """Regularizer minimising the weighted Dirichlet energy via finite differences.
@@ -41,7 +42,7 @@ class DirichletEnergyRegularizer(Regularizer):
         n_fd_dirs: int = 1,
     ):
         super().__init__(domain_sampler, domain_sample_size)
-        self.material = material
+        self.material: Material = material
         self.finite_diff_h = finite_diff_h
         self.n_fd_dirs = n_fd_dirs
         self._diffusivity: torch.Tensor | None = None
@@ -75,14 +76,11 @@ class DirichletEnergyRegularizer(Regularizer):
         de_per_atom = torch.zeros(indices.shape[0], device=device, dtype=dtype)
 
         for _ in range(self.n_fd_dirs):
-            # Random unit direction δ ~ Uniform(S^{d-1})
-            delta = torch.randn(N, d, device=device, dtype=dtype)
-            delta = delta / delta.norm(dim=-1, keepdim=True)
-
-            coords_plus  = tgt_coords + self.finite_diff_h * delta
-            coords_plus  = coords_plus  - torch.floor(coords_plus)   # periodic wrap
-            coords_minus = tgt_coords - self.finite_diff_h * delta
-            coords_minus = coords_minus - torch.floor(coords_minus)
+            coords_plus, coords_minus, _ = self.material.neighbourhood(
+                tgt_coords, K=1, h=self.finite_diff_h
+            )
+            coords_plus  = coords_plus[:, 0, :]   # (N, d)
+            coords_minus = coords_minus[:, 0, :]  # (N, d)
 
             _, qphi_plus,  _ = _eval_pushed_atoms(
                 neural_isometry, initial_dictionary, coords_plus,  indices, pushforward_kwargs
@@ -135,7 +133,7 @@ class HeatQuadraticFormRegularizer(Regularizer):
         self,
         domain_sampler,
         domain_sample_size: int,
-        material,
+        material: Material,
         smoothing_t: float = 1.0,
         n_diffusion_samples: int = 4,
         masking_weight: float = 0.0,
@@ -187,16 +185,17 @@ class HeatQuadraticFormRegularizer(Regularizer):
             src_coords=src_coords, src_logabsdet=src_logabsdet,
         )
 
-        # MC estimate of P̃_t Qφ(x) = E_Z[ Qφ(x + √(2D(x)t/\rho(x)) Z) ]
-        diffusion_std = torch.sqrt(
-            2.0 * diffusivity * self.smoothing_t / mass
-        ).unsqueeze(-1)  # (N, 1)
+        # MC estimate of P̃_t Qφ(x) via diffuse: (N, n_diffusion_samples, d)
+        coords_diffused = self.material.diffuse(
+            tgt_coords,
+            K=self.n_diffusion_samples,
+            num_steps=1,
+            dt=self.smoothing_t,
+        )  # (N, K, d)
 
         qphi_diffused = torch.zeros_like(qphi_base)
-        for _ in range(self.n_diffusion_samples):
-            Z = torch.randn(N, d, device=device, dtype=dtype)
-            coords_shifted = tgt_coords + diffusion_std * Z
-            coords_shifted = coords_shifted - torch.floor(coords_shifted)  # periodic wrap
+        for k in range(self.n_diffusion_samples):
+            coords_shifted = coords_diffused[:, k, :]  # (N, d)
             _, qphi_shifted, _ = _eval_pushed_atoms(
                 neural_isometry, initial_dictionary, coords_shifted, indices, pushforward_kwargs
             )

@@ -85,3 +85,57 @@ Each experiment YAML composes from sub-configs in:
 - `conf/fpca_experiment/`, `conf/concept_experiment/` — full experiment overrides
 
 Checkpoints are saved under `outputs/checkpoints/<run_name>/` (Hydra output dir). W&B run ID is embedded in the run name as `wandb-<id>` to support resumption.
+
+### Regularizer-based change-of-basis (`reg_cob.py`)
+
+The third training mode learns a basis by minimising a geometric energy rather than fitting data. The entry point is `reg_cob.py`; config root is `conf/reg_cob.yaml`.
+
+```bash
+python reg_cob.py +vibration_experiment=airplane_vibration
+python reg_cob.py +vibration_experiment=trivial_vibration
+python reg_cob.py +tv_experiment=1d_tv
+```
+
+**Inner loop** (each epoch):
+1. `regularizer.update_coordinates(neural_isometry, pushforward_kwargs)` — samples fresh quadrature points and pre-computes their pullback. Subclasses also cache material values (diffusivity, mass, KNN graphs) here.
+2. `grad_accumulation_steps` micro-steps, each with a fresh `shuffle_model_state` call (re-samples the ODE time-span for Eulerian isometries).
+3. Atoms are split into a *high-probability exact stratum* (deterministic, weighted by `pmf`) and a *tail stratum* (MC, weighted by sample count). Both are back-propagated and the gradients are accumulated.
+4. Optional gradient clipping (`max_grad_norm`), then `optim_isometry.step()`.
+
+**`_eval_pushed_atoms`** (`regularizers/base.py`) — shared helper used by every `compute_energy` implementation:
+- Pullback is skipped when pre-computed `src_coords`/`src_logabsdet` are passed in (saves a forward pass).
+- For `EulerianIsometry` the pullback is the identity; `src_coords = tgt_coords`, `src_logabsdet = 0`.
+- Gradients flow only through the pushforward, not the (detached) pullback.
+
+### Materials (`material.py`)
+
+`Material` is an abstract base class with three responsibilities:
+
+| Method | Shape | Purpose |
+|---|---|---|
+| `__call__(coords)` | → `(diffusivity (N,), mass (N,))` | Evaluate D(x) and ρ(x) |
+| `project_to_domain(coords)` | `(…, d)` → `(…, d)` | Fold coordinates back onto the canonical domain |
+| `neighbourhood(coords, K, h)` | `(N,d)` → 3× `(N,K,d)` | K random symmetric FD pairs `(x+hδ, x−hδ, δ)` |
+| `diffuse(coords, K, num_steps, dt, h_fd)` | `(N,d)` → `(N,K,d)` | Itô Euler–Maruyama trajectories of the SDE `dX=(∇D/ρ)dt + √(2D/ρ)dW` |
+
+`neighbourhood` and `diffuse` live in the base class and call `self.project_to_domain` for wrapping — domain topology is encapsulated in each subclass, not hardcoded.
+
+Concrete materials:
+- **`FourierTorusMaterial`** — D(x) = base + amplitude·cos(2π Σ kᵢ(xᵢ−φᵢ) + θ). Setting `amplitude=0` gives a spatially uniform (constant) diffusivity. Torus wrapping via `% 1.0`.
+- **`JosephFourierMaterial`** — diffusivity sampled from a greyscale portrait; supports Gaussian pre-smoothing and a binary mass mask via `threshold`.
+- **`AirplaneMaterial`** — analytic silhouette (body + wing + tail) with `interior_diffusivity` (structure) and `exterior_diffusivity` (background). The fill order is: initialise all to `exterior_diffusivity`, then set the inside mask to `interior_diffusivity`.
+
+Key naming convention: `interior_diffusivity` = inside the shape (was historically `max_diffusivity`), `exterior_diffusivity` = background (was `min_diffusivity`).
+
+### Regularizers (`regularizers/`)
+
+All regularizers inherit from `Regularizer` (or `PushforwardRegularizer`). They own a `DomainSampler` and expose two methods: `update_coordinates` (called once per epoch, no grad) and `compute_energy` (called each micro-step, with grad).
+
+| Class | Energy | Use case |
+|---|---|---|
+| `HeatQuadraticFormRegularizer` | −⟨Qφ, P̃_t Qφ⟩_ρ | Vibrational modes; maximises the heat-kernel quadratic form. P̃_t is approximated via `material.diffuse(K=n_diffusion_samples, num_steps=1, dt=smoothing_t)`. Optional `masking_weight` penalises atom values outside the material support. |
+| `DirichletEnergyRegularizer` | ∫ D‖∇(Qφ)‖² dx | Weighted Dirichlet energy via stochastic FD. Neighbours come from `material.neighbourhood(K=1)`. Multiply-by-d corrects for the E[(∇f·δ)²]=(1/d)‖∇f‖² identity. |
+| `TVMaterialRegularizer` | Σ_{edges} w_e ‖Qφ(i)−Qφ(j)‖ | Sparse TV / 1-Laplacian basis. Uses a **faiss** KNN graph (built in `update_coordinates`) with Gaussian edge weights; only inside-material edges contribute. Inherits `PushforwardRegularizer` so the pullback/pushforward is handled automatically. |
+| `FouriererRegularizer` | vibration + masking + diversity | Two-channel specialisation: channel 0 atoms are pushed toward the interior vibrational modes, channel 1 toward the exterior. Includes a channel-equalisation term to prevent collapse. |
+| `NTKRegularizer` | −Σ ‖∇_θ⟨Q*f_θ, φ_a⟩‖² | NTK quadratic form via implicit Jacobian; `create_graph=True` lets gradients reach the isometry. The NTK model is kept frozen. |
+| `EuclideanGroup` | ‖Qφ(x) − φ(Rx−t)‖² | Symmetry regularizer: pushes atoms to be invariant to a fixed translation + rotation + mirror of the domain. Wraps transformed coordinates with `% 1.0`. Note: currently only tested with Eulerian isometries. |

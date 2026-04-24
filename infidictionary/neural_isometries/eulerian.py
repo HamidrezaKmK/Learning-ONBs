@@ -67,11 +67,11 @@ class EulerianIsometry(NeuralIsometry):
         delta_t = t1 - t0
         scale = math.sqrt(abs(delta_t) * acceleration)
 
-        aa_raw = torch.atleast_1d(parallel_inner_product(alpha_raw, alpha_raw, logabsdet).clamp(min=1e-8))
-        bb_raw = torch.atleast_1d(parallel_inner_product(beta_raw,  beta_raw,  logabsdet).clamp(min=1e-8))
+        # aa_raw = torch.atleast_1d(parallel_inner_product(alpha_raw, alpha_raw, logabsdet).clamp(min=1e-8))
+        # bb_raw = torch.atleast_1d(parallel_inner_product(beta_raw,  beta_raw,  logabsdet).clamp(min=1e-8))
 
-        alpha_hat = alpha_raw * (scale / aa_raw.sqrt())[:, None, None]   # (K, S, C)
-        beta_hat  = beta_raw  * (scale / bb_raw.sqrt())[:, None, None]   # (K, S, C)
+        alpha_hat = scale * alpha_raw # * (scale / aa_raw.sqrt())[:, None, None]   # (K, S, C)
+        beta_hat  = scale * beta_raw  # * (scale / bb_raw.sqrt())[:, None, None]   # (K, S, C)
         if delta_t < 0:
             alpha_hat = -alpha_hat
 
@@ -267,7 +267,11 @@ class EulerianIsometry(NeuralIsometry):
             self._num_steps = num_steps
         if self._num_steps == 0:
             raise ValueError("Call shuffle_model_state with num_steps > 0 first.")
-        self.tspan = torch.linspace(0, 1, self._num_steps)
+        if self.training:
+            t_rand = torch.rand(self._num_steps)
+            self.tspan = torch.sort(t_rand)[0]
+        else:
+            self.tspan = torch.linspace(0, 1, self._num_steps)
         self._model_state_seed = int(torch.randint(0, 2**31, (1,)).item())
 
     def pushforward(

@@ -27,10 +27,8 @@ OmegaConf.register_new_resolver("eval", eval)
 #   coords[:, 1]  are y-values (vary quickly — inner loop → columns of the grid)
 # After push-forward, reshaping to (n, n, C) and permuting to (C, n, n) therefore
 # gives a (C, H, W) image with H = x-axis, W = y-axis. This matches the convention
-# already used by CLIPRegularizer and is internally consistent.
+# used by models that are used for SDS or CLIP alignment.
 _RENDER_SAMPLER = SquareSampler(stratified=True, add_noise=False)
-
-
 
 def concept_basis_training(
     neural_isometry: NeuralIsometry,

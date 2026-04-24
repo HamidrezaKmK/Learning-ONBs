@@ -8,7 +8,7 @@
 #   python concept_basis.py +concept_experiment=sds_cat wandb=enabled
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: experimental4 # experimental2 # old
+  - override /neural_fields@neural_isometry.scalar_field_partial: fourier_distorted # experimental2 # old
   - override /coefficient_model@coefficient_model: spike_and_slab
   - _self_
 

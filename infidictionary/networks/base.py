@@ -130,3 +130,27 @@ class NerfFourierFeatures(nn.Module):
             feats.append(torch.sin(proj))
             feats.append(torch.cos(proj))
         return torch.cat(feats, dim=-1)          # (N, out_dim)
+
+
+
+def _build_mlp(
+    in_dim: int, 
+    out_dim: int, 
+    hidden_dims: tuple, 
+    activation, 
+    use_batchnorm: bool, 
+    use_rmsnorm: bool, 
+    bias: bool,
+) -> nn.Sequential:
+    layers: list[nn.Module] = []
+    prev = in_dim
+    for h in hidden_dims:
+        layers.append(nn.Linear(prev, h, bias=bias))
+        if use_rmsnorm:
+            layers.append(RMSNorm())
+        layers.append(activation())
+        prev = h
+    layers.append(nn.Linear(prev, out_dim, bias=bias))
+    if use_batchnorm:
+        layers.append(nn.BatchNorm1d(out_dim, affine=False))
+    return nn.Sequential(*layers)

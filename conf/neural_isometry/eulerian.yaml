@@ -5,6 +5,7 @@ defaults:
 _target_: infidictionary.neural_isometries.EulerianIsometry
 coords_dim: 2
 channels_dim: 1
+base_acceleration: 10.
 
 sub_size: 32
 

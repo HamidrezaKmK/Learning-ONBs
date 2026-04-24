@@ -2,42 +2,6 @@
 from .base import PushforwardRegularizer
 import torch
 
-class EntropyRegularizer(PushforwardRegularizer):
-    def __init__(self, domain_sampler, domain_sample_size: int, sigma: float = 0.01):
-        super().__init__(domain_sampler, domain_sample_size)
-        self.sigma = sigma
-
-    def _energy_from_atoms(self, tgt_coords, init, pushed, indices):
-        val_diffs = pushed.unsqueeze(2) - pushed.unsqueeze(1)  # (A, N, N, C)
-        val_norms_sq = val_diffs.pow(2).sum(dim=-1)            # (A, N, N)
-        kde = torch.exp(-val_norms_sq / (2 * self.sigma ** 2))
-        p_x = kde.mean(dim=-1) + 1e-8                          # (A, N)
-        return -torch.mean(torch.log(p_x), dim=-1)             # (A,)
-
-
-class GraphLaplacianRegularizer(PushforwardRegularizer):
-    def __init__(
-        self,
-        domain_sampler,
-        domain_sample_size: int,
-        sigma: float = 0.1,
-        neighbourhood_r: float = 0.1,
-    ):
-        super().__init__(domain_sampler, domain_sample_size)
-        self.sigma = sigma
-        self.neighbourhood_r = neighbourhood_r
-
-    def _energy_from_atoms(self, tgt_coords, init, pushed, indices):
-        distances = torch.cdist(tgt_coords, tgt_coords)
-        weights = torch.where(
-            distances < self.neighbourhood_r,
-            torch.exp(-distances.pow(2) / (2 * self.sigma ** 2)),
-            torch.zeros_like(distances),
-        )
-        weights.fill_diagonal_(0)
-        laplacian = torch.diag(weights.sum(dim=1)) - weights  # (N, N)
-        return torch.einsum("anc,nm,amc->a", pushed, laplacian, pushed) / laplacian.shape[0]
-
 
 class TVMaterialRegularizer(PushforwardRegularizer):
     """Sparse TV penalty inside a material mask using a KNN graph.

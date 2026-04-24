@@ -7,7 +7,7 @@
 #   python reg_cob.py +vibration_experiment=airplane_vibration
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: experimental4 # old # old # fourier_mixture # old # fourier_mixture
+  - override /neural_fields@neural_isometry.scalar_field_partial: fourier_distorted # old # old # fourier_mixture # old # fourier_mixture
   - _self_
 
 initial_dictionary:
@@ -36,8 +36,8 @@ regularizer:
   material: 
     _target_: infidictionary.material.AirplaneMaterial
     length: 2.0
-    min_diffusivity: 1.000
-    max_diffusivity: 0.001
+    interior_diffusivity: 1.000
+    exterior_diffusivity: 0.001
     exterior_mass: 1. # 0.01
   masking_weight: 0
   mass_threshold: 0.5

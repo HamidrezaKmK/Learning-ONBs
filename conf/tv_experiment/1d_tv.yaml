@@ -37,10 +37,12 @@ regularizer:
     stratified: true
     add_noise: true
   domain_sample_size: 100
-  material: 
-    _target_: infidictionary.material.ConstantMaterial
-    diffusivity: 1.0
-    domain_sampler: ${regularizer.domain_sampler}
+  material:
+    _target_: infidictionary.material.FourierTorusMaterial
+    frequencies: [0]
+    phases: [0.0]
+    amplitude: 0.0
+    base_diffusivity: 1.0
   mass_threshold: 0.01
   sigma: 0.01
 

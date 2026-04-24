@@ -1,36 +1,56 @@
 # @package _global_
 #
-# Vibrational-modes experiment on the torus, should be the Fourier basis
-#
 # Usage:
 #   python reg_cob.py +vibration_experiment=trivial_vibration
+
 defaults:
+  - override /neural_fields@neural_isometry.scalar_field_partial: fourier_distorted # old # old # fourier_mixture # old # fourier_mixture
   - _self_
 
-material:
-  _target_: infidictionary.material.ConstantMaterial
-  diffusivity: 1.0
+initial_dictionary:
+  num_channels: 1
+  p: 0.1
+
+neural_isometry:
+  base_acceleration: 50
+  channels_dim: 1
+  sub_size: 32
+  clustering: spatial
+  multigrid_strategy: just_global
+
+model_state_kwargs:
+  num_steps: 50
+
+tail_probability: 0.011
+num_tail_samples: 0 # 32
+grad_accumulation_steps: 8
+max_grad_norm: 1.0
+
+regularizer:
+  _target_: infidictionary.regularizers.HeatQuadraticFormRegularizer
+  smoothing_t: 0.01
+  n_diffusion_samples: 4
+  material: 
+    _target_: infidictionary.material.FourierTorusMaterial
+    frequencies: [0, 0]
+    phases: [0, 0]
+    directionality: 0.0
+    base_diffusivity: 1.0
+    amplitude: 0.5
+  masking_weight: 0
+  mass_threshold: 0.5
   domain_sampler:
     _target_: infidictionary.domain_samplers.SquareSampler
+    stratified: true
+    add_noise: true
+  domain_sample_size: 32
 
-# Isometry-check domain sampler must match the airplane domain
-callbacks:
-  isometry_check:
-    _target_: infidictionary.callbacks.IsometryCheck
-    dictionary: ${initial_dictionary}
-    domain_sampler:
-      _target_: infidictionary.domain_samplers.SquareSampler
-    frequency: 100
-    density: 100
-    indices:
-      - [ 0,  0, 0]
-      - [-1,  0, 0]
-      - [ 0, -1, 0]
-      - [ 1,  0, 0]
-      - [ 0,  1, 0]
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 2
 
 wandb:
-  project: BasisLearning-trivial
+  project: BasisLearning-vibration-modes
   tags:
-    material: torus
+    material: simple
     method: heat_qform

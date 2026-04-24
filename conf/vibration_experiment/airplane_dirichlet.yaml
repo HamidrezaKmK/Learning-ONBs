@@ -34,8 +34,8 @@ regularizer:
   material:
     _target_: infidictionary.material.AirplaneMaterial
     length: 2.0
-    min_diffusivity: 1.0
-    max_diffusivity: 1.0
+    interior_diffusivity: 1.0
+    exterior_diffusivity: 1.0
     exterior_mass: 0.01
   domain_sampler:
     _target_: infidictionary.domain_samplers.SquareSampler

@@ -12,8 +12,8 @@ material:
   _target_: infidictionary.material.JosephFourierMaterial
   image_path: assets/Joseph_Fourier.jpg
   image_size: 256
-  min_diffusivity: 0.1
-  max_diffusivity: 1.0
+  interior_diffusivity: 0.1
+  exterior_diffusivity: 1.0
   invert: False
   threshold: 0.5
   sigma: 0.002
