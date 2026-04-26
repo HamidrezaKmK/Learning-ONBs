@@ -35,7 +35,8 @@ concept_loss:
 mean_function: null
 
 initial_dictionary:
-  p: 0.05
+  steepness: 2.0
+  tiebreak_eps: 1.0e-3
 
 tail_probability: 1e-3
 num_tail_samples: 64

@@ -17,24 +17,71 @@ class EulerianIsometry(NeuralIsometry):
         channels_dim: int,
         rank: int,
         base_acceleration: float,
-        scalar_field_partial: Callable[[Dict[str, Any]], TimeEvolvingField],
+        scalar_field_partial: Callable[[Dict[str, Any]], TimeEvolvingField] | None = None,
         gradient_checkpointing: bool = False,
         n_time_freqs: int = 16,
         kr_hidden_dims: tuple = (64, 64),
         atom_shuffling_K: int | None = None,
         atom_selector_hidden_dims: tuple = (64, 64),
+        use_power_law: bool = False,
     ):
         super().__init__()
+
+        # At least one source of spatial functions must be configured: either the
+        # MLP (`scalar_field_partial`) or the Fourier-feature atom selector
+        # (`atom_shuffling_K`). With both unset the rank-R generator collapses
+        # to zero and the isometry would just be the identity.
+        if scalar_field_partial is None and atom_shuffling_K is None:
+            raise ValueError(
+                "EulerianIsometry needs at least one source of spatial functions: "
+                "set `scalar_field_partial` (MLP) and/or `atom_shuffling_K` "
+                "(Fourier-feature atom selector). Both were None."
+            )
 
         self.time_embedding = SinusoidalTimeEmbedding(n_time_freqs)
         emb_dim = self.time_embedding.out_dim
 
-        self.function_field = scalar_field_partial(
-            coords_dim=coords_dim,
-            output_dim=channels_dim,
-            rank=rank,
-            time_emb_dim=emb_dim,
-        )
+        # Spatial generator U(t, x): (N, emb_dim) x (N, d) → (N, R, C).
+        # Optional MLP path; when None, U comes purely from the atom-selector
+        # residual (a time-varying linear combination of Fourier atoms).
+        self._use_function_field = scalar_field_partial is not None
+        if self._use_function_field:
+            self.function_field = scalar_field_partial(
+                coords_dim=coords_dim,
+                output_dim=channels_dim,
+                rank=rank,
+                time_emb_dim=emb_dim,
+            )
+
+        # Channel mixing generator M(t, x): (N, emb_dim) x (N, d) → (N, C, C).
+        # so(1) = {0} — trivial for C=1. Also disabled when no MLP family is
+        # configured (the channel field reuses `scalar_field_partial`).
+        self._use_channel_mixing = (channels_dim > 1) and self._use_function_field
+        if self._use_channel_mixing:
+            self.channel_field = _build_mlp(
+                emb_dim + coords_dim,
+                channels_dim * channels_dim,
+                kr_hidden_dims,
+                nn.SiLU,
+                use_batchnorm=False,
+                use_rmsnorm=True,
+                bias=True,
+            )
+            
+
+        # Static orthogonal pre-mix Q ∈ R^{CxC} on the channel dimension.
+        # Composed inside the isometry as
+        #     Pushforward:  f → Q · f → ODE-evolved
+        #     Pullback:     g → ODE^{-1}(g) → Qᵀ · result
+        # so the operator stays exactly orthogonal and pullback ∘ pushforward = I.
+        # Q is parametrised on the orthogonal manifold (Cayley/exp trivialisation),
+        # randomly initialised, and adapts during training. Trivial for C=1
+        # (orthogonal group is {±1}); skipped entirely.
+        self._use_channel_pre_mix = channels_dim > 1
+        if self._use_channel_pre_mix:
+            self.channel_pre_mix = nn.Linear(channels_dim, channels_dim, bias=False)
+            nn.utils.parametrizations.orthogonal(self.channel_pre_mix, "weight")
+
         self.coords_dim = coords_dim
         self.channels_dim = channels_dim
         self.rank = rank
@@ -57,14 +104,29 @@ class EulerianIsometry(NeuralIsometry):
 
         # Optional atom-shuffling: Fourier basis mixing entirely inside EulerianIsometry.
         self.atom_shuffling_K = atom_shuffling_K
+        self.use_power_law = use_power_law
         if atom_shuffling_K is not None:
             self.atom_fourier_dict = FourierDictionary(
                 domain_dim=coords_dim,
-                num_channels=channels_dim,
-                p=0.3,
+                num_channels=1,
+                steepness=2.0,
+                tiebreak_eps=0.0,   # this dict is only used for atom features, no PMF needed
             )
             atom_indices = self.atom_fourier_dict.get_truncated_indices(atom_shuffling_K)
             self.register_buffer("atom_indices", atom_indices)
+
+            if self.use_power_law:
+                # Power-law (1 / ||k||²) prior on the atom-selector output along the
+                # n_atoms axis. Natural images have a 1/k² power spectrum, so this
+                # is an inductive bias that gives low-frequency atoms more amplitude
+                # by default and lets the MLP only need to "deviate from prior".
+                # The DC mode (||k||=0) and shell-1 atoms (||k||=1) get weight 1; a
+                # ||k||=10 corner atom gets weight 1/100.
+                spatial_k = atom_indices[:, :coords_dim].to(torch.get_default_dtype())  # (n_atoms, d)
+                k_norm_sq = spatial_k.pow(2).sum(dim=-1)                                  # (n_atoms,)
+                atom_weights = 1.0 / k_norm_sq.clamp(min=1.0)                             # (n_atoms,)
+                self.register_buffer("atom_weights", atom_weights)
+
             n_atoms = len(atom_indices)
             # time → (n_atoms, R, C) selector weights
             self.atom_selector = _build_mlp(
@@ -81,52 +143,164 @@ class EulerianIsometry(NeuralIsometry):
         """(T, emb_dim) → (T, R, R)."""
         return self.kr_mlp(t_emb).view(-1, self.rank, self.rank)
 
-    # ── Cayley step ────────────────────────────────────────────────────────────
+    # ── Assemble the full generator field U(t, x) ──────────────────────────────
 
-    def _cayley_step(
+    def _assemble_U(
+        self,
+        t_emb_N: torch.Tensor,                  # (N, emb_dim) — same time on every row
+        coords: torch.Tensor,                   # (N, d)
+        precomputed_features: torch.Tensor | None = None,  # (N, n_atoms, C)
+    ) -> torch.Tensor:                          # (N, R, C)
+        """Spatial generator field that drives the rank-R Cayley rotation.
+
+        ``U(t, x) = function_field(t, x)  +  Σ_a w_a(t) · φ_a(x)``
+
+        — the MLP path (``function_field``) and the atom-selector residual
+        (a time-varying linear combination of Fourier atoms ``φ_a``). Either
+        path may be disabled at construction time, but at least one is always
+        present (enforced in ``__init__``). All callers — the integrator and
+        any visualisation — must use this assembled field, since it's the
+        actual quantity that defines the rotation.
+
+        ``precomputed_features`` lets ``_run_euler`` avoid redundant Fourier
+        evaluations across the integration timesteps.
+        """
+        N = coords.shape[0]
+        if self._use_function_field:
+            U = self.function_field(t_emb_N, coords)                            # (N, R, C)
+        else:
+            U = torch.zeros(
+                N, self.rank, self.channels_dim,
+                device=coords.device, dtype=coords.dtype,
+            )
+
+        if self.atom_shuffling_K is not None:
+            if precomputed_features is None:
+                with torch.no_grad():
+                    feats = self.atom_fourier_dict.get_atoms(
+                        coords.detach(), self.atom_indices
+                    ).detach().permute(1, 0, 2).repeat(1, 1, self.channels_dim) # (N, n_atoms, C)
+            else:
+                feats = precomputed_features
+            n_atoms = feats.shape[1]
+            # atom_selector depends only on time; take the first row of t_emb_N.
+            w = self.atom_selector(t_emb_N[:1]).view(
+                n_atoms, self.rank, self.channels_dim,
+            )                                                                    # (n_atoms, R, C)
+            if self.use_power_law:
+                # 1 / ||k||² inductive bias along the n_atoms axis (natural-image
+                # power-spectrum prior — low-freq atoms dominate by default).
+                w = w * self.atom_weights[:, None, None]                             # (n_atoms, R, C)
+            U = U + (w[None] * feats[:, :, None, :]).sum(1)                      # (N, R, C)
+
+        return U
+
+    # ── Joint Cayley step (cross-channel rank-R + pointwise M) ─────────────────
+
+    def _joint_cayley_step(
         self,
         t0: float,
         t1: float,
-        U: torch.Tensor,           # (N, R, C)
-        K_R: torch.Tensor,         # (R, R)
-        logabsdet: torch.Tensor,   # (N,)
-        values: torch.Tensor,      # (B, N, C)
+        U: torch.Tensor,                   # (N, R, C)
+        K_R: torch.Tensor,                 # (R, R)
+        M_raw: torch.Tensor | None,        # (N, C, C) or None when C == 1
+        logabsdet: torch.Tensor,           # (N,)
+        values: torch.Tensor,              # (B, N, C)
         acceleration: float,
-    ) -> torch.Tensor:             # (B, N, C)
-        """Rank-R Cayley isometry on the span of the R network-output functions.
+    ) -> torch.Tensor:                     # (B, N, C)
+        """Cross-channel rank-R + pointwise channel-mixing Cayley step.
 
-        Skew generator: K = (Δt·a) · U (K_R − K_Rᵀ) U*
-        Cayley map: f ↦ (I − K/2)⁻¹(I + K/2) f
-        Woodbury reduction: only an R×R system is solved.
-        Reversing Δt gives the exact inverse.
+        Generator (cross-channel U, pointwise M):
+
+            ⟨U, f⟩_r     = (1/N) Σ_{n,c} U[n,r,c] · f[n,c] · e^{l_n}     ← sums over BOTH n and c
+            (K_U f)(x)_c = Σ_r U(x)_{r,c} · (A_R · ⟨U, f⟩)_r              ← rank-R, multi-channel
+            (K_M f)(x)   = M(x) f(x)                                       ← pointwise channel-mixing
+            K            = K_U + K_M
+
+        Cayley map  f ↦ (I − βK)⁻¹(I + βK) f,  β = ½ Δt · a.
+
+        Because U* now uses the *full* L² inner product (summed over channels),
+        K_U is a single rank-R skew operator on the multi-channel function
+        space — channels are coupled directly through U(x), so the Cayley flow
+        can rotate energy between R, G, B without going through M.  This is
+        the formulation the OLD code used and is what the per-channel layout
+        was missing.
+
+        Reduction:  M is handled via the per-pixel preconditioner D = P_−⁻¹
+        (pointwise C × C inverse).  The remaining Woodbury solve is a single
+        R × R system (vs the (RC)×(RC) system needed by the per-channel
+        layout):
+
+            P_±  = I_C ± β(M − Mᵀ)               (N, C, C)
+            B_op = β(K_R − K_Rᵀ)                  (R, R)  skew
+            Ḡ    = (1/N) Σ_n U[n,r,c]·D[n,c,d]·U[n,s,d]·e^{l_n}    (R, R)
+
+            y_pre = P_+ f + U · B_op · ⟨U, f⟩
+            η     = D · y_pre
+            z'    = (I_R − Ḡ B_op)⁻¹ ⟨U, η⟩         (R × R solve)
+            f_new = η + D · U · (B_op z')
+
+        Special cases:
+          • M ≡ 0  →  D = I_C,  collapses to the OLD multi-channel R×R solve.
+          • C = 1  →  identical to the OLD scalar case.
+
+        Replacing Δt by −Δt gives the exact inverse — pullback inverts
+        pushforward up to linear-solve precision, no BCH splitting needed.
         """
-        N, R, _ = U.shape
-        delta_t = t1 - t0
-        exp_lad = logabsdet.exp()  # (N,)
+        N, R, C = U.shape
+        beta    = 0.5 * (t1 - t0) * acceleration
+        exp_lad = logabsdet.exp()                                                  # (N,)
+        B_op    = beta * (K_R - K_R.transpose(-1, -2))                             # (R, R) scaled skew
 
-        # B̃ = ½(Δt·a)(K_R − K_Rᵀ)
-        B_tilde = 0.5 * (delta_t * acceleration) * (K_R - K_R.transpose(-1, -2))  # (R, R)
+        # ── Pointwise channel-mixing preconditioners ──────────────────────────
+        if M_raw is not None:
+            M_skew  = M_raw - M_raw.transpose(-1, -2)                              # (N, C, C)
+            I_C     = torch.eye(C, device=U.device, dtype=U.dtype)
+            P_plus  = I_C + beta * M_skew                                          # (N, C, C)
+            P_minus = I_C - beta * M_skew                                          # (N, C, C)
+            D       = torch.linalg.solve(                                          # P_-⁻¹  (N, C, C)
+                P_minus, I_C.expand(N, C, C).contiguous(),
+            )
+            P_plus_f = torch.einsum("ncd,bnd->bnc", P_plus, values)                # (B, N, C)
+        else:
+            D        = None
+            P_plus_f = values
 
-        # Gram G[r,s] = ⟨u_r, u_s⟩
-        U_w = U * exp_lad[:, None, None]
-        G = torch.einsum("nrc,nsc->rs", U_w, U) / N                            # (R, R)
+        # ── Step 1: y_pre = P_+ f + U · B_op · ⟨U, f⟩  (cross-channel) ───────
+        # ⟨U, f⟩_r = (1/N) Σ_{n,c} U[n,r,c] · f[n,c] · e^{l_n}
+        c_proj = torch.einsum("nrc,bnc,n->br", U, values, exp_lad) / N             # (B, R)
+        Bc     = torch.einsum("rs,bs->br", B_op, c_proj)                           # (B, R)
+        y_pre  = P_plus_f + torch.einsum("nrc,br->bnc", U, Bc)                     # (B, N, C)
 
-        # c = U* φ
-        c = torch.einsum("nrc,bnc,n->br", U, values, exp_lad) / N              # (B, R)
+        # ── Step 2: η = D · y_pre  (pointwise C × C apply) ───────────────────
+        if D is not None:
+            eta = torch.einsum("ncd,bnd->bnc", D, y_pre)
+        else:
+            eta = y_pre
 
-        # y = φ + U (B̃ c)
-        Bc = torch.einsum("rs,bs->br", B_tilde, c)                             # (B, R)
-        y = values + torch.einsum("nrc,br->bnc", U, Bc)                        # (B, N, C)
+        # ── Step 3: ⟨U, η⟩  (cross-channel) ──────────────────────────────────
+        tilde_c = torch.einsum("nrc,bnc,n->br", U, eta, exp_lad) / N               # (B, R)
 
-        # Solve (I_R − G B̃) z = U* y
-        tilde_c = torch.einsum("nrc,bnc,n->br", U, y, exp_lad) / N             # (B, R)
-        I_R = torch.eye(R, device=U.device, dtype=U.dtype)
-        M = I_R - G @ B_tilde                                                   # (R, R)
-        z = torch.linalg.solve(M, tilde_c.transpose(-1, -2)).transpose(-1, -2) # (B, R)
+        # ── Step 4: Modified Gram  Ḡ = U* D U  (R × R, cross-channel) ────────
+        if D is not None:
+            G_bar = torch.einsum("nrc,ncd,nsd,n->rs", U, D, U, exp_lad) / N        # (R, R)
+        else:
+            G_bar = torch.einsum("nrc,nsc,n->rs", U, U, exp_lad) / N               # (R, R)
 
-        # φ_new = y + U (B̃ z)
-        Bz = torch.einsum("rs,bs->br", B_tilde, z)                             # (B, R)
-        return y + torch.einsum("nrc,br->bnc", U, Bz)
+        # ── Step 5: solve  (I_R − Ḡ · B_op) z' = ⟨U, η⟩  ───────────────────
+        I_R  = torch.eye(R, device=U.device, dtype=U.dtype)
+        Msys = I_R - G_bar @ B_op                                                  # (R, R)
+        z_p  = torch.linalg.solve(
+            Msys, tilde_c.transpose(-1, -2),
+        ).transpose(-1, -2)                                                        # (B, R)
+        z    = torch.einsum("rs,bs->br", B_op, z_p)                                # (B, R) = B_op z'
+
+        # ── Step 6: f_new = η + D · U · z ────────────────────────────────────
+        if D is not None:
+            DU_z = torch.einsum("ncd,nrd,br->bnc", D, U, z)
+        else:
+            DU_z = torch.einsum("nrc,br->bnc", U, z)
+        return eta + DU_z                                                          # (B, N, C)
 
     # ── Euler integrator ───────────────────────────────────────────────────────
 
@@ -142,7 +316,7 @@ class EulerianIsometry(NeuralIsometry):
         t_mid = (tspan[:-1] + tspan[1:]) / 2  # (T-1,)
         t_mid = t_mid.to(f.device)
 
-        # Precompute time embeddings and K_R for all steps (cheap, R×R each).
+        # Precompute time embeddings and K_R for all steps (cheap, RxR each).
         all_t_emb = self.time_embedding(t_mid)           # (T-1, emb_dim)
         all_kr = self._compute_kr(all_t_emb)             # (T-1, R, R)
 
@@ -162,14 +336,22 @@ class EulerianIsometry(NeuralIsometry):
             def step(v, _t_emb=t_emb_step, _t0=t0, _t1=t1,
                      _K_R=K_R, _feats=all_features):
                 t_emb_N = _t_emb[None].expand(N, -1)    # (N, emb_dim)
-                U = self.function_field(t_emb_N, coords) # (N, R, C)
-                if _feats is not None:
-                    n_atoms = _feats.shape[1]
-                    w = self.atom_selector(_t_emb[None]).view(
-                        n_atoms, self.rank, self.channels_dim
-                    )                                    # (n_atoms, R, C)
-                    U = U + (w[None] * _feats[:, :, None, :]).sum(1)  # (N, R, C)
-                return self._cayley_step(_t0, _t1, U, _K_R, logabsdet, v, self.base_acceleration)
+
+                # Combined spatial generator U(t, x) = MLP path + atom-selector residual.
+                U = self._assemble_U(t_emb_N, coords, precomputed_features=_feats)
+
+                # Channel generator M(t, x): (N, C, C), or None when C == 1
+                # or when no MLP family is configured.
+                if self._use_channel_mixing:
+                    M_raw = self.channel_field(torch.cat([t_emb_N, coords], dim=-1)) # continuous in space
+                    M_raw = M_raw.reshape(-1, self.channels_dim, self.channels_dim)
+                else:
+                    M_raw = None
+
+                # Single fused Cayley on (M + U-rank-R) generator — self-inverse under Δt ↦ -Δt.
+                return self._joint_cayley_step(
+                    _t0, _t1, U, _K_R, M_raw, logabsdet, v, self.base_acceleration
+                )
 
             f = checkpoint(step, f, use_reentrant=False) if use_ckpt else step(f)
 
@@ -197,6 +379,9 @@ class EulerianIsometry(NeuralIsometry):
         start_time: float,
         end_time: float,
     ):
+        # Static orthogonal channel pre-mix (no-op for C=1).
+        if self._use_channel_pre_mix:
+            src_field = self.channel_pre_mix(src_field)                         # Q · f
         tspan = self.tspan * (end_time - start_time) + start_time
         tgt_field = self._run_euler(src_coords, src_logabsdet, src_field, tspan)
         return src_coords, src_logabsdet, tgt_field
@@ -211,4 +396,8 @@ class EulerianIsometry(NeuralIsometry):
     ):
         tspan = self.tspan.flip(0) * (end_time - start_time) + start_time
         src_field = self._run_euler(tgt_coords, tgt_logabsdet, tgt_field, tspan)
+        if self._use_channel_pre_mix:
+            # Reverse the static pre-mix: y · Q  (matrix multiplication on the
+            # right by W=Q applies Wᵀ to each per-point channel vector).
+            src_field = src_field @ self.channel_pre_mix.weight                 # Qᵀ · f
         return tgt_coords, tgt_logabsdet, src_field

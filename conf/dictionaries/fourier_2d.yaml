@@ -1,4 +1,5 @@
 _target_: infidictionary.dictionaries.FourierDictionary
 domain_dim: 2
 num_channels: 1
-p: 0.05
+steepness: 2.0          # power-law exponent in (1+m²)^{-α}; need α > d/2
+tiebreak_eps: 1.0e-3    # deterministic per-atom perturbation; breaks within-shell ties

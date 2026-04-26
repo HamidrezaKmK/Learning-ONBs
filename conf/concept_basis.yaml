@@ -12,7 +12,8 @@ defaults:
 # Three-channel dictionary to produce RGB images.
 initial_dictionary:
   num_channels: 3
-  p: 0.15
+  steepness: 2.0
+  tiebreak_eps: 1.0e-3
 
 neural_isometry:
   channels_dim: 3

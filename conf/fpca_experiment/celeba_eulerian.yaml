@@ -3,29 +3,57 @@ defaults:
   - /domain_samplers@domain_sampler: square_sampler   # used by callbacks
   - /function_generator@function_generator: celeba
   - /neural_isometry@neural_isometry: eulerian
-  - /callbacks@_global_: celeba
+  - override /neural_fields@neural_isometry.scalar_field_partial: latent_bilinear_spatiotemporal_field
   - _self_
+
+
+function_generator:
+  resolution: 64
+  n_images: 64
+  drop_fraction: 0.75
+  n_drop_draws: 100
 
 # ── 3-channel overrides ───────────────────────────────────────────────────────
 
 # Eulerian isometry must match the signal channel count
 neural_isometry:
   channels_dim: 3
+  # scalar_field_partial: null
+  rank: 50
+  base_acceleration: 1000.
+  atom_shuffling_K: 6 # important to think about
+  use_power_law: True # does not matter though
 
 # Fourier dictionary: 3 output channels (R,G,B).  Atoms are indexed by
 # (k_1, k_2, c) — scalar spatial function phi_k active only in channel c.
 initial_dictionary:
   num_channels: 3
+  steepness: 1.01
+  tiebreak_eps: 0.1
 
 # Mean function outputs one value per RGB channel
 mean_function:
   output_dim: 3
 
 # ── Training hyperparameters ──────────────────────────────────────────────────
-
 model_state_kwargs:
-  num_steps: 200
+  num_steps: 20 # NOTE: important to set to small value perhaps counterintuitively
 
+
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 20
+
+
+tail_probability: 0.00001 # 0.011
+num_tail_samples: 32 # 0
 n_epochs: 500000
-
+n_epochs_mean_function: null  # freeze mean function after this many epochs (null = never)
+batch_size: 16
+grad_accumulation_steps: 4
 max_grad_norm: 1.0
+
+wandb:
+  project: BasisLearning-FPCA
+  tags:
+    dataset: celeba

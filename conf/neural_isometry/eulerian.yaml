@@ -1,5 +1,5 @@
 defaults:
-  - /neural_fields@scalar_field_partial: atom_shuffling # TODO: clean up the code
+  - /neural_fields@scalar_field_partial: nerf_spatiotemporal_field
   - _self_
 
 _target_: infidictionary.neural_isometries.EulerianIsometry

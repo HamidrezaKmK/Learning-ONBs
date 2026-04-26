@@ -1,0 +1,68 @@
+# @package _global_
+#
+# Functional PCA on Free Spoken Digit Dataset (FSDD) — 1-D irregular audio.
+#
+# Usage:
+#   git clone https://github.com/Jakobovski/free-spoken-digit-dataset
+#   python fpca.py +fpca_experiment=spoken_digit \
+#       function_generator.data_dir=/path/to/free-spoken-digit-dataset/recordings
+#
+# The dataset is genuinely irregular: each clip has a variable number of raw
+# sample points (no padding, no interpolation).  get_batch returns ONE clip
+# per call; set grad_accumulation_steps to accumulate over many clips.
+
+defaults:
+  - /domain_samplers@domain_sampler: line_sampler
+  - /neural_isometry@neural_isometry: eulerian
+  - override /dictionaries@initial_dictionary: fourier_1d
+  - _self_
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+function_generator:
+  _target_: infidictionary.datasets.SpokenDigitDataset
+  data_dir: "???"                 # override on the command line
+  target_sr: 8000
+  batch_n_points: 512           # raw sample points per training call
+  n_images: 300
+  # digits: [1]                 # uncomment to restrict to a single digit
+
+# ── Dictionary (1-D Fourier) ─────────────────────────────────────────────────
+initial_dictionary:
+  domain_dim: 1
+  num_channels: 1
+  steepness: 2.0
+  tiebreak_eps: 1.0e-3
+
+# ── Mean function (1-D input) ─────────────────────────────────────────────────
+mean_function:
+  input_dim: 1
+  output_dim: 1
+
+# ── Neural isometry (1-D, rank-10 Eulerian) ──────────────────────────────────
+neural_isometry:
+  coords_dim: 1
+  channels_dim: 1
+  rank: 50
+  base_acceleration: 1000.
+  atom_shuffling_K: 50           # 2*5-1 = 9 Fourier modes up to |k|=4
+
+model_state_kwargs:
+  num_steps: 20
+
+# ── Training ──────────────────────────────────────────────────────────────────
+# get_batch returns 1 clip per call; accumulate many clips per optimiser step.
+n_epochs: 200000
+batch_size: 1                   # one clip per call (variable-length clips)
+grad_accumulation_steps: 32     # effective batch = 32 clips per update
+max_grad_norm: 1.0
+tail_probability: 0.001
+num_tail_samples: 16
+
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 2
+
+wandb:
+  project: BasisLearning-FPCA
+  tags:
+    dataset: spoken_digit
