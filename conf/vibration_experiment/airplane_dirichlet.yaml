@@ -15,7 +15,8 @@ defaults:
 
 initial_dictionary:
   num_channels: 1
-  p: 0.1
+  steepness: 2.0
+  tiebreak_eps: 1.0e-3
 
 neural_isometry:
   channels_dim: 1

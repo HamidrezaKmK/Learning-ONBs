@@ -5,14 +5,15 @@
 # Usage:
 #   python reg_cob.py +tv_experiment=1d_tv
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: experimental2 
+  - override /neural_fields@neural_isometry.scalar_field_partial: nerf_spatiotemporal_field
   - _self_
 
 
 initial_dictionary:
   num_channels: 1
   domain_dim: 1
-  p: 0.1
+  steepness: 2.0
+  tiebreak_eps: 1.0e-3
 
 neural_isometry:
   coords_dim: 1

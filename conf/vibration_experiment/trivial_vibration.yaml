@@ -9,14 +9,12 @@ defaults:
 
 initial_dictionary:
   num_channels: 1
-  p: 0.1
+  steepness: 2.0
+  tiebreak_eps: 1.0e-3
 
 neural_isometry:
   base_acceleration: 50
   channels_dim: 1
-  sub_size: 32
-  clustering: spatial
-  multigrid_strategy: just_global
 
 model_state_kwargs:
   num_steps: 50

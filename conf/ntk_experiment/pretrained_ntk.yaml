@@ -16,7 +16,8 @@ defaults:
 # Two-channel dictionary so atoms have shape (N, 2); isometry must match.
 initial_dictionary:
   num_channels: 1
-  p: 0.15
+  steepness: 2.0
+  tiebreak_eps: 1.0e-3
 
 neural_isometry:
   channels_dim: 1

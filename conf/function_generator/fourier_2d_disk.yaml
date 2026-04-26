@@ -9,7 +9,8 @@ dictionary:
   _target_: infidictionary.dictionaries.FourierDictionary
   domain_dim: 2
   num_channels: 1
-  index_geom_p: 0.3
+  steepness: 2.0
+  tiebreak_eps: 1.0e-3
 atom_indices:
   - [ 0,  0, 0]
   - [ 1,  0, 0]

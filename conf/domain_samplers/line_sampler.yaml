@@ -1,0 +1,4 @@
+_target_: infidictionary.domain_samplers.LineSegmentSampler
+stratified: true
+add_noise: false
+length: 1.0

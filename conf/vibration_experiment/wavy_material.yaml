@@ -4,17 +4,18 @@
 #   python reg_cob.py +vibration_experiment=wavy_material
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: atom_shuffling # old # old # fourier_mixture # old # fourier_mixture
+  - override /neural_fields@neural_isometry.scalar_field_partial: nerf_spatiotemporal_field
   - _self_
 
 initial_dictionary:
   num_channels: 1
-  p: 0.1
+  steepness: 2.0
+  tiebreak_eps: 1.0e-3
 
 neural_isometry:
   base_acceleration: 1
   channels_dim: 1
-  multigrid_strategy: just_global
+
 
 model_state_kwargs:
   num_steps: 20

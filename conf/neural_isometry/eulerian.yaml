@@ -1,17 +1,17 @@
 defaults:
-  - /neural_fields@scalar_field_partial: old # TODO: gotta fix it
+  - /neural_fields@scalar_field_partial: nerf_spatiotemporal_field
   - _self_
 
 _target_: infidictionary.neural_isometries.EulerianIsometry
 coords_dim: 2
 channels_dim: 1
-base_acceleration: 10.
-
-sub_size: 32
-
+rank: 10
+base_acceleration: 1000.
+atom_shuffling_K: 10
+n_time_freqs: 256
+kr_hidden_dims: [64, 64]
+atom_selector_hidden_dims: [64, 64]
 gradient_checkpointing: true
-clustering: random
-multigrid_strategy: just_fine
 
 scalar_field_partial:
   _partial_: true
