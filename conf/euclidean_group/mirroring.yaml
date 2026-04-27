@@ -4,17 +4,23 @@
 #   python reg_cob.py +euclidean_group=mirroring
 
 defaults:
-  - override /neural_fields@neural_isometry.scalar_field_partial: nerf_spatiotemporal_field
   - _self_
 
 initial_dictionary:
   num_channels: 1
-  steepness: 2.0
+  steepness: 1.01
   tiebreak_eps: 1.0e-3
+  # pmf_mode: uniform
+  # truncation: 20 ???
+
 
 neural_isometry:
-  base_acceleration: 1
   channels_dim: 1
+  rank: 10
+  base_acceleration: 1000.
+  atom_shuffling_K: 20 # important to think about
+  scalar_field_partial: null
+  use_power_law: False 
 
 
 model_state_kwargs:

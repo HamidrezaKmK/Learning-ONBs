@@ -1,3 +1,12 @@
+
+[] FPCA on larger datasets without dropping pixels
+[] 1D FPCA example
+[] Ablation for Cayley with Euler integrator
+[] Getting the NTK to maybe work (similar to the image experiment)
+[] 1D example of this volume preserving transform
+
+--------
+
 [] There's something wrong with the multichannel code probably, the basis is not changing that much
 
 [] Create a very simple Laplacian experiment as the running example
@@ -24,3 +33,6 @@ Side Experiments:
 [] For the Monte-carlo methods, try a mix of pushforward pullback rather than just pushforward
 [] Implement the Adjoint method of the Cayley ODE solver in case I increase the number of steps
 [] Use a simple Haar wavelet basis instead of the Fourier basis for the celeba example.
+
+
+

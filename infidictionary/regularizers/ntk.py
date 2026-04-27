@@ -4,12 +4,16 @@ import torch
 class NTKRegularizer(Regularizer):
     """NTK quadratic-form regularizer.
 
-    Maximises  Σ_a ⟨Qφ_a, K Qφ_a⟩  where K is the Neural Tangent Kernel of a
-    fixed ``ntk_model``, using the identity
+    Maximises  Σ_a ⟨Qφ_a, K Qφ_a⟩ where K is the empirical Neural Tangent
+    Kernel of a fixed ``ntk_model``,
+
+        K(x, y) = ⟨∇_θ f(x; θ), ∇_θ f(y; θ)⟩  =  J(θ)·J(θ)^T
+
+    using the identity
 
         ⟨Qφ_a, K Qφ_a⟩  =  ‖∇_θ ⟨Q* f_θ, φ_a⟩‖²
 
-    so K is never explicitly formed.  Gradients flow through the Jacobian to
+    so K is never explicitly formed. Gradients flow through the Jacobian to
     the isometry parameters via ``create_graph=True``.
 
     Args:
@@ -19,6 +23,7 @@ class NTKRegularizer(Regularizer):
                                 The model is kept in eval mode and its weights are
                                 not updated.
         ntk_model_weights_path: Optional path to a checkpoint to load into ntk_model.
+                                The checkpoint must contain ``model_state_dict``.
     """
 
     def __init__(

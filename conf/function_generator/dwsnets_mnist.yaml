@@ -1,0 +1,14 @@
+_target_: infidictionary.datasets.ImplicitZooMNISTDataset
+# Root of the extracted mnist-inrs/ directory (from Dropbox download).
+# Download: https://www.dropbox.com/sh/56pakaxe58z29mq/AABtWNkRYroLYe_cE3c90DXVa?dl=0
+#   → download mnist-inrs.zip, then: unzip mnist-inrs.zip -d data/
+data_dir: data/mnist-inrs
+# Only load MNIST training images (use 'cifar10_png*' for the CIFAR-10 subset
+# that is also included in this zip, or '*' for everything).
+filter_pattern: "mnist_png_training*"
+# n_per_dim=28 → 28² = 784 coords per step (matches MNIST 28×28 native resolution)
+domain_sample_size: 28
+n_inrs: null        # null = all 60 000 training INRs; set a number to limit
+omega_0: 30.0
+omega: 30.0
+device: cpu

@@ -1,0 +1,78 @@
+# @package _global_
+# FPCA on the DWSNets MNIST SIREN dataset.
+#
+# Usage:
+#   python fpca.py +experiment=dwsnets_mnist_eulerian
+#   python fpca.py +experiment=dwsnets_mnist_eulerian wandb=enabled wandb.run_name=dwsnets_mnist
+#
+# Before running, download and extract mnist-inrs.zip as described in
+#   conf/function_generator/dwsnets_mnist.yaml
+defaults:
+  - /domain_samplers@domain_sampler: square_sampler
+  - /function_generator@function_generator: dwsnets_mnist
+  - /neural_isometry@neural_isometry: eulerian
+  - _self_
+
+function_generator:
+  n_inrs: 64
+  domain_sample_size: 64
+
+# ── Isometry ──────────────────────────────────────────────────────────────────
+neural_isometry:
+  channels_dim: 1        # grayscale: 1 output channel
+  rank: 20
+  base_acceleration: 1000.
+  atom_shuffling_K: 10
+
+# ── Fourier dictionary: 1 channel ─────────────────────────────────────────────
+initial_dictionary:
+  num_channels: 1
+  steepness: 2.0
+  tiebreak_eps: 1.0e-3
+
+# ── Mean function: scalar output ──────────────────────────────────────────────
+mean_function:
+  output_dim: 1
+
+# ── ODE integrator ────────────────────────────────────────────────────────────
+model_state_kwargs:
+  num_steps: 20
+
+pullback_pushforward_kwargs:
+  start_time: 0.0
+  end_time: 1.0
+
+# ── Training ──────────────────────────────────────────────────────────────────
+n_epochs: 10000
+n_epochs_mean_function: null
+batch_size: 16
+grad_accumulation_steps: 4
+max_grad_norm: 1.0
+
+isometry_optimizer_callable:
+  _target_: torch.optim.Adam
+  lr: 5.0e-4
+  _partial_: true
+
+mean_function_optimizer_callable:
+  _target_: torch.optim.Adam
+  lr: 1.0e-3
+  _partial_: true
+
+# ── Energy estimation ─────────────────────────────────────────────────────────
+energy_estimation_kwargs:
+  num_tail_samples: 64
+  tail_probability: 1.0e-4
+
+# ── Checkpointing ─────────────────────────────────────────────────────────────
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 200
+  checkpoint_window_size: 3
+
+# ── W&B tags ──────────────────────────────────────────────────────────────────
+wandb:
+  project: BasisLearning-FPCA
+  tags:
+    dataset: dwsnets_mnist
+    isometry: eulerian

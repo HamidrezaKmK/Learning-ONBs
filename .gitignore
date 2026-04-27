@@ -17,3 +17,4 @@ venv/
 .vscode
 outputs/
 scripts/
+data/

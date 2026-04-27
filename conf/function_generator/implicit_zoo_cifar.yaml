@@ -1,0 +1,13 @@
+_target_: infidictionary.datasets.ImplicitZooCIFARDataset
+# Path to the archive.zip downloaded from Kaggle (no extraction needed).
+# Download: https://www.kaggle.com/datasets/qimaqi/implicit-zoo-cifar10-inrs
+#   kaggle datasets download -d qimaqi/implicit-zoo-cifar10-inrs
+#   → keep archive.zip in data/
+zip_path: data/archive.zip
+split: train           # 'train' (50 000 INRs) or 'eval' (10 000 INRs)
+# n_per_dim=32 → 32² = 1024 coords per step (matches CIFAR-10 32×32 native resolution)
+domain_sample_size: 32
+n_inrs: null           # null = all 50 000 training INRs; set a number to limit
+omega_0: 30.0
+omega: 30.0
+device: cpu

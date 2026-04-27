@@ -1,0 +1,73 @@
+# @package _global_
+#
+# NTK regularizer for a two-moons binary classifier checkpoint.
+#
+# The ntk_model is an NTK-parameterised MLP whose weights are loaded from one
+# of the checkpoints written by notebooks/ntk.ipynb (training cell) into
+# outputs/ntk/two_moons_step_xxxx.pt. The empirical NTK is
+#
+#     K(x, y) = <grad_theta f(x; theta), grad_theta f(y; theta)>
+#
+# where f is the (pre-sigmoid) logit, evaluated at the checkpoint weights.
+#
+# Usage:
+#   python reg_cob.py +ntk_experiment=two_moons \
+#       regularizer.ntk_model_weights_path=outputs/ntk/two_moons_step_0900.pt
+defaults:
+  - override /neural_fields@neural_isometry.scalar_field_partial: latent_bilinear_spatiotemporal_field
+  - _self_
+
+initial_dictionary:
+  num_channels: 1
+  steepness: 1.01
+  tiebreak_eps: 0.1
+
+neural_isometry:
+  channels_dim: 1
+  rank: 10
+  base_acceleration: 1000.
+  atom_shuffling_K: 6 # important to think about
+  use_power_law: True # does not matter though
+
+model_state_kwargs:
+  num_steps: 20
+
+isometry_optimizer_callable:
+  _target_: torch.optim.AdamW
+
+tail_probability: 0.0007
+num_tail_samples: 32
+grad_accumulation_steps: 8
+max_grad_norm: 1.0
+atom_batch_size: 128
+
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 2
+
+regularizer:
+  _target_: infidictionary.regularizers.NTKRegularizer
+  ntk_model_weights_path: "???"   # set on the CLI: regularizer.ntk_model_weights_path=...
+  ntk_model:
+    _target_: infidictionary.networks.NTKMLPNeuralField
+    input_dim: 2
+    output_dim: 1
+    hidden_dims:
+      a: 256
+      b: 256
+      c: 256
+    n_fourier_features: 0
+    fourier_sigma: 0.0
+    activation:
+      _target_: torch.nn.Tanh
+      _partial_: true
+  domain_sampler:
+    _target_: infidictionary.domain_samplers.SquareSampler
+    stratified: true
+    add_noise: true
+  domain_sample_size: 32
+
+wandb:
+  project: BasisLearning-NTK
+  tags:
+    dataset: two_moons_checkpoint

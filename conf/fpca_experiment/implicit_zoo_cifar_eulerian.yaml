@@ -1,0 +1,79 @@
+# @package _global_
+# FPCA on the Implicit-Zoo CIFAR-10 SIREN dataset (3-channel RGB).
+#
+# Usage:
+#   python fpca.py +experiment=implicit_zoo_cifar_eulerian
+#   python fpca.py +experiment=implicit_zoo_cifar_eulerian wandb=enabled wandb.run_name=cifar_fpca
+#
+# Before running, download and extract the Implicit-Zoo CIFAR-10 data as described in
+#   conf/function_generator/implicit_zoo_cifar.yaml
+defaults:
+  - /domain_samplers@domain_sampler: square_sampler
+  - /function_generator@function_generator: implicit_zoo_cifar
+  - /neural_isometry@neural_isometry: eulerian
+  - override /neural_fields@neural_isometry.scalar_field_partial: latent_bilinear_spatiotemporal_field
+  - _self_
+
+function_generator:
+  n_inrs: 64
+  domain_sample_size: 64
+  
+# ── Isometry ──────────────────────────────────────────────────────────────────
+neural_isometry:
+  channels_dim: 3        # RGB: 3 output channels
+  rank: 50
+  base_acceleration: 1000.
+  atom_shuffling_K: 6
+
+# ── Fourier dictionary: 3 channels (R, G, B) ──────────────────────────────────
+initial_dictionary:
+  num_channels: 3
+  steepness: 1.01        # shallow decay → more high-freq atoms sampled
+  tiebreak_eps: 0.1
+
+# ── Mean function: 3-channel output ───────────────────────────────────────────
+mean_function:
+  output_dim: 3
+
+# ── ODE integrator ────────────────────────────────────────────────────────────
+model_state_kwargs:
+  num_steps: 20
+
+pullback_pushforward_kwargs:
+  start_time: 0.0
+  end_time: 1.0
+
+# ── Training ──────────────────────────────────────────────────────────────────
+n_epochs: 10000
+n_epochs_mean_function: null
+batch_size: 16
+grad_accumulation_steps: 4
+max_grad_norm: 1.0
+
+isometry_optimizer_callable:
+  _target_: torch.optim.Adam
+  lr: 5.0e-4
+  _partial_: true
+
+mean_function_optimizer_callable:
+  _target_: torch.optim.Adam
+  lr: 1.0e-3
+  _partial_: true
+
+# ── Energy estimation ─────────────────────────────────────────────────────────
+energy_estimation_kwargs:
+  num_tail_samples: 32
+  tail_probability: 1.0e-4
+
+# ── Checkpointing ─────────────────────────────────────────────────────────────
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 10
+  checkpoint_window_size: 3
+
+# ── W&B tags ──────────────────────────────────────────────────────────────────
+wandb:
+  project: BasisLearning-FPCA
+  tags:
+    dataset: implicit_zoo_cifar
+    isometry: eulerian

@@ -121,16 +121,28 @@ def reg_change_of_basis(
         if max_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(neural_isometry.parameters(), max_grad_norm)
 
-        if wandb_enabled:
-            wandb.log({"train/energy": energy_item}, step=epoch_i)
-            wandb.log({"train/iteration": epoch_i},  step=epoch_i)
-            wandb.log({"train/grad_norm": get_grad_norm(neural_isometry)}, step=epoch_i)
-            wandb.log({"train/param_norm": get_param_norm(neural_isometry)}, step=epoch_i)
-            wandb.log({"train/avg_lr_isometry": get_avg_lr(optim_isometry)}, step=epoch_i)
+        # Guard against NaN/Inf gradients (e.g. from second-order NTK backward):
+        # clip_grad_norm_ scales by 1/‖g‖, but if ‖g‖=NaN the scale is NaN and the
+        # step poisons all weights. Detect and skip instead.
+        nan_grad = any(
+            p.grad is not None and not p.grad.isfinite().all()
+            for p in neural_isometry.parameters()
+        )
+        if nan_grad:
+            optim_isometry.zero_grad()
+            if wandb_enabled:
+                wandb.log({"train/nan_grad_skip": 1}, step=epoch_i)
+        else:
+            if wandb_enabled:
+                wandb.log({"train/energy": energy_item}, step=epoch_i)
+                wandb.log({"train/iteration": epoch_i},  step=epoch_i)
+                wandb.log({"train/grad_norm": get_grad_norm(neural_isometry)}, step=epoch_i)
+                wandb.log({"train/param_norm": get_param_norm(neural_isometry)}, step=epoch_i)
+                wandb.log({"train/avg_lr_isometry": get_avg_lr(optim_isometry)}, step=epoch_i)
+            optim_isometry.step()
+            optim_isometry.zero_grad()
 
         pbar.set_postfix({"energy": energy_item})
-        optim_isometry.step()
-        optim_isometry.zero_grad()
         step_scheduler(scheduler_isometry, energy_item)
 
         if checkpointer is not None:

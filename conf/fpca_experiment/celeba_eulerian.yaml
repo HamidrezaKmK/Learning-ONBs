@@ -47,7 +47,7 @@ checkpointing:
 
 tail_probability: 0.00001 # 0.011
 num_tail_samples: 32 # 0
-n_epochs: 500000
+n_epochs: 5100
 n_epochs_mean_function: null  # freeze mean function after this many epochs (null = never)
 batch_size: 16
 grad_accumulation_steps: 4

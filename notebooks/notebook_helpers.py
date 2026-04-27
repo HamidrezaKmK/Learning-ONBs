@@ -330,6 +330,67 @@ def plot_atom_mosaic(
     plt.show()
 
 
+def plot_atoms_comparison(
+    atoms_src,
+    atoms_tgt,
+    n_vis: int,
+    n_show: int = 32,
+    tile_size: float = 0.55,
+    cmap: str = "RdBu_r",
+    row_labels: tuple = ("Fourier  $\\varphi_k$", "Learned  $Q\\varphi_k$"),
+    title: str = "Top atoms ordered by $\\nu$ (PMF descending)",
+):
+    """2-row atom comparison: source basis (top) vs. pushed-forward basis (bottom).
+
+    Atoms are displayed left-to-right in the order they are supplied; sort by
+    PMF descending before calling to reproduce the standard ν-ordered layout.
+    The first ``n_show`` atoms are shown.
+
+    C == 1: tiles rendered with *cmap* centred at zero.
+    C  > 1: tiles rendered as normalised RGB images.
+    """
+    def _as_tensor(x):
+        return x if isinstance(x, torch.Tensor) else torch.as_tensor(np.asarray(x))
+
+    atoms_src = _as_tensor(atoms_src)
+    atoms_tgt = _as_tensor(atoms_tgt)
+    A, N, C = atoms_src.shape
+    n_show = min(n_show, A)
+
+    fig, axes = plt.subplots(
+        2, n_show,
+        figsize=(n_show * tile_size + 1.2, 2 * tile_size + 0.8),
+        gridspec_kw={"wspace": 0.03, "hspace": 0.06},
+        squeeze=False,
+    )
+
+    for row_idx, (atoms, label) in enumerate(
+        [(atoms_src, row_labels[0]), (atoms_tgt, row_labels[1])]
+    ):
+        axes[row_idx, 0].set_ylabel(
+            label, fontsize=8, rotation=0, ha="right", va="center", labelpad=5,
+        )
+        for col_idx in range(n_show):
+            ax = axes[row_idx, col_idx]
+            ax.set_xticks([]); ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_linewidth(0.3)
+            a = atoms[col_idx]   # (N, C)
+            if C == 1:
+                img  = field_to_img(a, n_vis)
+                vmax = float(np.abs(img).max()) + 1e-8
+                ax.imshow(img, origin="lower", cmap=cmap, vmin=-vmax, vmax=vmax)
+            else:
+                ax.imshow(to_rgb_image(a[..., :3], n_vis), origin="lower")
+            ax.set_aspect("equal")
+            if row_idx == 0:
+                ax.set_title(str(col_idx + 1), fontsize=6, pad=2)
+
+    fig.suptitle(title, fontsize=10)
+    plt.tight_layout()
+    plt.show()
+
+
 def scatter_signal(ax, coords, vals, *, title=None, size_c1: float = 80, size_cgt1: float = 20, cmap: str = "RdBu_r"):
     """Scatter a `(N', C)` signal at `coords (N', 2)` on an existing Axes.
 
@@ -462,5 +523,148 @@ def visualize_generator_U(isometry, coords_vis, N_vis: int, timesteps, device, c
         'Row $R$: finite rotation $\\exp(K_R - K_R^\\top)$',
         fontsize=11,
     )
+    plt.tight_layout()
+    plt.show()
+
+
+# ── PSNR line chart (mean ± std across signals) ──────────────────────────────
+
+def psnr_matrix(recons_list, ref_cpu):
+    """Compute a (L, K) PSNR array.
+
+    Args:
+        recons_list: K tensors, each ``(L, N, C)`` — one per truncation level.
+        ref_cpu:     ``(L, N, C)`` reference signals on CPU.
+    Returns:
+        ``np.ndarray`` of shape ``(L, K)``.
+    """
+    L = ref_cpu.shape[0]
+    arr = np.zeros((L, len(recons_list)))
+    for k, rb in enumerate(recons_list):
+        for l in range(L):
+            arr[l, k] = psnr(rb[l], ref_cpu[l])
+    return arr
+
+
+def plot_psnr_line_chart(
+    in_methods,
+    n_atoms_list,
+    ood_methods=None,
+    in_label="In-distribution",
+    ood_label="Out-of-distribution",
+    suptitle="Reconstruction PSNR: in-distribution vs out-of-distribution",
+):
+    """Side-by-side mean ± std PSNR line plots.
+
+    Args:
+        in_methods:    List of ``(name, psnr_mat)`` where ``psnr_mat`` is
+                       ``(L, K)`` from :func:`psnr_matrix`.  Optionally a
+                       3-tuple ``(name, psnr_mat, color)``.
+        n_atoms_list:  K atom counts (x-axis tick labels).
+        ood_methods:   Same format as ``in_methods``, or ``None`` to omit the
+                       OOD panel.
+        in_label:      Subtitle for the in-distribution panel.
+        ood_label:     Subtitle for the OOD panel.
+        suptitle:      Figure super-title.
+    """
+    colors = plt.cm.tab10(np.arange(len(in_methods)))
+    n_cols = 2 if ood_methods is not None else 1
+    fig, axes_row = plt.subplots(1, n_cols, figsize=(8 * n_cols, 5), sharey=False)
+    axes_row = np.atleast_1d(axes_row)
+
+    panels = [(axes_row[0], in_methods, in_label)]
+    if ood_methods is not None:
+        panels.append((axes_row[1], ood_methods, ood_label))
+
+    xs = np.arange(len(n_atoms_list))
+    for ax, methods, panel_label in panels:
+        N_sig = methods[0][1].shape[0]
+        for i, entry in enumerate(methods):
+            name, pm = entry[0], entry[1]
+            color = entry[2] if len(entry) > 2 else colors[i]
+            mean = pm.mean(axis=0)
+            std  = pm.std(axis=0)
+            ax.plot(xs, mean, marker='o', color=color, label=name, linewidth=2, markersize=5)
+            ax.fill_between(xs, mean - std, mean + std, alpha=0.18, color=color)
+        ax.set_xticks(xs)
+        ax.set_xticklabels(n_atoms_list)
+        ax.set_xlabel("Number of atoms")
+        ax.set_ylabel("PSNR (dB)")
+        ax.set_title(fr"Mean $\pm$ std PSNR — {panel_label}  (N={N_sig})")
+        ax.legend(fontsize=9)
+        ax.grid(axis="y", alpha=0.3)
+
+    plt.suptitle(suptitle, fontsize=13)
+    plt.tight_layout()
+    plt.show()
+
+
+# ── Spectral compactness (3-panel: per-atom, cumulative, violin) ─────────────
+
+def plot_spectral_compactness(sq_F, sq_L, title="Spectral compactness", n_violin=10):
+    """3-panel figure: per-atom energy, cumulative energy, per-image violin.
+
+    Args:
+        sq_F:     ``(A, M)`` squared Fourier coefficients (CPU tensor or ndarray).
+        sq_L:     ``(A, M)`` squared learned-basis coefficients.
+        title:    Figure super-title.
+        n_violin: How many top-ν atoms to show in the violin panel.
+    """
+    sq_F = sq_F.numpy() if hasattr(sq_F, 'numpy') else np.asarray(sq_F)
+    sq_L = sq_L.numpy() if hasattr(sq_L, 'numpy') else np.asarray(sq_L)
+
+    A = sq_F.shape[0]
+    e_F = sq_F.mean(-1)
+    e_L = sq_L.mean(-1)
+    cumE_F = e_F.cumsum()
+    cumE_L = e_L.cumsum()
+    total  = max(cumE_F[-1], cumE_L[-1])
+    x      = np.arange(1, A + 1)
+    nv     = min(n_violin, A)
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 4.5))
+
+    # 1 — per-atom energy
+    ax = axes[0]
+    ax.plot(x, e_F, lw=1.5, label="Fourier")
+    ax.plot(x, e_L, lw=1.5, label="Learned")
+    ax.set_xlabel("atom rank  (ν descending)"); ax.set_ylabel("mean  $c_k^2$")
+    ax.set_title("Per-atom energy"); ax.legend(); ax.grid(True, alpha=0.3)
+
+    # 2 — cumulative energy
+    ax = axes[1]
+    ax.plot(x, cumE_F / total * 100, lw=1.5, label="Fourier")
+    ax.plot(x, cumE_L / total * 100, lw=1.5, label="Learned")
+    for pct in [50, 75, 90]:
+        ax.axhline(pct, ls='--', c='grey', alpha=0.45, lw=0.8)
+        ax.text(A * 0.97, pct + 0.8, f"{pct}%", ha='right', fontsize=7, color='grey')
+    ax.set_xlabel("atom rank  (ν descending)"); ax.set_ylabel("cumulative energy  (%)")
+    ax.set_title("Cumulative spectral energy"); ax.legend(); ax.grid(True, alpha=0.3)
+
+    # 3 — violin: per-image distribution for top nv atoms
+    import matplotlib.patches as mpatches
+    ax  = axes[2]
+    pos = np.arange(nv)
+    w   = 0.38
+    vp_F = ax.violinplot([sq_F[k] for k in range(nv)],
+                         positions=pos - w/2, widths=w, showmedians=True, showextrema=False)
+    vp_L = ax.violinplot([sq_L[k] for k in range(nv)],
+                         positions=pos + w/2, widths=w, showmedians=True, showextrema=False)
+    for vp, col in [(vp_F, "C0"), (vp_L, "C1")]:
+        for body in vp["bodies"]:
+            body.set_facecolor(col); body.set_alpha(0.5)
+        vp["cmedians"].set_color(col); vp["cmedians"].set_linewidth(1.5)
+    ax.set_xticks(pos)
+    ax.set_xticklabels([str(k + 1) for k in range(nv)], fontsize=6)
+    ax.set_xlabel("atom rank  (ν descending)")
+    ax.set_ylabel("$c_k^2$")
+    ax.set_title(f"Per-image energy distribution (top {nv} atoms)")
+    ax.legend(handles=[
+        mpatches.Patch(color="C0", alpha=0.7, label="Fourier"),
+        mpatches.Patch(color="C1", alpha=0.7, label="Learned"),
+    ])
+    ax.grid(True, alpha=0.3, axis="y")
+
+    plt.suptitle(title, fontsize=12)
     plt.tight_layout()
     plt.show()
