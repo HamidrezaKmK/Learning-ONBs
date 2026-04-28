@@ -302,6 +302,114 @@ class EulerianIsometry(NeuralIsometry):
             DU_z = torch.einsum("nrc,br->bnc", U, z)
         return eta + DU_z                                                          # (B, N, C)
 
+    # ── Implicit backward-Euler step (stable but dissipative) ─────────────────
+
+    def _backward_euler_step(
+        self,
+        t0: float,
+        t1: float,
+        U: torch.Tensor,                   # (N, R, C)
+        K_R: torch.Tensor,                 # (R, R)
+        M_raw: torch.Tensor | None,        # (N, C, C) or None
+        logabsdet: torch.Tensor,           # (N,)
+        values: torch.Tensor,              # (B, N, C)
+        acceleration: float,
+    ) -> torch.Tensor:                     # (B, N, C)
+        """Implicit backward-Euler step  (I − Δt · a · K) f_new = f.
+
+        Same generator K as `_joint_cayley_step` (rank-R cross-channel U
+        plus pointwise channel-mixing M); same Woodbury rank-R + pointwise
+        D = (I − Δt·a·M_skew)⁻¹ structure as the Cayley step. Differences
+        from Cayley:
+
+          * No (I + βK) factor multiplying f on the right; the implicit
+            inverse is applied to f directly.
+          * Energy is monotonically dissipated by a factor
+            1/√(1 + (Δt·a·σ_K)²) per step (singular value σ_K of K), so
+            backward-Euler is unconditionally stable for skew K — it will
+            never blow up the way forward-Euler does — but ‖f‖ shrinks.
+        """
+        N, R, C = U.shape
+        dt_a    = (t1 - t0) * acceleration
+        exp_lad = logabsdet.exp()                                                  # (N,)
+        J       = K_R - K_R.transpose(-1, -2)                                      # (R, R) skew
+
+        # Pointwise preconditioner D = (I − Δt·a · M_skew)⁻¹.
+        if M_raw is not None:
+            M_skew  = M_raw - M_raw.transpose(-1, -2)                              # (N, C, C)
+            I_C     = torch.eye(C, device=U.device, dtype=U.dtype)
+            P_minus = I_C - dt_a * M_skew                                          # (N, C, C)
+            D       = torch.linalg.solve(
+                P_minus, I_C.expand(N, C, C).contiguous(),
+            )
+            Df      = torch.einsum("ncd,bnd->bnc", D, values)                      # (B, N, C)
+        else:
+            D  = None
+            Df = values
+
+        # ⟨U, D f⟩  (cross-channel)
+        UDf = torch.einsum("nrc,bnc,n->br", U, Df, exp_lad) / N                    # (B, R)
+
+        # Modified Gram  G_bar = U* D U  (R × R)
+        if D is not None:
+            G_bar = torch.einsum("nrc,ncd,nsd,n->rs", U, D, U, exp_lad) / N
+        else:
+            G_bar = torch.einsum("nrc,nsc,n->rs", U, U, exp_lad) / N
+
+        # Solve  (I_R − Δt·a · G_bar · J) g = ⟨U, D f⟩
+        I_R  = torch.eye(R, device=U.device, dtype=U.dtype)
+        Msys = I_R - dt_a * (G_bar @ J)                                            # (R, R)
+        g    = torch.linalg.solve(
+            Msys, UDf.transpose(-1, -2),
+        ).transpose(-1, -2)                                                        # (B, R)
+        Jg   = torch.einsum("rs,bs->br", J, g)                                     # (B, R)
+
+        # f_new = D f + Δt·a · D · U · J · g
+        if D is not None:
+            DUJg = torch.einsum("ncd,nrd,br->bnc", D, U, Jg)
+        else:
+            DUJg = torch.einsum("nrc,br->bnc", U, Jg)
+
+        return Df + dt_a * DUJg                                                    # (B, N, C)
+
+    # ── Naive forward-Euler step (NOT structure-preserving) ────────────────────
+
+    def _naive_euler_step(
+        self,
+        t0: float,
+        t1: float,
+        U: torch.Tensor,                   # (N, R, C)
+        K_R: torch.Tensor,                 # (R, R)
+        M_raw: torch.Tensor | None,        # (N, C, C) or None
+        logabsdet: torch.Tensor,           # (N,)
+        values: torch.Tensor,              # (B, N, C)
+        acceleration: float,
+    ) -> torch.Tensor:                     # (B, N, C)
+        """Plain explicit-Euler step  f ↦ f + Δt · a · K f.
+
+        Same generator K as `_joint_cayley_step` (rank-R cross-channel U
+        plus pointwise channel-mixing M), but applied directly without the
+        Cayley factorisation. The step is **not** norm-preserving — included
+        as a baseline to demonstrate that the Cayley parametrisation is
+        what keeps the flow on the isometry manifold.
+        """
+        N, R, C = U.shape
+        dt_a    = (t1 - t0) * acceleration
+        exp_lad = logabsdet.exp()                                                  # (N,)
+        J       = K_R - K_R.transpose(-1, -2)                                      # (R, R) skew
+
+        # Cross-channel rank-R part:  K_U f = U · J · ⟨U, f⟩
+        c_proj = torch.einsum("nrc,bnc,n->br", U, values, exp_lad) / N             # (B, R)
+        Jc     = torch.einsum("rs,bs->br", J, c_proj)                              # (B, R)
+        K_f    = torch.einsum("nrc,br->bnc", U, Jc)                                # (B, N, C)
+
+        # Pointwise channel-mixing part:  K_M f = (M − Mᵀ) f
+        if M_raw is not None:
+            M_skew = M_raw - M_raw.transpose(-1, -2)                               # (N, C, C)
+            K_f    = K_f + torch.einsum("ncd,bnd->bnc", M_skew, values)            # (B, N, C)
+
+        return values + dt_a * K_f                                                 # (B, N, C)
+
     # ── Euler integrator ───────────────────────────────────────────────────────
 
     def _run_euler(
@@ -310,6 +418,7 @@ class EulerianIsometry(NeuralIsometry):
         logabsdet: torch.Tensor, # (N,)
         f: torch.Tensor,         # (B, N, C)
         tspan: torch.Tensor,     # (T,)
+        method: str = "cayley",  # 'cayley' | 'backward-euler' | 'forward-euler'
     ) -> torch.Tensor:           # (B, N, C)
         N = f.shape[1]
         use_ckpt = self.gradient_checkpointing and self.training
@@ -348,10 +457,22 @@ class EulerianIsometry(NeuralIsometry):
                 else:
                     M_raw = None
 
-                # Single fused Cayley on (M + U-rank-R) generator — self-inverse under Δt ↦ -Δt.
-                return self._joint_cayley_step(
-                    _t0, _t1, U, _K_R, M_raw, logabsdet, v, self.base_acceleration
-                )
+                # Dispatch: structure-preserving Cayley | implicit backward-Euler
+                # | naive forward-Euler.
+                if method == "cayley":
+                    return self._joint_cayley_step(
+                        _t0, _t1, U, _K_R, M_raw, logabsdet, v, self.base_acceleration
+                    )
+                elif method == "backward-euler":
+                    return self._backward_euler_step(
+                        _t0, _t1, U, _K_R, M_raw, logabsdet, v, self.base_acceleration
+                    )
+                elif method == "forward-euler":
+                    return self._naive_euler_step(
+                        _t0, _t1, U, _K_R, M_raw, logabsdet, v, self.base_acceleration
+                    )
+                else:
+                    raise ValueError(f"unknown method: {method!r}")
 
             f = checkpoint(step, f, use_reentrant=False) if use_ckpt else step(f)
 
@@ -378,12 +499,13 @@ class EulerianIsometry(NeuralIsometry):
         src_field: torch.Tensor,     # (B, N, C)
         start_time: float,
         end_time: float,
+        method: str = "cayley",      # 'cayley' | 'backward-euler' | 'forward-euler'
     ):
         # Static orthogonal channel pre-mix (no-op for C=1).
         if self._use_channel_pre_mix:
             src_field = self.channel_pre_mix(src_field)                         # Q · f
         tspan = self.tspan * (end_time - start_time) + start_time
-        tgt_field = self._run_euler(src_coords, src_logabsdet, src_field, tspan)
+        tgt_field = self._run_euler(src_coords, src_logabsdet, src_field, tspan, method=method)
         return src_coords, src_logabsdet, tgt_field
 
     def pullback(
@@ -393,9 +515,10 @@ class EulerianIsometry(NeuralIsometry):
         tgt_field: torch.Tensor,     # (B, N, C)
         start_time: float,
         end_time: float,
+        method: str = "cayley",      # 'cayley' | 'backward-euler' | 'forward-euler'
     ):
         tspan = self.tspan.flip(0) * (end_time - start_time) + start_time
-        src_field = self._run_euler(tgt_coords, tgt_logabsdet, tgt_field, tspan)
+        src_field = self._run_euler(tgt_coords, tgt_logabsdet, tgt_field, tspan, method=method)
         if self._use_channel_pre_mix:
             # Reverse the static pre-mix: y · Q  (matrix multiplication on the
             # right by W=Q applies Wᵀ to each per-point channel vector).

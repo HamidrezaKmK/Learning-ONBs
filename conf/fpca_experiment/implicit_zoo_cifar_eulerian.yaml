@@ -15,7 +15,7 @@ defaults:
   - _self_
 
 function_generator:
-  n_inrs: 64
+  n_inrs: 1024
   domain_sample_size: 64
   
 # ── Isometry ──────────────────────────────────────────────────────────────────
@@ -46,8 +46,8 @@ pullback_pushforward_kwargs:
 # ── Training ──────────────────────────────────────────────────────────────────
 n_epochs: 10000
 n_epochs_mean_function: null
-batch_size: 16
-grad_accumulation_steps: 4
+batch_size: 32
+grad_accumulation_steps: 16
 max_grad_norm: 1.0
 
 isometry_optimizer_callable:

@@ -1,0 +1,70 @@
+# @package _global_
+#
+# Functional PCA on a 1-D synthetic dataset of tent + sine functions.
+#
+#     f(x) = sin(2π k x) + 2x          for x ≤ 0.5
+#     f(x) = sin(2π k (1-x)) + 2(1-x)  for x > 0.5
+#     k ~ shifted Geometric(p) on {1, 2, 3, ...}
+#
+# The function is symmetric about x=0.5 with a kink there. Heavy tails of k
+# (small p) put energy at high frequencies, where Fourier compresses poorly.
+#
+# Usage:
+#   python fpca.py +fpca_experiment=1d_fpca
+#   python fpca.py +fpca_experiment=1d_fpca wandb=enabled wandb.run_name=1d_p05
+
+defaults:
+  - /domain_samplers@domain_sampler: line_sampler
+  - /neural_isometry@neural_isometry: eulerian
+  - override /dictionaries@initial_dictionary: fourier_1d
+  - _self_
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+function_generator:
+  _target_: infidictionary.datasets.OneDimDiscontinuousGenerator
+  domain_sample_size: 64
+  p: 0.5
+  n_functions: 4096
+  seed: 42
+  random_sign: false   # flip to true → dataset becomes zero-mean by construction
+
+# ── Dictionary (1-D Fourier) ─────────────────────────────────────────────────
+initial_dictionary:
+  domain_dim: 1
+  num_channels: 1
+  steepness: 2.0
+  tiebreak_eps: 1.0e-3
+
+# ── Mean function (1-D input) ─────────────────────────────────────────────────
+mean_function:
+  input_dim: 1
+  output_dim: 1
+
+# ── Neural isometry (1-D, rank-30 Eulerian) ──────────────────────────────────
+neural_isometry:
+  coords_dim: 1
+  channels_dim: 1
+  rank: 30
+  base_acceleration: 10.
+  atom_shuffling_K: 30
+  use_power_law: True
+
+model_state_kwargs:
+  num_steps: 20
+
+# ── Training ──────────────────────────────────────────────────────────────────
+n_epochs: 4000
+batch_size: 16
+grad_accumulation_steps: 4
+max_grad_norm: 1.0
+tail_probability: 0.001
+num_tail_samples: 16
+
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 10
+
+wandb:
+  project: BasisLearning-FPCA
+  tags:
+    dataset: oned_tent_sine

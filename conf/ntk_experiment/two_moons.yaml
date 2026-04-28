@@ -48,6 +48,7 @@ checkpointing:
 regularizer:
   _target_: infidictionary.regularizers.NTKRegularizer
   ntk_model_weights_path: "???"   # set on the CLI: regularizer.ntk_model_weights_path=...
+  method: pushforward-then-compute
   ntk_model:
     _target_: infidictionary.networks.NTKMLPNeuralField
     input_dim: 2

@@ -135,7 +135,7 @@ def plot_recon_grid(methods, val_imgs_cpu, n_atoms_list, n: int, cmap: str = "Rd
         for l in range(L):
             show_field(axes[0, l], val_imgs_cpu[l], n, cmap=cmap)
         if m_idx == 0:
-            axes[0, 0].set_ylabel("orig", fontsize=8, rotation=0, labelpad=24, va="center")
+            axes[0, 0].set_ylabel("original", fontsize=8, rotation=0, labelpad=24, va="center")
         per_method = []
         for k, (recon_batch, n_atoms) in enumerate(zip(recons, n_atoms_list)):
             if m_idx == 0:
@@ -293,8 +293,8 @@ def plot_atom_mosaic(
     for c_idx, c_input in enumerate(c_vals):
         sf = subfigs[c_idx] if nC > 1 else fig
         if nC > 1:
-            ch_label = ["R", "G", "B"][c_input] if C == 3 else f"channel {c_input}"
-            sf.suptitle(f"input channel {ch_label}", fontsize=10)
+            ch_label = ["R", "G", "B"][c_input] if C == 3 else f"atom set {c_input}"
+            sf.suptitle(f"atom set {c_input}", fontsize=10)
         axes = sf.subplots(nk1, nk2, gridspec_kw={"wspace": 0.03, "hspace": 0.03})
         for ri, k1 in enumerate(k1_rev):
             for ci, k2 in enumerate(k2_vals):
@@ -388,6 +388,7 @@ def plot_atoms_comparison(
 
     fig.suptitle(title, fontsize=10)
     plt.tight_layout()
+    plt.savefig('celeba_high_res.png', dpi=500, bbox_inches='tight')
     plt.show()
 
 
@@ -601,7 +602,7 @@ def plot_psnr_line_chart(
 
 # ── Spectral compactness (3-panel: per-atom, cumulative, violin) ─────────────
 
-def plot_spectral_compactness(sq_F, sq_L, title="Spectral compactness", n_violin=10):
+def plot_spectral_compactness(sq_F, sq_L, title="Spectral compactness", n_violin=10, show_individual: bool = False):
     """3-panel figure: per-atom energy, cumulative energy, per-image violin.
 
     Args:
@@ -621,18 +622,14 @@ def plot_spectral_compactness(sq_F, sq_L, title="Spectral compactness", n_violin
     total  = max(cumE_F[-1], cumE_L[-1])
     x      = np.arange(1, A + 1)
     nv     = min(n_violin, A)
-
-    fig, axes = plt.subplots(1, 3, figsize=(18, 4.5))
-
-    # 1 — per-atom energy
-    ax = axes[0]
-    ax.plot(x, e_F, lw=1.5, label="Fourier")
-    ax.plot(x, e_L, lw=1.5, label="Learned")
-    ax.set_xlabel("atom rank  (ν descending)"); ax.set_ylabel("mean  $c_k^2$")
-    ax.set_title("Per-atom energy"); ax.legend(); ax.grid(True, alpha=0.3)
-
-    # 2 — cumulative energy
-    ax = axes[1]
+    
+    if show_individual:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+        ax = axes[0]
+    else:
+        fig, axes = plt.subplots(1, 1, figsize=(6, 4.5))
+        ax = axes
+    # 1 — cumulative energy
     ax.plot(x, cumE_F / total * 100, lw=1.5, label="Fourier")
     ax.plot(x, cumE_L / total * 100, lw=1.5, label="Learned")
     for pct in [50, 75, 90]:
@@ -640,30 +637,31 @@ def plot_spectral_compactness(sq_F, sq_L, title="Spectral compactness", n_violin
         ax.text(A * 0.97, pct + 0.8, f"{pct}%", ha='right', fontsize=7, color='grey')
     ax.set_xlabel("atom rank  (ν descending)"); ax.set_ylabel("cumulative energy  (%)")
     ax.set_title("Cumulative spectral energy"); ax.legend(); ax.grid(True, alpha=0.3)
-
-    # 3 — violin: per-image distribution for top nv atoms
-    import matplotlib.patches as mpatches
-    ax  = axes[2]
-    pos = np.arange(nv)
-    w   = 0.38
-    vp_F = ax.violinplot([sq_F[k] for k in range(nv)],
-                         positions=pos - w/2, widths=w, showmedians=True, showextrema=False)
-    vp_L = ax.violinplot([sq_L[k] for k in range(nv)],
-                         positions=pos + w/2, widths=w, showmedians=True, showextrema=False)
-    for vp, col in [(vp_F, "C0"), (vp_L, "C1")]:
-        for body in vp["bodies"]:
-            body.set_facecolor(col); body.set_alpha(0.5)
-        vp["cmedians"].set_color(col); vp["cmedians"].set_linewidth(1.5)
-    ax.set_xticks(pos)
-    ax.set_xticklabels([str(k + 1) for k in range(nv)], fontsize=6)
-    ax.set_xlabel("atom rank  (ν descending)")
-    ax.set_ylabel("$c_k^2$")
-    ax.set_title(f"Per-image energy distribution (top {nv} atoms)")
-    ax.legend(handles=[
-        mpatches.Patch(color="C0", alpha=0.7, label="Fourier"),
-        mpatches.Patch(color="C1", alpha=0.7, label="Learned"),
-    ])
-    ax.grid(True, alpha=0.3, axis="y")
+    
+    if show_individual:
+        # 2 — violin: per-image distribution for top nv atoms
+        import matplotlib.patches as mpatches
+        ax  = axes[1]
+        pos = np.arange(nv)
+        w   = 0.38
+        vp_F = ax.violinplot([sq_F[k] for k in range(nv)],
+                            positions=pos - w/2, widths=w, showmedians=True, showextrema=False)
+        vp_L = ax.violinplot([sq_L[k] for k in range(nv)],
+                            positions=pos + w/2, widths=w, showmedians=True, showextrema=False)
+        for vp, col in [(vp_F, "C0"), (vp_L, "C1")]:
+            for body in vp["bodies"]:
+                body.set_facecolor(col); body.set_alpha(0.5)
+            vp["cmedians"].set_color(col); vp["cmedians"].set_linewidth(1.5)
+        ax.set_xticks(pos)
+        ax.set_xticklabels([str(k + 1) for k in range(nv)], fontsize=6)
+        ax.set_xlabel("atom rank  (ν descending)")
+        ax.set_ylabel("$c_k^2$")
+        ax.set_title(f"Per-image energy distribution (top {nv} atoms)")
+        ax.legend(handles=[
+            mpatches.Patch(color="C0", alpha=0.7, label="Fourier"),
+            mpatches.Patch(color="C1", alpha=0.7, label="Learned"),
+        ])
+        ax.grid(True, alpha=0.3, axis="y")
 
     plt.suptitle(title, fontsize=12)
     plt.tight_layout()
