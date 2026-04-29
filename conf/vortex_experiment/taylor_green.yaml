@@ -1,0 +1,48 @@
+# @package _global_
+#
+# Usage:
+#   python reg_cob.py +vortex_experiment=taylor_green
+#   python reg_cob.py +vortex_experiment=taylor_green wandb=enabled wandb.run_name=my_run
+
+defaults:
+  - override /neural_fields@neural_isometry.scalar_field_partial: nerf_spatiotemporal_field
+  - _self_
+
+initial_dictionary:
+  num_channels: 1
+  steepness: 2.0
+  tiebreak_eps: 1.0e-3
+  # pmf_mode: uniform
+  # truncation: 20
+
+neural_isometry:
+  channels_dim: 1
+  rank: 10
+  base_acceleration: 1000.
+  atom_shuffling_K: 20
+  use_power_law: True
+
+model_state_kwargs:
+  num_steps: 50
+
+tail_probability: 0.0001
+num_tail_samples: 32
+grad_accumulation_steps: 8
+max_grad_norm: 1.0
+
+regularizer:
+  _target_: infidictionary.regularizers.TaylorGreenVortex
+  domain_sample_size: 32
+  total_time: 0.5      # integration time of the vortex flow
+  num_steps: 16        # RK4 steps (dt = total_time / num_steps)
+  amplitude: 1.0       # velocity scaling A
+  wavenumber: 1        # integer k; 1 gives the single-swirl pattern
+
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 2
+
+wandb:
+  project: BasisLearning-vortex
+  tags:
+    method: taylor_green_vortex

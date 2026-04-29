@@ -90,6 +90,7 @@ class CelebADataset(IrregularDataset):
         to_tensor = transforms.Compose(tfs)
 
         ds = load_dataset(dataset_name, split="train", streaming=True)
+        ds = ds.shuffle(seed=42, buffer_size=10_000)
         it = iter(ds)
         signals = []
         for _ in range(n_images):

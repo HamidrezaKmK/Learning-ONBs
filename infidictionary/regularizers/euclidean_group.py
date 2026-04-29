@@ -1,16 +1,14 @@
 from typing import Sequence, Tuple
 
-from .base import Regularizer, _eval_pushed_atoms
 import torch
 
-from infidictionary.utils import norm2, parallel_inner_product
-from infidictionary.domain_samplers import SquareSampler
+from .volume_preserving import VolumePreserving
 
 
 _QUARTER_TURN_TABLE = [(1, 0), (0, 1), (-1, 0), (0, -1)]  # (cos, sin) for k * 90°
 
 
-class EuclideanGroup(Regularizer):
+class EuclideanGroup(VolumePreserving):
     """Regularizer enforcing ``Q phi_k(x) ≈ phi_k(T(x))`` for a fixed
     transformation ``T`` of the d-torus.
 
@@ -41,10 +39,7 @@ class EuclideanGroup(Regularizer):
         rotation_quarter_turns: Sequence[int],
         mirrors: Tuple,
     ):
-        super().__init__(
-            domain_sampler=SquareSampler(stratified=True, add_noise=True),
-            domain_sample_size=domain_sample_size,
-        )
+        super().__init__(domain_sample_size=domain_sample_size)
         self.translation = torch.tensor(translation)
         self.d = len(translation)
 
@@ -85,34 +80,8 @@ class EuclideanGroup(Regularizer):
         self.mirrors = mirrors
 
     def transform(self, coords: torch.Tensor) -> torch.Tensor:
-        
         transformed_coordinates = coords @ self.rotation - self.translation
         for dim, mirror in enumerate(self.mirrors):
             if mirror:
                 transformed_coordinates[:, dim] = 1.0 - transformed_coordinates[:, dim]
         return transformed_coordinates % 1.0  # wrap around to [0, 1)
-        
-    def update_coordinates(self, neural_isometry, pushforward_kwargs) -> None:
-        super().update_coordinates(neural_isometry, pushforward_kwargs)
-        self._transformed_coords = self.transform(self._coords)
-
-    def compute_energy(
-        self, neural_isometry, initial_dictionary, indices, pushforward_kwargs
-    ) -> torch.Tensor:
-        # TODO: fix the issues that apprear when things are Lagrangian
-        tgt_coords = self._coords.to(indices.device)
-        tgt_transformed_coords = self._transformed_coords.to(indices.device)
-        N, d = tgt_coords.shape
-        device = tgt_coords.device
-        dtype = tgt_coords.dtype
-
-        true_transformed = initial_dictionary.get_atoms(tgt_transformed_coords, indices)  # (A, N, C)
-
-        _, pushforwarded_f,  _ = _eval_pushed_atoms(
-            neural_isometry, initial_dictionary, tgt_coords,  indices, pushforward_kwargs
-        ) # (A, N, C)
-
-        diff = pushforwarded_f - true_transformed  # (A, N, C)
-        return norm2(
-            diff, logabsdet=torch.zeros(N, device=device, dtype=dtype)
-        )

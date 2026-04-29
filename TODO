@@ -1,11 +1,14 @@
+[] Get FPCA on faces
+[] Simplify the figure with the atoms
+[] Fix the font
+[] Fix the visualization of the 1D reconstructions
+[] Simplify the 
 
-[] Cayley plot machine zero
-[] 
-[] Make sure the Cat example is reproducible
+
+[] Run the artistic example in the background
+[] Run the Taylor-green vortex example  in the background
 
 --------
-
-[] There's something wrong with the multichannel code probably, the basis is not changing that much
 
 [] Create a very simple Laplacian experiment as the running example
 [] Add multiple options for the PMF of Infidictionary, apart from the geometric with a shell,
@@ -31,6 +34,3 @@ Side Experiments:
 [] For the Monte-carlo methods, try a mix of pushforward pullback rather than just pushforward
 [] Implement the Adjoint method of the Cayley ODE solver in case I increase the number of steps
 [] Use a simple Haar wavelet basis instead of the Fourier basis for the celeba example.
-
-
-

@@ -27,10 +27,10 @@ from nbclient.exceptions import CellExecutionError
 # ── Edit me ─────────────────────────────────────────────────────────────────
 NOTEBOOKS: list[tuple[str, dict]] = [
     # 1D PCA with all of the ablations
-    # ("notebooks/fpca_1d.ipynb", {
-    #     "CHECKPOINT_DIR":  "../outputs/checkpoints/wandb-5yylqjxg",
-    #     "CHECKPOINT_FILE": "step_3520.pt",
-    # }),
+    ("notebooks/fpca_1d.ipynb", {
+        "CHECKPOINT_DIR":  "../outputs/checkpoints/wandb-5yylqjxg",
+        "CHECKPOINT_FILE": "step_3520.pt",
+    }),
     # FPCA experiment on INRs
     # ("notebooks/inr_fpca.ipynb", {
     #     "CHECKPOINT_DIR":  "../outputs/checkpoints/wandb-39iw3oae",
@@ -52,15 +52,15 @@ NOTEBOOKS: list[tuple[str, dict]] = [
     #     "INSET_TARGET": 64,
     # }),
     ### FPCA on CelebA
-    # ("notebooks/fpca.ipynb", {
+    # ("notebooks/fpca_celeba.ipynb", {
     #     "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-i28fso8p",
     #     "CHECKPOINT_FILE": "step_3480.pt",
     # }),
-    # ("notebooks/fpca.ipynb", {
+    # ("notebooks/fpca_celeba.ipynb", {
     #     "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-n4tfx41g",
     #     "CHECKPOINT_FILE": "step_5100.pt",
     # }),
-    # ("notebooks/fpca.ipynb", {
+    # ("notebooks/fpca_celeba.ipynb", {
     #     "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-4g6w8iu7",
     #     "CHECKPOINT_FILE": "step_2160.pt",
     # }),
