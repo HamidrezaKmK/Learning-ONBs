@@ -10,7 +10,7 @@ defaults:
 
 initial_dictionary:
   num_channels: 1
-  steepness: 2.0
+  steepness: 1.1
   tiebreak_eps: 1.0e-3
   # pmf_mode: uniform
   # truncation: 20

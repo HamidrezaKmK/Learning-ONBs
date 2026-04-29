@@ -8,6 +8,7 @@ from infidictionary.networks import NeuralField
 def estimate_ntk(
     model: NeuralField,
     coords: torch.Tensor,  # (N, d)
+    batch_size: int | None = None,
 ) -> torch.Tensor:
     """Empirical Neural Tangent Kernel at the model's current parameters.
 
@@ -18,8 +19,13 @@ def estimate_ntk(
     no perturbation — just the kernel at the current weights.
 
     Args:
-        model:  neural field; NTK is centred on its current parameter vector.
-        coords: (N, d) evaluation points.
+        model:      neural field; NTK is centred on its current parameter vector.
+        coords:     (N, d) evaluation points.
+        batch_size: if set, the Jacobian is computed in chunks of this many
+                    points, with each chunk detached and moved to CPU before
+                    the next chunk starts.  Reduces peak VRAM at the cost of
+                    more sequential Jacobian calls.  None uses the original
+                    single-pass behaviour (backward compatible).
 
     Returns:
         K: (N*C, N*C) NTK matrix, detached from the computation graph,
@@ -34,13 +40,44 @@ def estimate_ntk(
         dummy = model(coords[:1])
     C = dummy.shape[-1]
 
-    def f_params(*thetas):
-        theta_dict = dict(zip(param_names, thetas))
-        return functional_call(model, theta_dict, (coords,)).reshape(-1)  # (N*C,)
+    if batch_size is None:
+        def f_params(*thetas):
+            theta_dict = dict(zip(param_names, thetas))
+            return functional_call(model, theta_dict, (coords,)).reshape(-1)  # (N*C,)
 
-    J_tuple = torch.autograd.functional.jacobian(f_params, theta_tuple)
-    J = torch.cat([j.reshape(N * C, -1) for j in J_tuple], dim=-1)  # (N*C, n_params)
-    return (J @ J.T).detach()
+        J_tuple = torch.autograd.functional.jacobian(f_params, theta_tuple)
+        J = torch.cat([j.reshape(N * C, -1) for j in J_tuple], dim=-1)  # (N*C, n_params)
+        return (J @ J.T).detach()
+
+    # ── Batched path ──────────────────────────────────────────────────────
+    # Compute J in row-batches, offload each block to CPU, then assemble K.
+    Js = []  # list of CPU tensors, each (n_b*C, n_params)
+    for start in range(0, N, batch_size):
+        batch = coords[start:start + batch_size]
+        n_b = batch.shape[0]
+
+        def f_batch(*thetas, _b=batch, _n=n_b):
+            theta_dict = dict(zip(param_names, thetas))
+            return functional_call(model, theta_dict, (_b,)).reshape(-1)  # (n_b*C,)
+
+        J_tuple = torch.autograd.functional.jacobian(f_batch, theta_tuple)
+        J_block = torch.cat([j.reshape(n_b * C, -1) for j in J_tuple], dim=-1)
+        Js.append(J_block.detach().cpu())
+
+    # Assemble K = J_all @ J_all.T block by block on the GPU.
+    K = torch.zeros(N * C, N * C)
+    row = 0
+    for J_i in Js:
+        n_i = J_i.shape[0]
+        J_i_gpu = J_i.to(device)
+        col = 0
+        for J_j in Js:
+            n_j = J_j.shape[0]
+            K[row:row + n_i, col:col + n_j] = (J_i_gpu @ J_j.to(device).T).cpu()
+            col += n_j
+        row += n_i
+
+    return K
 
 
 def fft_ntk_eigenvalues(
