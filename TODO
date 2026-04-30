@@ -1,10 +1,4 @@
 [] Sort the PCA bases according to their explained variance and also print out the explained variance
-[] Log-scale visualization of the power-spectrum
-[] Decouple the 1D signal reconstructions and just pick a favourite signal
-[] Cayley quantitative plot can be broken in the y-axis
-[] For the Forward Euler failure mode create cute explosions in the Legend
-[] Intermediate celeba deformed basis.
-[] Relative error in energy presrvation plots and put them underneath the signals, keep RK2 and a chart of energies next to it.
 [] Run the Taylor-green vortex example  in the background
 
 --------

@@ -1,16 +1,150 @@
-"""Run notebooks and extract every PNG output to outputs/figures/<name>/v<i>/cell_<j>.png.
+"""Batch-execute notebooks and export every figure as an editable PDF for Overleaf.
 
-Each entry in ``NOTEBOOKS`` is a ``(notebook_path, params)`` tuple. ``params``
-is a dict of variable overrides; they are injected via a code cell placed
-right after the notebook's ``parameters``-tagged cell (papermill convention).
-When the same notebook appears multiple times, outputs go into ``v0``,
-``v1``, ... in order of appearance.
-
-Cell-by-cell execution: on the first error, the notebook is flagged with the
-failing cell index and the rest of its cells are skipped.
-
-Usage:
+Usage
+-----
     python extract_notebook_figures.py
+
+Edit the ``NOTEBOOKS`` list near the top of this file to control which notebooks
+run and what parameters they receive.  Everything else is automatic.
+
+
+What it does
+------------
+For each entry in ``NOTEBOOKS`` the script:
+
+1.  Reads the notebook with nbformat and injects two code cells:
+      - A *preamble* cell at position 0 (matplotlib rcParams, LaTeX setup,
+        safety-net patches — see "Compiler modes" below).
+      - An *overrides* cell immediately after the notebook's ``parameters``-
+        tagged cell (papermill convention) that assigns the key/value pairs
+        from the ``params`` dict, overriding any defaults in the notebook.
+
+2.  Executes the notebook cell-by-cell via nbclient using the
+    ``infidictionary`` Jupyter kernel (configurable via ``KERNEL_NAME``).
+    On the first ``CellExecutionError`` the rest of the notebook is skipped
+    and the failure is recorded; the B-pass (see below) is also skipped.
+
+3.  After each cell, every ``application/pdf`` output is decoded from base64
+    and written to disk as::
+
+        <OUTPUT_DIR>/<notebook-stem>/<ASSET_FOLDER>/cell_{A|B}_{cell}_{fig}.pdf
+
+4.  Each notebook is run **twice**:
+      - **Pass A** — full labels, titles, axes, and legends.  The PDF contains
+        readable annotations matching the notebook as authored.
+      - **Pass B** — clean / transparent version.  All titles, axis labels,
+        legends, tick labels, and text annotations are stripped; the figure
+        background is set transparent.  Intended for Illustrator / Affinity
+        layouts where labels are added manually.
+
+    Both passes land in the same ``ASSET_FOLDER`` subdirectory.  If pass A
+    fails, pass B is skipped entirely.
+
+5.  Errors are reported on stdout and also appended to ``extraction_err_log.log``
+    (configurable via ``LOG_FILE``) with full pdflatex output and tracebacks.
+
+
+Outputs
+-------
+PDFs land at::
+
+    <OUTPUT_DIR>/<notebook-stem>/<ASSET_FOLDER>/cell_A_<cell>_<fig>.pdf   ← labelled
+    <OUTPUT_DIR>/<notebook-stem>/<ASSET_FOLDER>/cell_B_<cell>_<fig>.pdf   ← clean
+
+``OUTPUT_DIR`` defaults to ``../overleaf/Learning-Basis-Functions/notebook_generations``
+(sibling Overleaf repo).  ``cell`` and ``fig`` are zero-based indices counting
+only user cells (the injected preamble and override cells are excluded).
+
+``extraction_err_log.log`` is created / overwritten at the start of each run
+and accumulates pdflatex error logs, unknown-Unicode warnings, and full
+CellExecutionError tracebacks.
+
+
+Compiler modes  (``COMPILER_MODE`` key in params)
+--------------------------------------------------
+Each notebook entry can set ``"COMPILER_MODE"`` to one of:
+
+``"latex"`` (default)
+    Enables ``text.usetex=True``, Times-roman font family, and the full
+    LaTeX safety-net described below.  Produces PDF text that matches the
+    NeurIPS paper body font and is editable as live text in Illustrator /
+    Affinity Designer.
+
+``"normal"``
+    Uses matplotlib's built-in mathtext renderer (``text.usetex=False``).
+    No pdflatex dependency.  Useful when a notebook has strings that are
+    hard to escape, or when you just want a quick render without LaTeX.
+
+
+System requirements
+-------------------
+The script is designed to run inside the ``infidictionary`` conda environment.
+That environment contains ``texlive-core`` (conda-forge), but as of the current
+package version its Perl helper scripts (``mktexlsr.pl`` etc.) and pre-built
+format files (``latex.fmt``) are absent, so its ``pdflatex`` cannot initialise.
+
+The preamble therefore **prepends ``/usr/bin`` to PATH** inside each kernel so
+that the system TeX Live installation is used instead.  You need:
+
+- **System TeX Live** installed and reachable at ``/usr/bin/pdflatex``.
+  On Ubuntu/Debian::
+
+      sudo apt install texlive-latex-base texlive-fonts-recommended
+
+  Verify with::
+
+      pdflatex --version   # should print TeX Live 2023 or later
+
+- The following LaTeX packages must be available in the system TeX Live
+  (all present in ``texlive-latex-base`` / ``texlive-fonts-recommended``):
+
+      times     amsmath     amssymb
+
+- **Python packages** (all in the conda env):  ``nbformat``, ``nbclient``,
+  ``matplotlib >= 3.6``, ``matplotlib-inline``.
+
+If you move to a machine where the system TeX Live is at a different path,
+update the ``_os.environ['PATH']`` line near the top of ``_LATEX_BASE``.
+
+
+LaTeX safety net (latex mode only)
+-----------------------------------
+Notebook strings are written for human readers, not pdflatex.  To avoid
+hand-escaping every label the preamble monkey-patches
+``matplotlib.texmanager.TexManager._get_tex_source`` so each string is
+normalised just before pdflatex sees it.  Three layers:
+
+1.  **String normaliser** — maps ~260 Unicode codepoints (Greek, blackboard
+    bold, calligraphic, arrows, relations, sub/superscripts, …) to their LaTeX
+    commands; escapes ``# % & ~`` in text mode; tracks ``$...$`` so user-
+    written math is passed through unchanged.
+
+2.  **Unknown-Unicode drop** — any non-ASCII codepoint not in the map is
+    silently dropped with a one-time warning written to stderr *and* to
+    ``extraction_err_log.log``.  Prevents "missing glyph" crashes from rare
+    symbols.  To render them, add the codepoint to ``_UNICODE_MATH`` in the
+    script and re-run.
+
+3.  **Figure-level fallback** — if pdflatex still crashes (mismatched ``$``,
+    broken custom command, etc.) the figure is re-rendered with
+    ``text.usetex=False`` (mathtext) so the build never loses a figure.  The
+    full pdflatex error log is written to ``extraction_err_log.log``.
+
+
+Adding a new notebook
+---------------------
+Append a tuple to ``NOTEBOOKS``::
+
+    ("notebooks/my_notebook.ipynb", {
+        "ASSET_FOLDER":   "my-output-folder",   # required; names the output dir
+        "COMPILER_MODE":  "latex",               # or "normal"
+        "MY_PARAM":       42,                    # any variable the notebook reads
+    }),
+
+The notebook must have a code cell tagged ``parameters`` (the first cell that
+has ``"parameters"`` in its ``metadata.tags`` list).  The override cell is
+inserted immediately after it.  If the tag is missing the run fails with a
+clear error message.
 """
 from __future__ import annotations
 
@@ -60,30 +194,30 @@ NOTEBOOKS: list[tuple[str, dict]] = [
     #     "INSET_TARGET": 64,
     # }),
     ## FPCA on CelebA
-    ("notebooks/fpca_celeba.ipynb", {
-        "ASSET_FOLDER": "celeba-fpca-first-1024",
-        "COMPILER_MODE": "latex",
-        "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-i28fso8p",
-        "CHECKPOINT_FILE": "step_3480.pt",
-    }),
-    ("notebooks/fpca_celeba.ipynb", {
-        "ASSET_FOLDER": "celeba-fpca-first-64",
-        "COMPILER_MODE": "normal",
-        "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-n4tfx41g",
-        "CHECKPOINT_FILE": "step_5100.pt",
-    }),
-    ("notebooks/fpca_celeba.ipynb", {
-        "ASSET_FOLDER": "celeba-fpca-first-6",
-        "COMPILER_MODE": "normal",
-        "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-4g6w8iu7",
-        "CHECKPOINT_FILE": "step_2160.pt",
-    }),
-    ("notebooks/fpca_celeba.ipynb", {
-        "ASSET_FOLDER": "celeba-fpca-shuffled-1024",
-        "COMPILER_MODE": "latex",
-        "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-at6x2m3n",
-        "CHECKPOINT_FILE": "step_1540.pt",
-    }),
+    # ("notebooks/fpca_celeba.ipynb", {
+    #     "ASSET_FOLDER": "celeba-fpca-first-1024",
+    #     "COMPILER_MODE": "latex",
+    #     "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-i28fso8p",
+    #     "CHECKPOINT_FILE": "step_3480.pt",
+    # }),
+    # ("notebooks/fpca_celeba.ipynb", {
+    #     "ASSET_FOLDER": "celeba-fpca-first-64",
+    #     "COMPILER_MODE": "latex",
+    #     "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-n4tfx41g",
+    #     "CHECKPOINT_FILE": "step_5100.pt",
+    # }),
+    # ("notebooks/fpca_celeba.ipynb", {
+    #     "ASSET_FOLDER": "celeba-fpca-first-6",
+    #     "COMPILER_MODE": "latex",
+    #     "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-4g6w8iu7",
+    #     "CHECKPOINT_FILE": "step_2160.pt",
+    # }),
+    # ("notebooks/fpca_celeba.ipynb", {
+    #     "ASSET_FOLDER": "celeba-fpca-shuffled-1024",
+    #     "COMPILER_MODE": "latex",
+    #     "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-at6x2m3n",
+    #     "CHECKPOINT_FILE": "step_1540.pt",
+    # }),
     # Volume Preserving
     # ("notebooks/volume_preserving.ipynb", {
     #     "ASSET_FOLDER": "taylor-green",
@@ -98,10 +232,19 @@ NOTEBOOKS: list[tuple[str, dict]] = [
     #     "CKPT_DIR": "outputs/checkpoints/wandb-2ymvx2m8",
     #     "CKPT_FILE": "step_3650.pt",
     # }),
+    # Concept bases
+    ("notebooks/concept_basis.ipynb", {
+        "ASSET_FOLDER": "art",
+        "COMPILER_MODE": "latex",
+        "NAME": "SDS",
+        "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-ubqul893",
+        "CHECKPOINT_FILE": "step_3008.pt",
+    }),
 ]
 
 # Overleaf path for sync
 OUTPUT_DIR = Path("../overleaf/Learning-Basis-Functions/notebook_generations")
+LOG_FILE   = Path("extraction_err_log.log")  # pdflatex errors + cell failures
 DPI = 200           # resolution for any rasterised content inside the PDFs
 EXECUTION_TIMEOUT = -1  # per-cell, in seconds; -1 = no timeout
 KERNEL_NAME = "infidictionary"   # override the notebook's kernelspec; None = use what the .ipynb says
@@ -126,6 +269,10 @@ _LATEX_PREAMBLE = (
 )
 
 _LATEX_BASE = f"""\
+import os as _os
+# conda's texlive-core is incomplete (missing Perl scripts / format files);
+# put /usr/bin first so pdflatex and mktexfmt resolve to the system TeX Live.
+_os.environ['PATH'] = '/usr/bin:' + _os.environ.get('PATH', '')
 import matplotlib as _mpl
 _mpl.rcParams.update({{
     'text.usetex':         True,
@@ -146,6 +293,7 @@ try:
     set_matplotlib_formats('pdf')
 except Exception:
     pass
+_LOG_FILE = {str(LOG_FILE.resolve())!r}
 
 # ── LaTeX safety net: normalise strings on the way to pdflatex ──────────────
 _UNICODE_MATH = {{
@@ -269,11 +417,16 @@ def _drop_unknown_unicode(c):
         return c
     if c not in _UNKNOWN_UNICODE_SEEN:
         _UNKNOWN_UNICODE_SEEN.add(c)
+        _msg = (f'[extract_notebook_figures] unmapped Unicode {{c!r}} (U+{{ord(c):04X}}) '
+                f'dropped from LaTeX-bound string — add to _UNICODE_MATH or _UNICODE_TEXT '
+                f'if you want it rendered.\\n')
         import sys as _sys
-        _sys.stderr.write(
-            f'[extract_notebook_figures] unmapped Unicode {{c!r}} (U+{{ord(c):04X}}) '
-            f'dropped from LaTeX-bound string — add to _UNICODE_MATH or _UNICODE_TEXT '
-            f'if you want it rendered.\\n')
+        _sys.stderr.write(_msg)
+        try:
+            with open(_LOG_FILE, 'a') as _lf:
+                _lf.write(_msg)
+        except Exception:
+            pass
     return ''
 
 def _normalize_latex_string(s):
@@ -341,6 +494,13 @@ try:
             _sys.stderr.write(
                 '[extract_notebook_figures] pdflatex failed on this figure; '
                 'retrying with text.usetex=False (mathtext fallback).\\n')
+            try:
+                with open(_LOG_FILE, 'a') as _lf:
+                    _lf.write('[extract_notebook_figures] pdflatex error:\\n')
+                    _lf.write(str(e))
+                    _lf.write('\\n' + '-' * 60 + '\\n')
+            except Exception:
+                pass
             _prev = _mpl.rcParams['text.usetex']
             _mpl.rcParams['text.usetex'] = False
             try:
@@ -375,80 +535,16 @@ except Exception:
     pass
 """
 
-# Mode A: full labels / captions, editable PDF.
-NORMAL_PREAMBLE = _LATEX_BASE            # latex mode
-NORMAL_PREAMBLE_NO_LATEX = _NORMAL_BASE  # normal mode
+PREAMBLE          = _LATEX_BASE   # compiler_mode="latex"
+PREAMBLE_NO_LATEX = _NORMAL_BASE  # compiler_mode="normal"
 
-# Mode B: all text and axes stripped, transparent background, editable PDF.
-# Patches IPython's display formatter for Figure so every rendering path
-# (plt.show, display(fig), auto-display, flush_figures) goes through
-# _clean_figure before the PDF bytes are produced.
-_CLEAN_EXTRA = """\
 
-_mpl.rcParams['savefig.transparent'] = True
-
-def _clean_figure(_fig):
-    _fig.patch.set_alpha(0.0)
-    if getattr(_fig, '_suptitle', None) is not None:
-        _fig._suptitle.set_visible(False)
-    for _txt in list(_fig.texts):
-        _txt.set_visible(False)
-    for _ax in _fig.get_axes():
-        _ax.set_facecolor((0, 0, 0, 0))
-        try:
-            _ax.set_title('', loc='left')
-            _ax.set_title('', loc='center')
-            _ax.set_title('', loc='right')
-        except Exception:
-            _ax.set_title('')
-        _ax.set_xlabel('')
-        _ax.set_ylabel('')
-        if hasattr(_ax, 'set_zlabel'):
-            try:
-                _ax.set_zlabel('')
-            except Exception:
-                pass
-        _ax.axis('off')
-        _leg = _ax.get_legend()
-        if _leg is not None:
-            _leg.remove()
-        for _txt in list(_ax.texts):
-            _txt.set_visible(False)
-        try:
-            _ax.set_xticklabels([])
-            _ax.set_yticklabels([])
-        except Exception:
-            pass
-
-import matplotlib.pyplot as _plt_init
-del _plt_init
-
-try:
-    from IPython import get_ipython as _get_ipython
-    from matplotlib.figure import Figure as _Figure_cls
-    _ip = _get_ipython()
-    if _ip is not None:
-        for _mime in ('application/pdf', 'image/png', 'image/jpeg', 'image/svg+xml'):
-            _formatter = _ip.display_formatter.formatters.get(_mime)
-            if _formatter is None:
-                continue
-            try:
-                _orig = _formatter.lookup_by_type(_Figure_cls)
-            except KeyError:
-                continue
-            def _make_wrapped(_orig_func):
-                def _wrapped(_fig):
-                    _clean_figure(_fig)
-                    return _orig_func(_fig)
-                return _wrapped
-            _formatter.for_type(_Figure_cls, _make_wrapped(_orig))
-except Exception as _patch_err:
-    import warnings
-    warnings.warn('clean-mode formatter patch failed: ' + str(_patch_err))
-"""
-
-CLEAN_PREAMBLE = _LATEX_BASE + _CLEAN_EXTRA            # latex mode
-CLEAN_PREAMBLE_NO_LATEX = _NORMAL_BASE + _CLEAN_EXTRA  # normal mode
+def _append_log(text: str) -> None:
+    try:
+        with LOG_FILE.open("a") as fh:
+            fh.write(text)
+    except Exception:
+        pass
 
 
 def find_parameters_cell(nb) -> int | None:
@@ -463,8 +559,8 @@ def render_overrides(params: dict) -> str:
     return f"# Injected overrides from extract_notebook_figures.py\n{body}\n"
 
 
-def save_figures_from_cell(cell, target_dir: Path, prefix: str, cell_index: int) -> int:
-    """Write every PDF figure in a cell as cell_{prefix}_{cell_index}_{fig_index}.pdf."""
+def save_figures_from_cell(cell, target_dir: Path, cell_index: int) -> int:
+    """Write every PDF figure in a cell as cell_{cell_index}_{fig_index}.pdf."""
     if cell.cell_type != "code":
         return 0
     written = 0
@@ -472,20 +568,18 @@ def save_figures_from_cell(cell, target_dir: Path, prefix: str, cell_index: int)
         pdf_b64 = output.get("data", {}).get("application/pdf")
         if pdf_b64 is None:
             continue
-        path = target_dir / f"cell_{prefix}_{cell_index}_{written}.pdf"
+        path = target_dir / f"cell_{cell_index}_{written}.pdf"
         path.write_bytes(base64.b64decode(pdf_b64))
         written += 1
     return written
 
 
 def run_notebook(
-    nb_path: Path, params: dict, target_dir: Path, prefix: str,
+    nb_path: Path, params: dict, target_dir: Path,
     compiler_mode: str = "latex",
 ) -> tuple[bool, str | None, int]:
-    """Execute ``nb_path`` cell-by-cell and save PDFs with the given prefix.
+    """Execute ``nb_path`` cell-by-cell and save PDFs.
 
-    prefix="A" uses the normal preamble; prefix="B" uses the clean preamble
-    (transparent background, all text/axes/legends stripped).
     compiler_mode="latex" enables Times/usetex rendering; "normal" skips LaTeX.
     Returns (ok, error_msg, figure_count).
     """
@@ -504,10 +598,7 @@ def run_notebook(
         override.metadata["__figure_extractor_injected__"] = True
         nb.cells.insert(param_idx + 1, override)
 
-    if compiler_mode == "latex":
-        preamble_src = NORMAL_PREAMBLE if prefix == "A" else CLEAN_PREAMBLE
-    else:
-        preamble_src = NORMAL_PREAMBLE_NO_LATEX if prefix == "A" else CLEAN_PREAMBLE_NO_LATEX
+    preamble_src = PREAMBLE if compiler_mode == "latex" else PREAMBLE_NO_LATEX
     preamble = nbformat.v4.new_code_cell(source=preamble_src)
     preamble.metadata["__figure_extractor_injected__"] = True
     nb.cells.insert(0, preamble)
@@ -531,10 +622,16 @@ def run_notebook(
             except CellExecutionError as exc:
                 first_line = exc.evalue.splitlines()[0] if exc.evalue else ""
                 msg = f"cell {user_index}: {exc.ename}: {first_line}"
+                _append_log(
+                    f"\n=== CellExecutionError in {nb_path} ===\n"
+                    f"{msg}\n"
+                    f"{exc.evalue or ''}\n"
+                    + "-" * 60 + "\n"
+                )
                 return False, msg, total_figs
             if cell.metadata.get("__figure_extractor_injected__"):
                 continue
-            total_figs += save_figures_from_cell(cell, target_dir, prefix, user_index)
+            total_figs += save_figures_from_cell(cell, target_dir, user_index)
             user_index += 1
 
     return True, None, total_figs
@@ -542,6 +639,10 @@ def run_notebook(
 
 def main() -> int:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    import datetime
+    LOG_FILE.write_text(
+        f"=== extract_notebook_figures run {datetime.datetime.now().isoformat()} ===\n\n"
+    )
     failures: list[tuple[str, int, str]] = []
 
     seen: dict[str, int] = {}
@@ -563,28 +664,19 @@ def main() -> int:
             failures.append((nb_str, folder_name, "file not found"))
             continue
 
-        # Fresh directory shared by both A and B passes.
+        # Wipe and recreate target dir so stale figures from earlier runs are removed.
         if target_dir.exists():
             shutil.rmtree(target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        all_ok = True
-        total = 0
-        for prefix in ("A", "B"):
-            print(f"[RUN ] {nb_path} [{folder_name}] [{prefix}]  ->  {target_dir}")
-            ok, err, n_figs = run_notebook(nb_path, params, target_dir, prefix, compiler_mode)
-            plural = "s" if n_figs != 1 else ""
-            total += n_figs
-            if ok:
-                print(f"[ OK ] {nb_path} [{folder_name}] [{prefix}]  ({n_figs} figure{plural})")
-            else:
-                print(f"[FAIL] {nb_path} [{folder_name}] [{prefix}]: {err}  ({n_figs} figure{plural} before failure)")
-                failures.append((nb_str, folder_name, f"[{prefix}] {err or 'unknown error'}"))
-                all_ok = False
-                break  # don't run B if A already failed
-
-        if all_ok:
-            print(f"[ OK ] {nb_path} [{folder_name}]  ({total} figures total, A+B)")
+        print(f"[RUN ] {nb_path} [{folder_name}]  ->  {target_dir}")
+        ok, err, n_figs = run_notebook(nb_path, params, target_dir, compiler_mode)
+        plural = "s" if n_figs != 1 else ""
+        if ok:
+            print(f"[ OK ] {nb_path} [{folder_name}]  ({n_figs} figure{plural})")
+        else:
+            print(f"[FAIL] {nb_path} [{folder_name}]: {err}  ({n_figs} figure{plural} before failure)")
+            failures.append((nb_str, folder_name, err or "unknown error"))
 
     print()
     if failures:

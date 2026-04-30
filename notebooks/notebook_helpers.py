@@ -388,7 +388,6 @@ def plot_atoms_comparison(
 
     fig.suptitle(title, fontsize=10)
     plt.tight_layout()
-    plt.savefig('celeba_high_res.png', dpi=500, bbox_inches='tight')
     plt.show()
 
 
@@ -600,69 +599,103 @@ def plot_psnr_line_chart(
     plt.show()
 
 
-# ── Spectral compactness (3-panel: per-atom, cumulative, violin) ─────────────
+# ── Spectral compactness ─────────────────────────────────────────────────────
 
-def plot_spectral_compactness(sq_F, sq_L, title="Spectral compactness", n_violin=10, show_individual: bool = False):
-    """3-panel figure: per-atom energy, cumulative energy, per-image violin.
+def plot_spectral_compactness(
+    methods,
+    title=None,
+    xlabel="K  (number of atoms)",
+    xscale="log",
+    figsize=(12, 3.6),
+    ref_lines=(0.50, 0.75, 0.90),
+    axes=None,
+):
+    """Two-panel spectral compactness plot: cumulative energy and log residual.
 
-    Args:
-        sq_F:     ``(A, M)`` squared Fourier coefficients (CPU tensor or ndarray).
-        sq_L:     ``(A, M)`` squared learned-basis coefficients.
-        title:    Figure super-title.
-        n_violin: How many top-ν atoms to show in the violin panel.
+    Matches the style of the 1-D FPCA notebook (section 7). Both panels share
+    a log x-axis; the right panel uses a log y-axis so power-law decay appears
+    linear. Optional per-method std bands via ``fill_between``.
+
+    Parameters
+    ----------
+    methods : list of dicts, each with keys
+        label  — legend label
+        xs     — 1-D array of x values (atom counts / ranks)
+        mean   — mean captured fraction in [0, 1], same length as xs
+        std    — std of captured fraction, same length, or None / absent
+        color  — matplotlib colour
+        marker — marker char ('o', 's', '^', …) or None for line-only
+    title    : figure super-title; omitted when None.
+    xlabel   : shared x-axis label.
+    xscale   : 'log' (default) or 'linear'.
+    figsize  : figure size used only when axes=None.
+    ref_lines: fraction values in (0, 1) drawn as dashed guides on the left panel.
+    axes     : (ax_left, ax_right) to plot into, or None to create a new figure.
+
+    Returns
+    -------
+    (fig, (ax_left, ax_right))
+    ``fig`` is None when *axes* was supplied.
+    Call ``plt.tight_layout(); plt.show()`` yourself in both cases.
     """
-    sq_F = sq_F.numpy() if hasattr(sq_F, 'numpy') else np.asarray(sq_F)
-    sq_L = sq_L.numpy() if hasattr(sq_L, 'numpy') else np.asarray(sq_L)
+    from matplotlib.transforms import blended_transform_factory as _btf
+    eps = 1e-9
 
-    A = sq_F.shape[0]
-    e_F = sq_F.mean(-1)
-    e_L = sq_L.mean(-1)
-    cumE_F = e_F.cumsum()
-    cumE_L = e_L.cumsum()
-    total  = max(cumE_F[-1], cumE_L[-1])
-    x      = np.arange(1, A + 1)
-    nv     = min(n_violin, A)
-    
-    if show_individual:
-        fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
-        ax = axes[0]
+    standalone = axes is None
+    if standalone:
+        fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=figsize)
     else:
-        fig, axes = plt.subplots(1, 1, figsize=(6, 4.5))
-        ax = axes
-    # 1 — cumulative energy
-    ax.plot(x, cumE_F / total * 100, lw=1.5, label="Fourier")
-    ax.plot(x, cumE_L / total * 100, lw=1.5, label="Learned")
-    for pct in [50, 75, 90]:
-        ax.axhline(pct, ls='--', c='grey', alpha=0.45, lw=0.8)
-        ax.text(A * 0.97, pct + 0.8, f"{pct}%", ha='right', fontsize=7, color='grey')
-    ax.set_xlabel("atom rank  (ν descending)"); ax.set_ylabel("cumulative energy  (%)")
-    ax.set_title("Cumulative spectral energy"); ax.legend(); ax.grid(True, alpha=0.3)
-    
-    if show_individual:
-        # 2 — violin: per-image distribution for top nv atoms
-        import matplotlib.patches as mpatches
-        ax  = axes[1]
-        pos = np.arange(nv)
-        w   = 0.38
-        vp_F = ax.violinplot([sq_F[k] for k in range(nv)],
-                            positions=pos - w/2, widths=w, showmedians=True, showextrema=False)
-        vp_L = ax.violinplot([sq_L[k] for k in range(nv)],
-                            positions=pos + w/2, widths=w, showmedians=True, showextrema=False)
-        for vp, col in [(vp_F, "C0"), (vp_L, "C1")]:
-            for body in vp["bodies"]:
-                body.set_facecolor(col); body.set_alpha(0.5)
-            vp["cmedians"].set_color(col); vp["cmedians"].set_linewidth(1.5)
-        ax.set_xticks(pos)
-        ax.set_xticklabels([str(k + 1) for k in range(nv)], fontsize=6)
-        ax.set_xlabel("atom rank  (ν descending)")
-        ax.set_ylabel("$c_k^2$")
-        ax.set_title(f"Per-image energy distribution (top {nv} atoms)")
-        ax.legend(handles=[
-            mpatches.Patch(color="C0", alpha=0.7, label="Fourier"),
-            mpatches.Patch(color="C1", alpha=0.7, label="Learned"),
-        ])
-        ax.grid(True, alpha=0.3, axis="y")
+        fig = None
+        ax_l, ax_r = axes
 
-    plt.suptitle(title, fontsize=12)
-    plt.tight_layout()
-    plt.show()
+    for is_right, ax in [(False, ax_l), (True, ax_r)]:
+        for m in methods:
+            xs    = np.asarray(m["xs"])
+            mean  = np.asarray(m["mean"])
+            std   = np.asarray(m["std"]) if m.get("std") is not None else None
+            color = m["color"]
+            marker = m.get("marker")
+            ms     = 5 if marker else 0
+
+            if not is_right:
+                ax.plot(xs, mean, color=color, marker=marker, lw=1.5, ms=ms,
+                        label=m["label"])
+                if std is not None:
+                    ax.fill_between(xs,
+                                    np.clip(mean - std, 0.0, 1.0),
+                                    np.clip(mean + std, 0.0, 1.0),
+                                    alpha=0.20, color=color)
+            else:
+                ys = np.clip(1.0 - mean, eps, 1.0)
+                ax.plot(xs, ys, color=color, marker=marker, lw=1.5, ms=ms,
+                        label=m["label"])
+                if std is not None:
+                    lo_res = np.clip(1.0 - np.clip(mean + std, 0.0, 1.0), eps, 1.0)
+                    hi_res = np.clip(1.0 - np.clip(mean - std, 0.0, 1.0), eps, 1.0)
+                    ax.fill_between(xs, lo_res, hi_res, alpha=0.20, color=color)
+
+        ax.set_xscale(xscale)
+        ax.set_xlabel(xlabel)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8)
+
+    # Left: guide lines placed at axes-x=0.98, data-y=frac
+    _trans = _btf(ax_l.transAxes, ax_l.transData)
+    for frac in ref_lines:
+        ax_l.axhline(frac, ls='--', c='grey', alpha=0.45, lw=0.8)
+        ax_l.text(0.98, frac + 0.005, f"{frac * 100:.0f}%",
+                  transform=_trans, ha='right', va='bottom', fontsize=7, color='grey')
+    ax_l.set_ylabel("captured energy fraction")
+    ax_l.set_title("Cumulative captured energy  (linear-y)")
+
+    # Right: log y axis
+    ax_r.set_yscale("log")
+    ax_r.grid(alpha=0.3, which='both')
+    ax_r.set_ylabel(r"residual energy  (1 $-$ captured fraction)  $\downarrow$ lower is better")
+    ax_r.set_title(r"Residual energy  (log–log)  $\leftarrow$ large-$K$ / Nyquist regime")
+
+    if title is not None:
+        _fig = fig if fig is not None else ax_l.get_figure()
+        _fig.suptitle(title, fontsize=11)
+
+    return fig, (ax_l, ax_r)
