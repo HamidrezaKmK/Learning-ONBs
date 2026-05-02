@@ -161,12 +161,12 @@ from nbclient.exceptions import CellExecutionError
 # ── Edit me ─────────────────────────────────────────────────────────────────
 NOTEBOOKS: list[tuple[str, dict]] = [
     # 1D PCA with all of the ablations
-    # ("notebooks/fpca_1d.ipynb", {
-    #     "ASSET_FOLDER": "1d-analysis",
-    #     "COMPILER_MODE": "latex",
-    #     "CHECKPOINT_DIR":  "../outputs/checkpoints/wandb-5yylqjxg",
-    #     "CHECKPOINT_FILE": "step_3520.pt",
-    # }),
+    ("notebooks/fpca_1d.ipynb", {
+        "ASSET_FOLDER": "1d-analysis",
+        "COMPILER_MODE": "latex",
+        "CHECKPOINT_DIR":  "../outputs/checkpoints/wandb-5yylqjxg",
+        "CHECKPOINT_FILE": "step_3520.pt",
+    }),
     # FPCA experiment on INRs
     # ("notebooks/inr_fpca.ipynb", {
     #     "ASSET_FOLDER": "cifar10-inr-zoo",
@@ -182,7 +182,7 @@ NOTEBOOKS: list[tuple[str, dict]] = [
     #     "CHECKPOINT_FILE": "step_10000.pt",
     #     "EXP_NAME": "MNIST"
     # }),
-    # NTK experiment
+    # # NTK experiment
     # ("notebooks/ntk.ipynb", {
     #     "ASSET_FOLDER": "ntk-two-moons",
     #     "COMPILER_MODE": "latex",
@@ -193,7 +193,7 @@ NOTEBOOKS: list[tuple[str, dict]] = [
     #     "INSET_UP": 1/2. + 0.1,
     #     "INSET_TARGET": 64,
     # }),
-    ## FPCA on CelebA
+    # ## FPCA on CelebA
     # ("notebooks/fpca_celeba.ipynb", {
     #     "ASSET_FOLDER": "celeba-fpca-first-1024",
     #     "COMPILER_MODE": "latex",
@@ -218,14 +218,14 @@ NOTEBOOKS: list[tuple[str, dict]] = [
     #     "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-at6x2m3n",
     #     "CHECKPOINT_FILE": "step_1540.pt",
     # }),
-    # Volume Preserving
+    # # Volume Preserving
     # ("notebooks/volume_preserving.ipynb", {
     #     "ASSET_FOLDER": "taylor-green",
     #     "COMPILER_MODE": "latex",
     #     "CKPT_DIR": "outputs/checkpoints/wandb-kay59tlz",
     #     "CKPT_FILE": "step_12486.pt",
     # }),
-    # Volume Preserving (Mirroring)
+    # # Volume Preserving (Mirroring)
     # ("notebooks/volume_preserving.ipynb", {
     #     "ASSET_FOLDER": "mirrors",
     #     "COMPILER_MODE": "latex",
@@ -233,13 +233,13 @@ NOTEBOOKS: list[tuple[str, dict]] = [
     #     "CKPT_FILE": "step_3650.pt",
     # }),
     # Concept bases
-    ("notebooks/concept_basis.ipynb", {
-        "ASSET_FOLDER": "art",
-        "COMPILER_MODE": "latex",
-        "NAME": "SDS",
-        "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-ubqul893",
-        "CHECKPOINT_FILE": "step_3008.pt",
-    }),
+    # ("notebooks/concept_basis.ipynb", {
+    #     "ASSET_FOLDER": "art",
+    #     "COMPILER_MODE": "latex",
+    #     "NAME": "SDS",
+    #     "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-ubqul893",
+    #     "CHECKPOINT_FILE": "step_3008.pt",
+    # }),
 ]
 
 # Overleaf path for sync
@@ -560,15 +560,21 @@ def render_overrides(params: dict) -> str:
 
 
 def save_figures_from_cell(cell, target_dir: Path, cell_index: int) -> int:
-    """Write every PDF figure in a cell as cell_{cell_index}_{fig_index}.pdf."""
+    """Write every PDF figure in a cell.
+
+    Filename: ``cell_<label>_<fig>.pdf`` when ``cell.metadata["label"]`` is
+    set, otherwise ``cell_<cell_index>_<fig>.pdf``.
+    """
     if cell.cell_type != "code":
         return 0
+    report_tag = next((t for t in cell.metadata.get("tags", []) if t.startswith("report:")), None)
+    prefix = report_tag[len("report:"):] if report_tag else str(cell_index)
     written = 0
     for output in cell.get("outputs", []):
         pdf_b64 = output.get("data", {}).get("application/pdf")
         if pdf_b64 is None:
             continue
-        path = target_dir / f"cell_{cell_index}_{written}.pdf"
+        path = target_dir / f"cell_{prefix}_{written}.pdf"
         path.write_bytes(base64.b64decode(pdf_b64))
         written += 1
     return written
