@@ -1,3 +1,17 @@
+
+
+(1D PCA)
+[] Make non-yellow
+[] Fix aspect ratio of the PCA stuff
+[] the residual energy plot is stretched
+
+(2D PCA)
+[] Aspect ratio of Energy plots
+[] Add the row in reconstruction
+
+(Volume preserving)
+[] Fix the aspect ratio plot with the chart
+
 [] Sort the PCA bases according to their explained variance and also print out the explained variance
 [] Run the Taylor-green vortex example  in the background
 

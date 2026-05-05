@@ -22,38 +22,36 @@ For each entry in ``NOTEBOOKS`` the script:
 2.  Executes the notebook cell-by-cell via nbclient using the
     ``infidictionary`` Jupyter kernel (configurable via ``KERNEL_NAME``).
     On the first ``CellExecutionError`` the rest of the notebook is skipped
-    and the failure is recorded; the B-pass (see below) is also skipped.
+    and the failure is recorded.
 
-3.  After each cell, every ``application/pdf`` output is decoded from base64
-    and written to disk as::
+3.  After each cell, every figure output is decoded from base64 and saved
+    under ``ASSET_FOLDER`` as both a vector PDF and a high-fidelity PNG::
 
-        <OUTPUT_DIR>/<notebook-stem>/<ASSET_FOLDER>/cell_{A|B}_{cell}_{fig}.pdf
+        <OUTPUT_DIR>/<notebook-stem>/<ASSET_FOLDER>/cell_<name>_<fig>.pdf
+        <OUTPUT_DIR>/<notebook-stem>/<ASSET_FOLDER>/cell_<name>_<fig>.png
 
-4.  Each notebook is run **twice**:
-      - **Pass A** — full labels, titles, axes, and legends.  The PDF contains
-        readable annotations matching the notebook as authored.
-      - **Pass B** — clean / transparent version.  All titles, axis labels,
-        legends, tick labels, and text annotations are stripped; the figure
-        background is set transparent.  Intended for Illustrator / Affinity
-        layouts where labels are added manually.
+    ``<name>`` comes from the cell's ``report:<name>`` tag (set in JupyterLab's
+    Property Inspector); cells without a ``report:`` tag fall back to their
+    zero-based index.
 
-    Both passes land in the same ``ASSET_FOLDER`` subdirectory.  If pass A
-    fails, pass B is skipped entirely.
-
-5.  Errors are reported on stdout and also appended to ``extraction_err_log.log``
+4.  Errors are reported on stdout and also appended to ``extraction_err_log.log``
     (configurable via ``LOG_FILE``) with full pdflatex output and tracebacks.
 
 
 Outputs
 -------
-PDFs land at::
+For each figure produced by a cell, two files are written::
 
-    <OUTPUT_DIR>/<notebook-stem>/<ASSET_FOLDER>/cell_A_<cell>_<fig>.pdf   ← labelled
-    <OUTPUT_DIR>/<notebook-stem>/<ASSET_FOLDER>/cell_B_<cell>_<fig>.pdf   ← clean
+    <OUTPUT_DIR>/<notebook-stem>/<ASSET_FOLDER>/cell_<name>_<fig>.pdf   ← vector
+    <OUTPUT_DIR>/<notebook-stem>/<ASSET_FOLDER>/cell_<name>_<fig>.png   ← 300 DPI raster
+
+``<name>`` is the value after ``report:`` in the cell's tags, or the cell's
+zero-based index when no ``report:`` tag is present.  ``<fig>`` counts figures
+within that cell (zero-based).  Only user cells are counted — the injected
+preamble and override cells are excluded.
 
 ``OUTPUT_DIR`` defaults to ``../overleaf/Learning-Basis-Functions/notebook_generations``
-(sibling Overleaf repo).  ``cell`` and ``fig`` are zero-based indices counting
-only user cells (the injected preamble and override cells are excluded).
+(sibling Overleaf repo).
 
 ``extraction_err_log.log`` is created / overwritten at the start of each run
 and accumulates pdflatex error logs, unknown-Unicode warnings, and full
@@ -161,12 +159,12 @@ from nbclient.exceptions import CellExecutionError
 # ── Edit me ─────────────────────────────────────────────────────────────────
 NOTEBOOKS: list[tuple[str, dict]] = [
     # 1D PCA with all of the ablations
-    ("notebooks/fpca_1d.ipynb", {
-        "ASSET_FOLDER": "1d-analysis",
-        "COMPILER_MODE": "latex",
-        "CHECKPOINT_DIR":  "../outputs/checkpoints/wandb-5yylqjxg",
-        "CHECKPOINT_FILE": "step_3520.pt",
-    }),
+    # ("notebooks/fpca_1d.ipynb", {
+    #     "ASSET_FOLDER": "1d-analysis",
+    #     "COMPILER_MODE": "latex",
+    #     "CHECKPOINT_DIR":  "../outputs/checkpoints/wandb-5yylqjxg",
+    #     "CHECKPOINT_FILE": "step_3520.pt",
+    # }),
     # FPCA experiment on INRs
     # ("notebooks/inr_fpca.ipynb", {
     #     "ASSET_FOLDER": "cifar10-inr-zoo",
@@ -182,7 +180,7 @@ NOTEBOOKS: list[tuple[str, dict]] = [
     #     "CHECKPOINT_FILE": "step_10000.pt",
     #     "EXP_NAME": "MNIST"
     # }),
-    # # NTK experiment
+    # NTK experiment
     # ("notebooks/ntk.ipynb", {
     #     "ASSET_FOLDER": "ntk-two-moons",
     #     "COMPILER_MODE": "latex",
@@ -225,6 +223,13 @@ NOTEBOOKS: list[tuple[str, dict]] = [
     #     "CKPT_DIR": "outputs/checkpoints/wandb-kay59tlz",
     #     "CKPT_FILE": "step_12486.pt",
     # }),
+    # Volume Preserving (higher frequency)
+    ("notebooks/volume_preserving.ipynb", {
+        "ASSET_FOLDER": "taylor-green-high-freq",
+        "COMPILER_MODE": "latex",
+        "CKPT_DIR": "outputs/checkpoints/wandb-kay59tlz",
+        "CKPT_FILE": "step_114132.pt",
+    }),
     # # Volume Preserving (Mirroring)
     # ("notebooks/volume_preserving.ipynb", {
     #     "ASSET_FOLDER": "mirrors",
@@ -232,7 +237,7 @@ NOTEBOOKS: list[tuple[str, dict]] = [
     #     "CKPT_DIR": "outputs/checkpoints/wandb-2ymvx2m8",
     #     "CKPT_FILE": "step_3650.pt",
     # }),
-    # Concept bases
+    # # Concept bases
     # ("notebooks/concept_basis.ipynb", {
     #     "ASSET_FOLDER": "art",
     #     "COMPILER_MODE": "latex",
@@ -245,7 +250,8 @@ NOTEBOOKS: list[tuple[str, dict]] = [
 # Overleaf path for sync
 OUTPUT_DIR = Path("../overleaf/Learning-Basis-Functions/notebook_generations")
 LOG_FILE   = Path("extraction_err_log.log")  # pdflatex errors + cell failures
-DPI = 200           # resolution for any rasterised content inside the PDFs
+DPI     = 200   # DPI for rasterised content embedded inside PDFs
+PNG_DPI = 300   # DPI for exported PNG files
 EXECUTION_TIMEOUT = -1  # per-cell, in seconds; -1 = no timeout
 KERNEL_NAME = "infidictionary"   # override the notebook's kernelspec; None = use what the .ipynb says
 # ────────────────────────────────────────────────────────────────────────────
@@ -279,7 +285,7 @@ _mpl.rcParams.update({{
     'font.family':         'serif',
     'text.latex.preamble': {_LATEX_PREAMBLE!r},
     'pdf.fonttype':        42,
-    'figure.dpi':          {DPI},
+    'figure.dpi':          {PNG_DPI},
     'font.size':           10,
     'axes.labelsize':      10,
     'axes.titlesize':      10,
@@ -290,7 +296,7 @@ _mpl.rcParams.update({{
 }})
 try:
     from matplotlib_inline.backend_inline import set_matplotlib_formats
-    set_matplotlib_formats('pdf')
+    set_matplotlib_formats('pdf', 'png')
 except Exception:
     pass
 _LOG_FILE = {str(LOG_FILE.resolve())!r}
@@ -519,7 +525,7 @@ import matplotlib as _mpl
 _mpl.rcParams.update({{
     'text.usetex':         False,
     'pdf.fonttype':        42,
-    'figure.dpi':          {DPI},
+    'figure.dpi':          {PNG_DPI},
     'font.size':           10,
     'axes.labelsize':      10,
     'axes.titlesize':      10,
@@ -530,7 +536,7 @@ _mpl.rcParams.update({{
 }})
 try:
     from matplotlib_inline.backend_inline import set_matplotlib_formats
-    set_matplotlib_formats('pdf')
+    set_matplotlib_formats('pdf', 'png')
 except Exception:
     pass
 """
@@ -571,11 +577,16 @@ def save_figures_from_cell(cell, target_dir: Path, cell_index: int) -> int:
     prefix = report_tag[len("report:"):] if report_tag else str(cell_index)
     written = 0
     for output in cell.get("outputs", []):
-        pdf_b64 = output.get("data", {}).get("application/pdf")
-        if pdf_b64 is None:
+        data = output.get("data", {})
+        pdf_b64 = data.get("application/pdf")
+        png_b64 = data.get("image/png")
+        if pdf_b64 is None and png_b64 is None:
             continue
-        path = target_dir / f"cell_{prefix}_{written}.pdf"
-        path.write_bytes(base64.b64decode(pdf_b64))
+        stem = target_dir / f"cell_{prefix}_{written}"
+        if pdf_b64 is not None:
+            stem.with_suffix(".pdf").write_bytes(base64.b64decode(pdf_b64))
+        if png_b64 is not None:
+            stem.with_suffix(".png").write_bytes(base64.b64decode(png_b64))
         written += 1
     return written
 

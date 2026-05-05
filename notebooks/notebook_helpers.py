@@ -657,42 +657,33 @@ def plot_spectral_compactness(
             marker = m.get("marker")
             ms     = 5 if marker else 0
 
-            if not is_right:
-                ax.plot(xs, mean, color=color, marker=marker, lw=1.5, ms=ms,
-                        label=m["label"])
-                if std is not None:
-                    ax.fill_between(xs,
-                                    np.clip(mean - std, 0.0, 1.0),
-                                    np.clip(mean + std, 0.0, 1.0),
-                                    alpha=0.20, color=color)
-            else:
-                ys = np.clip(1.0 - mean, eps, 1.0)
-                ax.plot(xs, ys, color=color, marker=marker, lw=1.5, ms=ms,
-                        label=m["label"])
-                if std is not None:
-                    lo_res = np.clip(1.0 - np.clip(mean + std, 0.0, 1.0), eps, 1.0)
-                    hi_res = np.clip(1.0 - np.clip(mean - std, 0.0, 1.0), eps, 1.0)
-                    ax.fill_between(xs, lo_res, hi_res, alpha=0.20, color=color)
+            ax.plot(xs, mean, color=color, marker=marker, lw=1.5, ms=ms,
+                    label=m["label"])
+            if std is not None:
+                ax.fill_between(xs,
+                                np.clip(mean - std, 0.0, 1.0),
+                                np.clip(mean + std, 0.0, 1.0),
+                                alpha=0.20, color=color)
 
-        ax.set_xscale(xscale)
         ax.set_xlabel(xlabel)
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)
+        ax.set_ylim(0.0, 1.0)
 
-    # Left: guide lines placed at axes-x=0.98, data-y=frac
+    # Left: log-x view with reference guide lines
+    ax_l.set_xscale(xscale)
     _trans = _btf(ax_l.transAxes, ax_l.transData)
     for frac in ref_lines:
         ax_l.axhline(frac, ls='--', c='grey', alpha=0.45, lw=0.8)
         ax_l.text(0.98, frac + 0.005, f"{frac * 100:.0f}%",
                   transform=_trans, ha='right', va='bottom', fontsize=7, color='grey')
     ax_l.set_ylabel("captured energy fraction")
-    ax_l.set_title("Cumulative captured energy  (linear-y)")
+    ax_l.set_title("Cumulative captured energy  (log-x)")
 
-    # Right: log y axis
-    ax_r.set_yscale("log")
-    ax_r.grid(alpha=0.3, which='both')
-    ax_r.set_ylabel(r"residual energy  (1 $-$ captured fraction)  $\downarrow$ lower is better")
-    ax_r.set_title(r"Residual energy  (log–log)  $\leftarrow$ large-$K$ / Nyquist regime")
+    # Right: linear-x view of the same cumulative captured energy
+    ax_r.set_xscale("linear")
+    ax_r.set_ylabel("captured energy fraction")
+    ax_r.set_title("Cumulative captured energy  (linear-x)")
 
     if title is not None:
         _fig = fig if fig is not None else ax_l.get_figure()
