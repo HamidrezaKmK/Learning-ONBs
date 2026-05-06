@@ -210,12 +210,12 @@ NOTEBOOKS: list[tuple[str, dict]] = [
     #     "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-4g6w8iu7",
     #     "CHECKPOINT_FILE": "step_2160.pt",
     # }),
-    # ("notebooks/fpca_celeba.ipynb", {
-    #     "ASSET_FOLDER": "celeba-fpca-shuffled-1024",
-    #     "COMPILER_MODE": "latex",
-    #     "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-at6x2m3n",
-    #     "CHECKPOINT_FILE": "step_1540.pt",
-    # }),
+    ("notebooks/fpca_celeba.ipynb", {
+        "ASSET_FOLDER": "celeba-fpca-shuffled-1024",
+        "COMPILER_MODE": "latex",
+        "CHECKPOINT_DIR": "../outputs/checkpoints/wandb-r47h9b30",
+        "CHECKPOINT_FILE": "step_1460.pt",
+    }),
     # # Volume Preserving
     # ("notebooks/volume_preserving.ipynb", {
     #     "ASSET_FOLDER": "taylor-green",
@@ -224,12 +224,12 @@ NOTEBOOKS: list[tuple[str, dict]] = [
     #     "CKPT_FILE": "step_12486.pt",
     # }),
     # Volume Preserving (higher frequency)
-    ("notebooks/volume_preserving.ipynb", {
-        "ASSET_FOLDER": "taylor-green-high-freq",
-        "COMPILER_MODE": "latex",
-        "CKPT_DIR": "outputs/checkpoints/wandb-kay59tlz",
-        "CKPT_FILE": "step_114132.pt",
-    }),
+    # ("notebooks/volume_preserving.ipynb", {
+    #     "ASSET_FOLDER": "taylor-green-high-freq",
+    #     "COMPILER_MODE": "latex",
+    #     "CKPT_DIR": "outputs/checkpoints/wandb-kay59tlz",
+    #     "CKPT_FILE": "step_114132.pt",
+    # }),
     # # Volume Preserving (Mirroring)
     # ("notebooks/volume_preserving.ipynb", {
     #     "ASSET_FOLDER": "mirrors",

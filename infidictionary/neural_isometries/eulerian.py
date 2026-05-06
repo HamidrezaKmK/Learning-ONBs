@@ -53,35 +53,6 @@ class EulerianIsometry(NeuralIsometry):
                 time_emb_dim=emb_dim,
             )
 
-        # Channel mixing generator M(t, x): (N, emb_dim) x (N, d) → (N, C, C).
-        # so(1) = {0} — trivial for C=1. Also disabled when no MLP family is
-        # configured (the channel field reuses `scalar_field_partial`).
-        self._use_channel_mixing = (channels_dim > 1) and self._use_function_field
-        if self._use_channel_mixing:
-            self.channel_field = _build_mlp(
-                emb_dim + coords_dim,
-                channels_dim * channels_dim,
-                kr_hidden_dims,
-                nn.SiLU,
-                use_batchnorm=False,
-                use_rmsnorm=True,
-                bias=True,
-            )
-            
-
-        # Static orthogonal pre-mix Q ∈ R^{CxC} on the channel dimension.
-        # Composed inside the isometry as
-        #     Pushforward:  f → Q · f → ODE-evolved
-        #     Pullback:     g → ODE^{-1}(g) → Qᵀ · result
-        # so the operator stays exactly orthogonal and pullback ∘ pushforward = I.
-        # Q is parametrised on the orthogonal manifold (Cayley/exp trivialisation),
-        # randomly initialised, and adapts during training. Trivial for C=1
-        # (orthogonal group is {±1}); skipped entirely.
-        self._use_channel_pre_mix = channels_dim > 1
-        if self._use_channel_pre_mix:
-            self.channel_pre_mix = nn.Linear(channels_dim, channels_dim, bias=False)
-            nn.utils.parametrizations.orthogonal(self.channel_pre_mix, "weight")
-
         self.coords_dim = coords_dim
         self.channels_dim = channels_dim
         self.rank = rank
@@ -195,7 +166,7 @@ class EulerianIsometry(NeuralIsometry):
 
         return U
 
-    # ── Joint Cayley step (cross-channel rank-R + pointwise M) ─────────────────
+    # ── Cayley step (cross-channel rank-R) ─────────────────────────────────────
 
     def _joint_cayley_step(
         self,
@@ -203,104 +174,63 @@ class EulerianIsometry(NeuralIsometry):
         t1: float,
         U: torch.Tensor,                   # (N, R, C)
         K_R: torch.Tensor,                 # (R, R)
-        M_raw: torch.Tensor | None,        # (N, C, C) or None when C == 1
         logabsdet: torch.Tensor,           # (N,)
         values: torch.Tensor,              # (B, N, C)
         acceleration: float,
     ) -> torch.Tensor:                     # (B, N, C)
-        """Cross-channel rank-R + pointwise channel-mixing Cayley step.
+        """Cross-channel rank-R Cayley step.
 
-        Generator (cross-channel U, pointwise M):
+        Generator:
 
             ⟨U, f⟩_r     = (1/N) Σ_{n,c} U[n,r,c] · f[n,c] · e^{l_n}     ← sums over BOTH n and c
-            (K_U f)(x)_c = Σ_r U(x)_{r,c} · (A_R · ⟨U, f⟩)_r              ← rank-R, multi-channel
-            (K_M f)(x)   = M(x) f(x)                                       ← pointwise channel-mixing
-            K            = K_U + K_M
+            (K f)(x)_c   = Σ_r U(x)_{r,c} · (A_R · ⟨U, f⟩)_r              ← rank-R, multi-channel
 
         Cayley map  f ↦ (I − βK)⁻¹(I + βK) f,  β = ½ Δt · a.
 
-        Because U* now uses the *full* L² inner product (summed over channels),
-        K_U is a single rank-R skew operator on the multi-channel function
+        Because U* uses the full L² inner product (summed over channels),
+        K is a single rank-R skew operator on the multi-channel function
         space — channels are coupled directly through U(x), so the Cayley flow
-        can rotate energy between R, G, B without going through M.  This is
-        the formulation the OLD code used and is what the per-channel layout
-        was missing.
+        can rotate energy between channels via U alone.
 
-        Reduction:  M is handled via the per-pixel preconditioner D = P_−⁻¹
-        (pointwise C × C inverse).  The remaining Woodbury solve is a single
-        R × R system (vs the (RC)×(RC) system needed by the per-channel
-        layout):
+        Single Woodbury R × R solve:
 
-            P_±  = I_C ± β(M − Mᵀ)               (N, C, C)
-            B_op = β(K_R − K_Rᵀ)                  (R, R)  skew
-            Ḡ    = (1/N) Σ_n U[n,r,c]·D[n,c,d]·U[n,s,d]·e^{l_n}    (R, R)
+            B_op  = β(K_R − K_Rᵀ)                            (R, R)  skew
+            G     = (1/N) Σ_n U[n,r,c]·U[n,s,c]·e^{l_n}      (R, R)
 
-            y_pre = P_+ f + U · B_op · ⟨U, f⟩
-            η     = D · y_pre
-            z'    = (I_R − Ḡ B_op)⁻¹ ⟨U, η⟩         (R × R solve)
-            f_new = η + D · U · (B_op z')
-
-        Special cases:
-          • M ≡ 0  →  D = I_C,  collapses to the OLD multi-channel R×R solve.
-          • C = 1  →  identical to the OLD scalar case.
+            y_pre = f + U · B_op · ⟨U, f⟩
+            z'    = (I_R − G B_op)⁻¹ ⟨U, y_pre⟩              (R × R solve)
+            f_new = y_pre + U · B_op · z'
 
         Replacing Δt by −Δt gives the exact inverse — pullback inverts
-        pushforward up to linear-solve precision, no BCH splitting needed.
+        pushforward up to linear-solve precision.
         """
         N, R, C = U.shape
         beta    = 0.5 * (t1 - t0) * acceleration
         exp_lad = logabsdet.exp()                                                  # (N,)
         B_op    = beta * (K_R - K_R.transpose(-1, -2))                             # (R, R) scaled skew
 
-        # ── Pointwise channel-mixing preconditioners ──────────────────────────
-        if M_raw is not None:
-            M_skew  = M_raw - M_raw.transpose(-1, -2)                              # (N, C, C)
-            I_C     = torch.eye(C, device=U.device, dtype=U.dtype)
-            P_plus  = I_C + beta * M_skew                                          # (N, C, C)
-            P_minus = I_C - beta * M_skew                                          # (N, C, C)
-            D       = torch.linalg.solve(                                          # P_-⁻¹  (N, C, C)
-                P_minus, I_C.expand(N, C, C).contiguous(),
-            )
-            P_plus_f = torch.einsum("ncd,bnd->bnc", P_plus, values)                # (B, N, C)
-        else:
-            D        = None
-            P_plus_f = values
-
-        # ── Step 1: y_pre = P_+ f + U · B_op · ⟨U, f⟩  (cross-channel) ───────
+        # ── Step 1: y_pre = f + U · B_op · ⟨U, f⟩  (cross-channel) ───────────
         # ⟨U, f⟩_r = (1/N) Σ_{n,c} U[n,r,c] · f[n,c] · e^{l_n}
         c_proj = torch.einsum("nrc,bnc,n->br", U, values, exp_lad) / N             # (B, R)
         Bc     = torch.einsum("rs,bs->br", B_op, c_proj)                           # (B, R)
-        y_pre  = P_plus_f + torch.einsum("nrc,br->bnc", U, Bc)                     # (B, N, C)
+        y_pre  = values + torch.einsum("nrc,br->bnc", U, Bc)                       # (B, N, C)
 
-        # ── Step 2: η = D · y_pre  (pointwise C × C apply) ───────────────────
-        if D is not None:
-            eta = torch.einsum("ncd,bnd->bnc", D, y_pre)
-        else:
-            eta = y_pre
+        # ── Step 2: ⟨U, y_pre⟩  (cross-channel) ──────────────────────────────
+        tilde_c = torch.einsum("nrc,bnc,n->br", U, y_pre, exp_lad) / N             # (B, R)
 
-        # ── Step 3: ⟨U, η⟩  (cross-channel) ──────────────────────────────────
-        tilde_c = torch.einsum("nrc,bnc,n->br", U, eta, exp_lad) / N               # (B, R)
+        # ── Step 3: Gram  G = U* U  (R × R, cross-channel) ───────────────────
+        G = torch.einsum("nrc,nsc,n->rs", U, U, exp_lad) / N                       # (R, R)
 
-        # ── Step 4: Modified Gram  Ḡ = U* D U  (R × R, cross-channel) ────────
-        if D is not None:
-            G_bar = torch.einsum("nrc,ncd,nsd,n->rs", U, D, U, exp_lad) / N        # (R, R)
-        else:
-            G_bar = torch.einsum("nrc,nsc,n->rs", U, U, exp_lad) / N               # (R, R)
-
-        # ── Step 5: solve  (I_R − Ḡ · B_op) z' = ⟨U, η⟩  ───────────────────
+        # ── Step 4: solve  (I_R − G · B_op) z' = ⟨U, y_pre⟩  ─────────────────
         I_R  = torch.eye(R, device=U.device, dtype=U.dtype)
-        Msys = I_R - G_bar @ B_op                                                  # (R, R)
+        Msys = I_R - G @ B_op                                                      # (R, R)
         z_p  = torch.linalg.solve(
             Msys, tilde_c.transpose(-1, -2),
         ).transpose(-1, -2)                                                        # (B, R)
         z    = torch.einsum("rs,bs->br", B_op, z_p)                                # (B, R) = B_op z'
 
-        # ── Step 6: f_new = η + D · U · z ────────────────────────────────────
-        if D is not None:
-            DU_z = torch.einsum("ncd,nrd,br->bnc", D, U, z)
-        else:
-            DU_z = torch.einsum("nrc,br->bnc", U, z)
-        return eta + DU_z                                                          # (B, N, C)
+        # ── Step 5: f_new = y_pre + U · z ────────────────────────────────────
+        return y_pre + torch.einsum("nrc,br->bnc", U, z)                           # (B, N, C)
 
     # ── Implicit backward-Euler step (stable but dissipative) ─────────────────
 
@@ -310,17 +240,14 @@ class EulerianIsometry(NeuralIsometry):
         t1: float,
         U: torch.Tensor,                   # (N, R, C)
         K_R: torch.Tensor,                 # (R, R)
-        M_raw: torch.Tensor | None,        # (N, C, C) or None
         logabsdet: torch.Tensor,           # (N,)
         values: torch.Tensor,              # (B, N, C)
         acceleration: float,
     ) -> torch.Tensor:                     # (B, N, C)
         """Implicit backward-Euler step  (I − Δt · a · K) f_new = f.
 
-        Same generator K as `_joint_cayley_step` (rank-R cross-channel U
-        plus pointwise channel-mixing M); same Woodbury rank-R + pointwise
-        D = (I − Δt·a·M_skew)⁻¹ structure as the Cayley step. Differences
-        from Cayley:
+        Same generator K as `_joint_cayley_step` (rank-R cross-channel U);
+        same Woodbury R × R structure. Differences from Cayley:
 
           * No (I + βK) factor multiplying f on the right; the implicit
             inverse is applied to f directly.
@@ -334,43 +261,22 @@ class EulerianIsometry(NeuralIsometry):
         exp_lad = logabsdet.exp()                                                  # (N,)
         J       = K_R - K_R.transpose(-1, -2)                                      # (R, R) skew
 
-        # Pointwise preconditioner D = (I − Δt·a · M_skew)⁻¹.
-        if M_raw is not None:
-            M_skew  = M_raw - M_raw.transpose(-1, -2)                              # (N, C, C)
-            I_C     = torch.eye(C, device=U.device, dtype=U.dtype)
-            P_minus = I_C - dt_a * M_skew                                          # (N, C, C)
-            D       = torch.linalg.solve(
-                P_minus, I_C.expand(N, C, C).contiguous(),
-            )
-            Df      = torch.einsum("ncd,bnd->bnc", D, values)                      # (B, N, C)
-        else:
-            D  = None
-            Df = values
+        # ⟨U, f⟩  (cross-channel)
+        Uf = torch.einsum("nrc,bnc,n->br", U, values, exp_lad) / N                 # (B, R)
 
-        # ⟨U, D f⟩  (cross-channel)
-        UDf = torch.einsum("nrc,bnc,n->br", U, Df, exp_lad) / N                    # (B, R)
+        # Gram  G = U* U  (R × R)
+        G = torch.einsum("nrc,nsc,n->rs", U, U, exp_lad) / N                       # (R, R)
 
-        # Modified Gram  G_bar = U* D U  (R × R)
-        if D is not None:
-            G_bar = torch.einsum("nrc,ncd,nsd,n->rs", U, D, U, exp_lad) / N
-        else:
-            G_bar = torch.einsum("nrc,nsc,n->rs", U, U, exp_lad) / N
-
-        # Solve  (I_R − Δt·a · G_bar · J) g = ⟨U, D f⟩
+        # Solve  (I_R − Δt·a · G · J) g = ⟨U, f⟩
         I_R  = torch.eye(R, device=U.device, dtype=U.dtype)
-        Msys = I_R - dt_a * (G_bar @ J)                                            # (R, R)
+        Msys = I_R - dt_a * (G @ J)                                                # (R, R)
         g    = torch.linalg.solve(
-            Msys, UDf.transpose(-1, -2),
+            Msys, Uf.transpose(-1, -2),
         ).transpose(-1, -2)                                                        # (B, R)
         Jg   = torch.einsum("rs,bs->br", J, g)                                     # (B, R)
 
-        # f_new = D f + Δt·a · D · U · J · g
-        if D is not None:
-            DUJg = torch.einsum("ncd,nrd,br->bnc", D, U, Jg)
-        else:
-            DUJg = torch.einsum("nrc,br->bnc", U, Jg)
-
-        return Df + dt_a * DUJg                                                    # (B, N, C)
+        # f_new = f + Δt·a · U · J · g
+        return values + dt_a * torch.einsum("nrc,br->bnc", U, Jg)                  # (B, N, C)
 
     # ── Naive forward-Euler step (NOT structure-preserving) ────────────────────
 
@@ -380,33 +286,27 @@ class EulerianIsometry(NeuralIsometry):
         t1: float,
         U: torch.Tensor,                   # (N, R, C)
         K_R: torch.Tensor,                 # (R, R)
-        M_raw: torch.Tensor | None,        # (N, C, C) or None
         logabsdet: torch.Tensor,           # (N,)
         values: torch.Tensor,              # (B, N, C)
         acceleration: float,
     ) -> torch.Tensor:                     # (B, N, C)
         """Plain explicit-Euler step  f ↦ f + Δt · a · K f.
 
-        Same generator K as `_joint_cayley_step` (rank-R cross-channel U
-        plus pointwise channel-mixing M), but applied directly without the
-        Cayley factorisation. The step is **not** norm-preserving — included
-        as a baseline to demonstrate that the Cayley parametrisation is
-        what keeps the flow on the isometry manifold.
+        Same generator K as `_joint_cayley_step` (rank-R cross-channel U),
+        but applied directly without the Cayley factorisation. The step is
+        **not** norm-preserving — included as a baseline to demonstrate
+        that the Cayley parametrisation is what keeps the flow on the
+        isometry manifold.
         """
-        N, R, C = U.shape
+        N = U.shape[0]
         dt_a    = (t1 - t0) * acceleration
         exp_lad = logabsdet.exp()                                                  # (N,)
         J       = K_R - K_R.transpose(-1, -2)                                      # (R, R) skew
 
-        # Cross-channel rank-R part:  K_U f = U · J · ⟨U, f⟩
+        # Cross-channel rank-R part:  K f = U · J · ⟨U, f⟩
         c_proj = torch.einsum("nrc,bnc,n->br", U, values, exp_lad) / N             # (B, R)
         Jc     = torch.einsum("rs,bs->br", J, c_proj)                              # (B, R)
         K_f    = torch.einsum("nrc,br->bnc", U, Jc)                                # (B, N, C)
-
-        # Pointwise channel-mixing part:  K_M f = (M − Mᵀ) f
-        if M_raw is not None:
-            M_skew = M_raw - M_raw.transpose(-1, -2)                               # (N, C, C)
-            K_f    = K_f + torch.einsum("ncd,bnd->bnc", M_skew, values)            # (B, N, C)
 
         return values + dt_a * K_f                                                 # (B, N, C)
 
@@ -449,27 +349,19 @@ class EulerianIsometry(NeuralIsometry):
                 # Combined spatial generator U(t, x) = MLP path + atom-selector residual.
                 U = self._assemble_U(t_emb_N, coords, precomputed_features=_feats)
 
-                # Channel generator M(t, x): (N, C, C), or None when C == 1
-                # or when no MLP family is configured.
-                if self._use_channel_mixing:
-                    M_raw = self.channel_field(torch.cat([t_emb_N, coords], dim=-1)) # continuous in space
-                    M_raw = M_raw.reshape(-1, self.channels_dim, self.channels_dim)
-                else:
-                    M_raw = None
-
                 # Dispatch: structure-preserving Cayley | implicit backward-Euler
                 # | naive forward-Euler.
                 if method == "cayley":
                     return self._joint_cayley_step(
-                        _t0, _t1, U, _K_R, M_raw, logabsdet, v, self.base_acceleration
+                        _t0, _t1, U, _K_R, logabsdet, v, self.base_acceleration
                     )
                 elif method == "backward-euler":
                     return self._backward_euler_step(
-                        _t0, _t1, U, _K_R, M_raw, logabsdet, v, self.base_acceleration
+                        _t0, _t1, U, _K_R, logabsdet, v, self.base_acceleration
                     )
                 elif method == "forward-euler":
                     return self._naive_euler_step(
-                        _t0, _t1, U, _K_R, M_raw, logabsdet, v, self.base_acceleration
+                        _t0, _t1, U, _K_R, logabsdet, v, self.base_acceleration
                     )
                 else:
                     raise ValueError(f"unknown method: {method!r}")
@@ -501,9 +393,6 @@ class EulerianIsometry(NeuralIsometry):
         end_time: float,
         method: str = "cayley",      # 'cayley' | 'backward-euler' | 'forward-euler'
     ):
-        # Static orthogonal channel pre-mix (no-op for C=1).
-        if self._use_channel_pre_mix:
-            src_field = self.channel_pre_mix(src_field)                         # Q · f
         tspan = self.tspan * (end_time - start_time) + start_time
         tgt_field = self._run_euler(src_coords, src_logabsdet, src_field, tspan, method=method)
         return src_coords, src_logabsdet, tgt_field
@@ -519,8 +408,4 @@ class EulerianIsometry(NeuralIsometry):
     ):
         tspan = self.tspan.flip(0) * (end_time - start_time) + start_time
         src_field = self._run_euler(tgt_coords, tgt_logabsdet, tgt_field, tspan, method=method)
-        if self._use_channel_pre_mix:
-            # Reverse the static pre-mix: y · Q  (matrix multiplication on the
-            # right by W=Q applies Wᵀ to each per-point channel vector).
-            src_field = src_field @ self.channel_pre_mix.weight                 # Qᵀ · f
         return tgt_coords, tgt_logabsdet, src_field
