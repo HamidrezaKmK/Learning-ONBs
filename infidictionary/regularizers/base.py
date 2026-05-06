@@ -121,7 +121,7 @@ class Regularizer(ABC):
         """Per-atom energy.
 
         Args:
-            neural_isometry:    The isometry Q being optimised.
+            neural_isometry:    The isometry Q being optimized.
             initial_dictionary: Source atom dictionary.
             indices:            (A, ...) atom multi-indices.
             pushforward_kwargs: Forwarded to pullback / pushforward.

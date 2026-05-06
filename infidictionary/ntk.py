@@ -86,7 +86,7 @@ def fft_ntk_eigenvalues(
     nyquist: int,
     pushforward_kwargs: dict,
 ) -> torch.Tensor:
-    """Fast NTK eigenvalue grid via FFT and vectorised Jacobian (2-D domains only).
+    """Fast NTK eigenvalue grid via FFT and vectorized Jacobian (2-D domains only).
 
     For each spatial frequency k on a (2*nyquist+1)^2 grid and each output
     channel c, computes:

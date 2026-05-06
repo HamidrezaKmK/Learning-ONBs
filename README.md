@@ -1,14 +1,14 @@
-# Learning Basis Functions on Function Spaces
+# Learning Orthonormal Bases for Function Spaces
 
-Code for the paper *Learning Basis Functions on Function Spaces*.
+Code for the paper *Learning Orthonormal Bases for Function Spaces*.
 
-We learn an orthogonal change-of-basis $Q$ in the function space
+We learn an orthogonal change-of-basis $Q_\theta$ in the function space
 $L^2(\Omega)$ that maps an initial analytic dictionary (e.g. Fourier)
 into a new basis better suited to a downstream task, while exactly
 preserving every $L^2$ inner product. Given an initial orthonormal
-basis $\{\phi_k\}$, the learned basis is $\{Q\phi_k\}$ where $Q$ is
-parameterised by the Cayley map of a low-rank skew-adjoint generator.
-The isometry constraint $Q^\ast Q = I$ holds by construction, not as a
+basis $\{\phi_k\}$, the learned basis is $\{Q_\theta\phi_k\}$ where $Q_\theta$ is
+parameterized by the Cayley map of a low-rank skew-adjoint generator.
+The isometry constraint $Q_\theta^\ast Q_\theta = I$ holds by construction, not as a
 soft penalty.
 
 The repository covers four applications:
@@ -44,7 +44,7 @@ on every command: just append `key=value`.
 ### Functional PCA (`fpca.py`)
 
 Jointly trains a `NeuralIsometry` and a learnable mean function so the
-captured energy is maximised on the data pulled back through $Q$.
+captured energy is maximized on the data pulled back through $Q_\theta$.
 
 ```bash
 # 1D toy class with a step discontinuity
@@ -115,7 +115,7 @@ files live under `data/`:
   ([Dropbox](https://www.dropbox.com/sh/56pakaxe58z29mq/AABtWNkRYroLYe_cE3c90DXVa?dl=0))
   and unzip into `data/mnist-inrs/`.
 - **Implicit-Zoo CIFAR-10 INRs** — download `archive.zip` from the
-  [Kaggle dataset](https://www.kaggle.com/datasets/qimaqi/implicit-zoo-cifar10-inrs)
+  [Kaggle dataset](https://www.kaggle.com/datasets/alexanderqi/cifar10-inrs-dataset)
   and place at `data/archive.zip` (no extraction needed).
 
 The 1D and torus-flow experiments are fully synthetic — no downloads.
@@ -137,9 +137,9 @@ checkpoint via the `parameters`-tagged cell at the top.
 | [`ntk.ipynb`](notebooks/ntk.ipynb) | `reg_cob.py +ntk_experiment=two_moons` (and an in-notebook two-moons classifier) |
 | [`volume_preserving.ipynb`](notebooks/volume_preserving.ipynb) | `reg_cob.py +vortex_experiment=taylor_green` and `+euclidean_group=mirroring` |
 | [`concept_basis.ipynb`](notebooks/concept_basis.ipynb) | `concept_basis.py +concept_experiment=sds` |
+| [`eulerian_transform.ipynb`](notebooks/eulerian_transform.ipynb) | Just a guide on how to use the model |
 
-Shared visualisation helpers (`field_to_img`, `to_rgb_image`, `render`,
-`periodic_gaussian_mixture`, `visualize_generator_U`, etc.) live in
+Shared visualisation helpers live in
 [`notebooks/notebook_helpers.py`](notebooks/notebook_helpers.py).
 
 ---
@@ -165,9 +165,9 @@ Shared visualisation helpers (`field_to_img`, `to_rgb_image`, `render`,
 │   ├── ntk.py               # empirical NTK estimator
 │   ├── utils.py             # norm / inner-product helpers
 │   └── checkpointing.py     # save / restore + best-of tracking
-├── notebooks/               # six paper-figure notebooks + helpers
+├── notebooks/               # paper-figure notebooks + helpers + a quick guide to the API
 └── assets/                  # images used by notebooks
 ```
 
 `CLAUDE.md` contains a longer architectural walkthrough (intended for
-contributors / agents working on the repo).
+contributors / agents working or reading the repo).

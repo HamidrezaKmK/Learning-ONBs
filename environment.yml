@@ -34,3 +34,4 @@ dependencies:
       - diffusers
       - transformers
       - open-clip-torch
+      - accelerate

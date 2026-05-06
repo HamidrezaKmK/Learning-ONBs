@@ -12,7 +12,6 @@ defaults:
   - override /coefficient_model@coefficient_model: spike_and_slab
   - _self_
 
-# caption: "french mathematician, Joseph Fourier"
 caption: "Marilyn Diptych, by Andy Warhol"
 
 neural_isometry:

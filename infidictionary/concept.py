@@ -360,7 +360,7 @@ class CLIPLoss(ConceptLoss):
         )
 
     def encode_text(self, prompt: str, device: torch.device) -> torch.Tensor:
-        """Encode a text prompt to a normalised CLIP feature vector.
+        """Encode a text prompt to a normalized CLIP feature vector.
 
         Returns:
             text_features: ``(D,)`` unit-norm CLIP text embedding.
@@ -406,7 +406,7 @@ class CLIPLoss(ConceptLoss):
 
         Args:
             image:        ``(B, 3, H, W)`` batch of rendered images (may exceed ``[-1, 1]``).
-            text_encoded: ``(D,)`` normalised text embedding from :meth:`encode_text`.
+            text_encoded: ``(D,)`` normalized text embedding from :meth:`encode_text`.
 
         Returns:
             Scalar loss: mean negative CLIP cosine similarity.
@@ -479,7 +479,7 @@ class CoefficientModel(ABC):
 
 
 class GaussianCoefficientModel(CoefficientModel):
-    """i.i.d. Gaussian coefficients scaled by PMF, L2-normalised.
+    """i.i.d. Gaussian coefficients scaled by PMF, L2-normalized.
 
     Each coefficient is drawn as  c_j ~ N(0, pmf(j)^{2α})  independently,
     then the whole vector is rescaled to unit L2 norm.  This is the simplest
@@ -527,7 +527,7 @@ class SoftmaxCoefficientModel(CoefficientModel):
 
     Logits are drawn as z_j ~ N(0, (pmf_rel(j))^{2α}) and then passed through
     softmax, yielding strictly positive coefficients summing to 1.  PMFs are
-    normalised relative to the maximum in the selected set so that the behaviour
+    normalized relative to the maximum in the selected set so that the behaviour
     is independent of the absolute normalisation constant of the infinite dictionary.
 
     Args:
@@ -589,7 +589,7 @@ class SpikeAndSlabCoefficientModel(CoefficientModel):
     γ + α > 1.  Choosing γ > 1 gives a prior whose infinite-dimensional limit is
     well-defined with probability 1.
 
-    The active coefficients are L2-normalised after masking; a uniform unit-norm
+    The active coefficients are L2-normalized after masking; a uniform unit-norm
     fallback fires on the rare occasion all atoms happen to be silent.
 
     Args:

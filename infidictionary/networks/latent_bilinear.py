@@ -16,7 +16,7 @@ class LatentBilinearSpatiotemporalField(NeuralField):
                       Divided by per-sample Frobenius norm so ‖W(t_i)‖_F = 1.
     At convergence: E_x[‖g @ W‖²] ≈ ‖W‖²_F = 1 for every t.
     An optional post-combination MLP applies a residual nonlinearity on top;
-    its last layer is zero-initialised so it starts as identity.
+    its last layer is zero-initialized so it starts as identity.
     All Linear layers use orthogonal weight initialisation.
 
     Args:
@@ -90,7 +90,7 @@ class LatentBilinearSpatiotemporalField(NeuralField):
         self.time_mlp.apply(_init_orthogonal)
 
         # ── Post-combination nonlinear MLP (optional, with residual) ─────────
-        # Last linear is zero-initialised so the residual starts as identity.
+        # Last linear is zero-initialized so the residual starts as identity.
         if post_combination_dims:
             layers = []
             prev = C

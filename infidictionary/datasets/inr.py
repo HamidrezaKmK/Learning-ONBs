@@ -55,7 +55,7 @@ def _eval_siren_batch(
     omega_0: float = 30.0,
     omega: float = 30.0,
 ) -> Tensor:
-    """Vectorised SIREN forward pass over a batch of B networks.
+    """Vectorized SIREN forward pass over a batch of B networks.
 
     Args:
         coords:  (N, d)  query coordinates already in the SIREN's native range.

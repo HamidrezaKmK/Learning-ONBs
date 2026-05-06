@@ -2,7 +2,7 @@
 #
 # NTK regularizer for a two-moons binary classifier checkpoint.
 #
-# The ntk_model is an NTK-parameterised MLP whose weights are loaded from one
+# The ntk_model is an NTK-parameterized MLP whose weights are loaded from one
 # of the checkpoints written by notebooks/ntk.ipynb (training cell) into
 # outputs/ntk/two_moons_step_xxxx.pt. The empirical NTK is
 #
