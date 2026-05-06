@@ -352,8 +352,3 @@ class ImplicitZooCIFARDataset(IrregularDataset):
 
         return coords, values
 
-
-# ---------------------------------------------------------------------------
-# Backward-compat aliases (old names used in YAML configs)
-# ---------------------------------------------------------------------------
-DWSNetsINRDataset = ImplicitZooMNISTDataset

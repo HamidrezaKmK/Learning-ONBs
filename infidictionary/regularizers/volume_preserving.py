@@ -42,7 +42,6 @@ class VolumePreserving(Regularizer):
     def compute_energy(
         self, neural_isometry, initial_dictionary, indices, pushforward_kwargs
     ) -> torch.Tensor:
-        # TODO: fix the issues that appear when things are Lagrangian
         tgt_coords = self._coords.to(indices.device)
         tgt_transformed_coords = self._transformed_coords.to(indices.device)
         N, _ = tgt_coords.shape

@@ -2,7 +2,6 @@ from typing import Literal, Optional
 
 import torch
 import math
-import pytorch_finufft.functional as finufft
 from .base import InfiDictionary
 from infidictionary.utils import pairwise_inner_product
 

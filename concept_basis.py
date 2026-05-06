@@ -105,33 +105,14 @@ def concept_basis_training(
             continue
 
 
-        # ── Sample target-domain quadrature grid and pull back to source domain ─
-        # We always sample tgt_coords (the output/target domain of Q_θ) and
-        # derive the corresponding src_coords via the pullback.  This is correct
-        # for all isometry types:
-        #   - EulerianIsometry: operates in function-value space only, so
-        #     src_coords = tgt_coords (the coordinate map is the identity).
-        #   - LagrangianIsometry: tgt_coords are the output domain; the pullback
-        #     finds the pre-image in the source domain.
-        # The pullback is computed once per step under no_grad and detached so
-        # that no gradient flows through the coordinate transformation — gradients
-        # flow only through the pushforward of atom values (step 5 below).
+        # ── Sample target-domain quadrature grid ────────────────────────────
+        # EulerianIsometry leaves coordinates unchanged (the coordinate map is
+        # the identity), so src_coords = tgt_coords.
         tgt_coords = _RENDER_SAMPLER.sample(image_size).to(device)  # (image_size², 2)
         N = tgt_coords.shape[0]
-
-        if isinstance(neural_isometry, EulerianIsometry):
-            src_coords = tgt_coords
-            src_logabsdet = torch.zeros(N, device=device, dtype=tgt_coords.dtype)
-        else:
-            with torch.no_grad():
-                src_coords, src_logabsdet, _ = neural_isometry.pullback(
-                    tgt_coords=tgt_coords,
-                    tgt_logabsdet=torch.zeros(N, device=device, dtype=tgt_coords.dtype),
-                    tgt_field=torch.zeros(1, N, 1, device=device, dtype=tgt_coords.dtype),
-                    **pushforward_kwargs,
-                )
-            src_coords = src_coords.detach()
-            src_logabsdet = src_logabsdet.detach()
+        assert isinstance(neural_isometry, EulerianIsometry)
+        src_coords = tgt_coords
+        src_logabsdet = torch.zeros(N, device=device, dtype=tgt_coords.dtype)
 
         # ── Build atom index set once per epoch (same across accumulation steps) ─
         # Exact stratum: all high-probability indices (deterministic, zero variance).

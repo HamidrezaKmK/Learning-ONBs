@@ -1,5 +1,4 @@
 import torch
-import math
 
 from abc import ABC, abstractmethod
 
@@ -83,34 +82,4 @@ class SquareSampler(DomainSampler):
             coords[:, 0] *= self.width
             coords[:, 1] *= self.height
             return coords
-
-class DiskSampler(DomainSampler):
-
-    def __init__(
-        self,
-        stratified: bool = True,
-        add_noise: bool = True,
-        radius: float = 1.0,
-    ):
-        super().__init__()
-        self.square_sampler = SquareSampler(
-            stratified=stratified,
-            add_noise=add_noise,
-            height=1.0, width=1.0,
-        )
-        self.radius = radius
-
-    def sample(self, n_per_dim: int) -> torch.Tensor:
-        """
-        Sample n_per_dim**2 coordinates uniformly from the unit disk in 2D.
-        Returns a tensor of shape (N, 2).
-        """
-        u = self.square_sampler.sample(n_per_dim)
-        r = torch.sqrt(u[:, 0])  # radius
-        theta = 2 * math.pi * u[:, 1]  # angle
-        x = r * torch.cos(theta)
-        y = r * torch.sin(theta)
-        coords = torch.stack([x, y], dim=1) * self.radius
-        return coords
-
 

@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working in this repository. Mirrors the
+README but adds layout details and the conventions used throughout the
+code.
 
 ## Setup
 
@@ -11,51 +13,69 @@ conda activate infidictionary
 
 ## Project Goal
 
-This codebase implements **infinite-dimensional isometric learning**: learning an orthogonal change-of-basis $Q$ in function space $L^2(\Omega)$ that maps an initial analytic dictionary (e.g., Fourier) into a new basis better suited to a task, while exactly preserving all $L^2$ inner products.
+The codebase implements **infinite-dimensional isometric learning**:
+learning an orthogonal change-of-basis $Q$ in function space $L^2(\Omega)$
+that maps an initial analytic dictionary (e.g., Fourier) into a new basis
+better suited to a downstream task, while exactly preserving all $L^2$
+inner products.
 
-The core idea: given an initial orthonormal basis $\{\phi_k\}$ (e.g., Fourier), the learned basis is $\{Q\phi_k\}$, where $Q$ is a `NeuralIsometry`. The isometry constraint ($Q^\ast Q = I$) is enforced by construction via the Cayley map, not as a penalty.
+Given an initial orthonormal basis $\{\phi_k\}$, the learned basis is
+$\{Q\phi_k\}$ for a `NeuralIsometry` $Q$. The isometry constraint
+$Q^\ast Q = I$ is enforced by construction via the Cayley map, not as a
+soft penalty.
 
-**Applications:**
-- **Functional PCA** (`fpca.py`): diagonalise the empirical covariance operator — the learned basis captures maximum variance.
-- **Vibrational modes / Dirichlet energy** (`reg_cob.py`): diagonalise the weighted Laplacian $-\nabla\cdot(D\nabla)$ for a material $D(x)$.
-- **NTK basis** (`reg_cob.py`): diagonalise the Neural Tangent Kernel.
-- **TV / 1-Laplacian basis** (`reg_cob.py`): minimise total variation of pushed-forward atoms.
-- **Euclidean symmetry** (`reg_cob.py`): push atoms to satisfy $Q\phi_k(x) \approx \phi_k(T(x))$ for a fixed rigid transform $T$.
-- **Concept basis** (`concept_basis.py`): find a basis whose sparse linear combinations render like a target text concept (via SDS / CLIP) — this is not a diagonalisation problem but a generative steering problem.
+The three training scripts at the repository root each illustrate one
+application:
+
+- `fpca.py` — **Functional PCA**. Diagonalises the empirical covariance
+  operator of a function dataset.
+- `reg_cob.py` — **Regularizer-based change-of-basis**. Minimises a
+  geometric energy $E(Q)$. Currently exposed regularizers:
+  - `NTKRegularizer` — diagonalise the Neural Tangent Kernel of a frozen
+    classifier.
+  - `TaylorGreenVortex` — push atoms to be invariant under the
+    Taylor–Green vortex flow.
+  - `EuclideanGroup` — push atoms to be invariant under a fixed rigid
+    transform of the torus (rotation + translation + mirror).
+- `concept_basis.py` — **Concept basis**. Steers a basis so that random
+  sparse linear combinations of pushed-forward atoms render like a target
+  text concept (Score Distillation Sampling via frozen Stable Diffusion,
+  or CLIP cosine similarity).
+
+All scripts use [Hydra](https://hydra.cc/) for config composition and
+[W&B](https://docs.wandb.ai/) for logging (logging is off by default).
 
 ---
 
 ## Running Experiments
 
-All scripts use [Hydra](https://hydra.cc/) for config composition and [W&B](https://docs.wandb.ai/) for logging.
-
-**Functional PCA** (`fpca.py`) — jointly learns a mean function and diagonalises the covariance operator:
 ```bash
-python fpca.py +experiment=random_bandpass_eulerian
-python fpca.py +experiment=random_bandpass_eulerian_disk wandb=enabled wandb.run_name=my_run
-python fpca.py +experiment=sanity_check_lagrangian_disk
-```
+# Functional PCA
+python fpca.py +fpca_experiment=1d_fpca
+python fpca.py +fpca_experiment=celeba_eulerian
+python fpca.py +fpca_experiment=dwsnets_mnist_eulerian
+python fpca.py +fpca_experiment=implicit_zoo_cifar_eulerian
 
-**Regularizer-based change-of-basis** (`reg_cob.py`) — minimises a geometric energy:
-```bash
-python reg_cob.py +vibration_experiment=airplane_vibration
-python reg_cob.py +vibration_experiment=trivial_vibration
-python reg_cob.py +tv_experiment=1d_tv
+# Regularizer-based change-of-basis
+python reg_cob.py +ntk_experiment=two_moons \
+    regularizer.ntk_model_weights_path=outputs/ntk/two_moons_step_5000.pt
+python reg_cob.py +vortex_experiment=taylor_green
 python reg_cob.py +euclidean_group=mirroring
+
+# Concept basis (requires a GPU + ~12 GB VRAM for SDS)
+python concept_basis.py +concept_experiment=sds
 ```
 
-**Concept Basis** (`concept_basis.py`) — steers a basis toward a text concept via SDS or CLIP:
+Hydra overrides work inline: append `key=value` to any command. The
+`eval` resolver is registered, so YAML can use `${eval:'expr'}`.
+Checkpoints are saved under `outputs/checkpoints/<run_name>/`. With
+W&B enabled, the W&B run id is embedded as `wandb-<id>` in the run name
+to support resumption:
+
 ```bash
-python concept_basis.py +experiment=sds_cat
-python concept_basis.py +experiment=clip_cat
+python fpca.py +fpca_experiment=<name> resume_training.enabled=true \
+    resume_training.checkpoint_path=<path>
 ```
-
-**Resuming a run:**
-```bash
-python fpca.py +experiment=<name> resume_training.enabled=true resume_training.checkpoint_path=<path>
-```
-
-Hydra overrides work inline: append `key=value` to any command. The `eval` resolver is registered so YAML can use `${eval:'expr'}`. Checkpoints are saved under `outputs/checkpoints/<run_name>/`. W&B run ID is embedded as `wandb-<id>` in the run name to support resumption.
 
 ---
 
@@ -66,274 +86,207 @@ Hydra overrides work inline: append `key=value` to any command. The `eval` resol
 #### `NeuralIsometry` (`neural_isometries/base.py`)
 
 Abstract `nn.Module`. Two public methods:
-- `pushforward(src_coords, src_logabsdet, src_field)` → `(tgt_coords, tgt_logabsdet, tgt_field)`
-- `pullback(tgt_coords, tgt_logabsdet, tgt_field)` → `(src_coords, src_logabsdet, src_field)`
+- `pushforward(src_coords, src_logabsdet, src_field)` →
+  `(tgt_coords, tgt_logabsdet, tgt_field)`
+- `pullback(tgt_coords, tgt_logabsdet, tgt_field)` →
+  `(src_coords, src_logabsdet, src_field)`
 
-Tensor convention throughout: coords `(N, d)`, logabsdet `(N,)`, field `(B, N, C)` where B = number of atoms/functions.
+Tensor convention: coords `(N, d)`, logabsdet `(N,)`, field `(B, N, C)`
+where B = number of atoms / functions.
 
-**Concrete implementations:**
-
-| Class | Coordinate map | Value transform | Status |
-|---|---|---|---|
-| `EulerianIsometry` | identity | rank-R Cayley rotation in function space | well-tested |
-| `LagrangianIsometry` (`continuous_time.py`) | diffeomorphism (ODE flow) | pullback of field values | well-tested |
-| `SemiLagrangianIsometry` | gated mix of Eulerian + Lagrangian | gated mix | may have bugs |
-| `NormalizingFlowIsometry` (`normalizing_flows.py`) | neural spline flow | Jacobian-weighted | experimental |
-
----
+The only concrete subclass kept in this release is `EulerianIsometry`.
+A trivial `IdentityIsometry` is also available for sanity checks.
 
 #### `EulerianIsometry` — Rank-R Cayley parameterisation
 
-The isometry is generated by the ODE $\dot{Q}(t) = \mathcal{K}(t)Q(t)$, $Q(0) = I$, where the skew-adjoint generator is:
+The isometry is generated by the ODE $\dot{Q}(t) = \mathcal{K}(t)Q(t)$,
+$Q(0) = I$, with skew-adjoint generator
+$$\mathcal{K}(t) = U(t)\, A(t)\, U(t)^\ast, \qquad A(t) = K_R(t) - K_R(t)^\top.$$
 
-$$\mathcal{K}(t) = U(t)\, A(t)\, U(t)^\ast, \qquad A(t) = K_R(t) - K_R(t)^\top$$
+- $U(t, \cdot) \in \mathbb{R}^{N \times R \times C}$ is produced by a
+  `TimeEvolvingField` (e.g. `NerfSpatioTemporalField`); gives $R$ spatial
+  functions, each $C$-dimensional.
+- $K_R(t) \in \mathbb{R}^{R \times R}$ is produced by a small MLP
+  (`kr_mlp`) inside `EulerianIsometry`, fed a sinusoidal time embedding.
 
-- $U(t, \cdot) \in \mathbb{R}^{N \times R \times C}$: produced by a `TimeEvolvingField` (e.g. `NerfSpatioTemporalField`); gives $R$ spatial functions, each $C$-dimensional.
-- $K_R(t) \in \mathbb{R}^{R \times R}$: produced by a small MLP (`kr_mlp`) inside `EulerianIsometry` from a sinusoidal time embedding.
+Each Euler step applies the Cayley map via a **Woodbury rank-R solve** —
+only an $R \times R$ linear system, independent of grid size $N$:
 
-Each Euler step applies the Cayley map via a **Woodbury rank-R solve** — only an $R \times R$ linear system, independent of grid size $N$:
-
-$$B = \tfrac{1}{2}\Delta t \cdot a \cdot (K_R - K_R^\top), \quad G = U^\ast U \in \mathbb{R}^{R \times R}$$
+$$B = \tfrac{1}{2}\Delta t \cdot a \cdot (K_R - K_R^\top), \quad
+  G = U^\ast U \in \mathbb{R}^{R \times R}$$
 $$Qf = f + UB(I_R - GB)^{-1} U^\ast (I + B) f$$
 
-Reversing the sign of $B$ (negating $\Delta t$) gives the exact pullback — no separate inversion needed.
+Reversing the sign of $B$ (negating $\Delta t$) gives the exact pullback,
+no separate inversion needed.
 
-**Key constructor arguments:**
-```python
-EulerianIsometry(
-    coords_dim,                   # spatial dimension d
-    channels_dim,                 # C (1 for scalar fields, 3 for RGB)
-    rank,                         # R — rank of the generator
-    base_acceleration,            # scales the step size (≈1000 for typical use)
-    scalar_field_partial,         # functools.partial of a TimeEvolvingField subclass
-    n_time_freqs,                 # sinusoidal time embedding dimension
-    kr_hidden_dims,               # MLP hidden dims for K_R
-    atom_shuffling_K,             # if set, adds atom-weighted residual (int | None)
-    atom_selector_hidden_dims,    # MLP hidden dims for atom selector
-    gradient_checkpointing,       # bool — saves VRAM during training
-)
-```
-
-**Owned submodules:**
-- `self.time_embedding`: `SinusoidalTimeEmbedding` — shared by both `kr_mlp` and `function_field`.
-- `self.function_field`: a `TimeEvolvingField` that takes `(t_emb: (N, emb_dim), x: (N, d))` → `U: (N, R, C)`.
-- `self.kr_mlp`: maps `t_emb (T, emb_dim)` → `K_R (T, R, R)` via `_compute_kr`.
-- Optional `self.atom_fourier_dict` + `self.atom_selector`: when `atom_shuffling_K` is set, Fourier atom features are precomputed once per `_run_euler` call (no grad) and an atom-weighted residual is added to $U$.
-
-**`shuffle_model_state(num_steps)`**: re-samples the ODE time-span `tspan`. Must be called before every `pushforward`/`pullback`. The training loop calls this once per micro-step.
-
----
+`shuffle_model_state(num_steps)` re-samples the ODE time-span `tspan` and
+must be called before every `pushforward`/`pullback`. The training loop
+does this once per micro-step.
 
 #### `TimeEvolvingField` (`networks/base.py`)
 
-Abstract base for $U$-producing networks. **API**: `forward` takes a pre-computed time embedding (not raw time):
+Abstract base for $U$-producing networks. The `EulerianIsometry` owns a
+`SinusoidalTimeEmbedding` and passes the pre-computed `t_emb` down.
+Subclasses receive `(t_emb: (N, emb_dim), x: (N, d))` and must return
+`(N, R, C)`.
 
-```python
-def forward(self, t_emb: Tensor, x: Tensor) -> Tensor:
-    """
-    t_emb : (N, emb_dim)  — sinusoidal time embedding, pre-computed by EulerianIsometry
-    x     : (N, d)        — spatial coordinates
-    returns: (N, R, C)    — R generator field columns, each C-dimensional
-    """
-```
-
-The `EulerianIsometry` owns the `SinusoidalTimeEmbedding` and passes `t_emb` down. Do **not** embed time inside a `TimeEvolvingField` subclass — it receives `t_emb` ready-made.
-
-**`NerfSpatioTemporalField`** (`networks/atom_shuffling.py`) — current default:
-```python
-NerfSpatioTemporalField(
-    coords_dim, output_dim, rank, time_emb_dim,
-    spatial_hidden_dims=(256, 256, 256),
-    activation=nn.SiLU,
-    nerf_n_levels, nerf_n_base, nerf_freq_min, nerf_freq_max,  # NeRF Fourier features
-)
-```
-Concatenates `[t_emb, x, nerf_features(x)]` and passes through an MLP → `(N, R, C)`. No internal K_R, no top-k, no channel normalisation.
-
----
+Concrete subclasses kept:
+- `NerfSpatioTemporalField` — NeRF-style Fourier features + MLP. Default
+  for 1D and most reg_cob runs.
+- `LatentBilinearSpatiotemporalField` — separate spatial / temporal MLPs
+  combined bilinearly through a learned latent. Used when channels_dim>1
+  (CelebA, CIFAR-INRs, concept basis).
 
 #### `InfiDictionary` (`dictionaries/base.py`)
 
-Abstract (possibly infinite) orthonormal basis. Key methods:
-- `get_atoms(coords, idx)` → `(A, N, C)`: evaluate A atoms at N quadrature points.
-- `get_truncated_indices(K)`: deterministic finite sub-dictionary; returns all $(2K-1)^d \cdot C$ Fourier modes inside the L∞ ball $\|k\|_\infty \le K-1$.
-- `get_high_probability_indices(tail_prob)`: exact high-probability stratum for stratified MC.
-- `sample_indices(n)`: MC tail samples weighted by PMF.
-- `monte_carlo_captured_energy(coords, logabsdet, values, ...)`: stratified estimator (exact + MC strata).
+Abstract orthonormal basis on $L^2(\Omega)$, possibly infinite-rank.
+Key methods:
+- `get_atoms(coords, idx)` → `(A, N, C)`: evaluate A atoms at N points.
+- `get_truncated_indices(K)`: deterministic finite sub-dictionary; e.g.
+  for the Fourier basis, all $(2K-1)^d \cdot C$ modes inside the L∞
+  ball $\|k\|_\infty \le K-1$.
+- `get_high_probability_indices(tail_prob)`: high-PMF stratum used by
+  the stratified Monte Carlo estimator.
+- `sample_indices(n)`: MC tail samples weighted by the PMF.
+- `monte_carlo_captured_energy(coords, logabsdet, values, ...)`:
+  stratified estimator (exact stratum + MC tail).
 
-Concrete: **`FourierDictionary`** (`dictionaries/fourier.py`) — tensor-product real Fourier basis on $[0,1]^d$. Atom index `(k_1, ..., k_d, c)`: `k_i ≥ 0` → $\sqrt{2}\cos(2\pi k_i x_i)$ (constant 1 if $k_i=0$); `k_i < 0` → $\sqrt{2}\sin(2\pi |k_i| x_i)$; channel `c ∈ {0,...,C-1}` selects which output channel the atom is non-zero in.
+The only concrete dictionary is `FourierDictionary` (see
+`dictionaries/fourier.py`) — tensor-product real Fourier basis on
+$[0,1]^d$. Atom index `(k_1, ..., k_d, c)`: `k_i ≥ 0` →
+$\sqrt{2}\cos(2\pi k_i x_i)$ (constant 1 if $k_i=0$); `k_i < 0` →
+$\sqrt{2}\sin(2\pi |k_i| x_i)$; channel `c` selects the active output
+channel.
 
-**Two PMF modes** (selected via `pmf_mode` constructor arg, default `"power_law"`):
+Two PMF modes (constructor arg `pmf_mode`, default `"power_law"`):
 
 | Mode | PMF | When to use |
 |---|---|---|
-| `"power_law"` | $P(k,c) = (1+\|k\|_2^2)^{-\alpha} / Z_\alpha / C$, with deterministic tiebreaker | True infinite-support prior; `monte_carlo_captured_energy` uses both strata. Needs $\alpha > d/2$ for convergence (default $\alpha=2$). |
-| `"uniform"` | $P(k,c) = 1/N_{\rm atoms}$ if $\|k\|_\infty \le K-1$, else 0; $N_{\rm atoms} = (2K-1)^d \cdot C$ | Finite truncated dictionary, every atom equally likely. `get_high_probability_indices` returns the full support, so the MC tail in `monte_carlo_captured_energy` is **always empty**. Pass `truncation=K`. |
-
-**Power-law specifics.** The prior is **isotropic in L2** (not L∞): axis-aligned atoms like $(1,0)$ ($\|k\|_2^2=1$) always beat diagonal atoms like $(1,1)$ ($\|k\|_2^2=2$), regardless of channel. Atoms sharing the same $\|k\|_2^2$ tie on the base PMF; `tiebreak_eps > 0` multiplies by a deterministic factor in $[1-\varepsilon, 1]$ derived from a fixed irrational basis (Weyl equidistribution) to give a strict total ordering. The tiebreak is ignored when sampling indices (O($\varepsilon$) bias). Without tiebreak, channels do **not** affect the base PMF, so `n_unique_pmfs == n_unique_l2_norms` (not `n_l2 * C`).
-
-**Uniform specifics.** No infinite tail — the dictionary is just a finite ONB on $(2K-1)^d \cdot C$ atoms. `get_high_probability_indices` returns the precomputed support unconditionally, `sample_indices` is `torch.randint` over those rows, and out-of-support indices yield PMF 0. This is the right mode when you want the captured-energy estimator to behave as a deterministic projection onto the L∞ ball, without any MC variance.
-
-**Constructor:**
-```python
-FourierDictionary(
-    domain_dim,                    # d
-    num_channels,                  # C
-    pmf_mode="power_law",          # or "uniform"
-    steepness=2.0,                 # α; ignored if uniform
-    tiebreak_eps=1e-3,             # ignored if uniform
-    m_max=1024,                    # ignored if uniform
-    truncation=None,               # K; required if uniform
-)
-```
-
-**Quick yaml flips:**
-```yaml
-# conf/dictionaries/<name>.yaml
-_target_: infidictionary.dictionaries.FourierDictionary
-domain_dim: 2
-num_channels: 1
-# power-law (default — backward compatible):
-steepness: 2.0
-tiebreak_eps: 1.0e-3
-# uniform — append these two and the steepness/tiebreak args become inert:
-# pmf_mode: uniform
-# truncation: 8
-```
-
----
+| `"power_law"` | $P(k,c) \propto (1+\|k\|_2^2)^{-\alpha}$, with deterministic tiebreaker | True infinite-support prior. Needs $\alpha > d/2$ for convergence (default $\alpha=2$). |
+| `"uniform"` | $1/N_{\rm atoms}$ on a finite truncation $\|k\|_\infty \le K-1$, else 0 | Finite ONB; the MC tail in `monte_carlo_captured_energy` is always empty. Pass `truncation=K`. |
 
 #### `DomainSampler` (`domain_samplers.py`)
 
-Samples quadrature coordinates on a domain. `stratified=True` + `add_noise=True` → stratified-with-noise (used during training). `add_noise=False` → exact regular grid (used for visualisation). Concrete: `SquareSampler`, `DiskSampler`.
+Samples quadrature coordinates. `stratified=True` + `add_noise=True` →
+stratified-with-noise (used for training). `add_noise=False` → exact
+regular grid (used for visualisation). Concrete subclasses kept:
+`SquareSampler` (`[0,1]^2`) and `LineSegmentSampler` (`[0, length]`).
 
 ---
 
-#### `Material` (`material.py`)
+### Datasets (`datasets/`)
 
-Spatially-varying diffusivity fields used by vibrational-mode regularizers.
-
-| Method | Returns | Purpose |
+| Class | Source | Used by |
 |---|---|---|
-| `__call__(coords)` | `(diffusivity (N,), mass (N,))` | Evaluate $D(x)$ and $\rho(x)$ |
-| `project_to_domain(coords)` | `(…, d)` | Fold coords back onto domain |
-| `neighbourhood(coords, K, h)` | 3× `(N,K,d)` | $K$ symmetric FD pairs $(x{+}h\delta,\, x{-}h\delta,\, \delta)$ |
-| `diffuse(coords, K, num_steps, dt, h_fd)` | `(N,K,d)` | Itô Euler–Maruyama of $dX = (\nabla D/\rho)\,dt + \sqrt{2D/\rho}\,dW$ |
+| `OneDimDiscontinuousGenerator` | analytic 1D class with a step at `x=0.5` | `fpca_1d.ipynb` |
+| `CelebADataset` | `mattymchen/celeba-hq` via Hugging Face Datasets | `fpca_celeba.ipynb` |
+| `ImplicitZooMNISTDataset` | DWSNets MNIST INR zoo (Dropbox) | `inr_fpca.ipynb` (MNIST) |
+| `ImplicitZooCIFARDataset` | Implicit-Zoo CIFAR-10 INRs (Kaggle) | `inr_fpca.ipynb` (CIFAR) |
 
-Concrete materials:
-- **`FourierTorusMaterial`**: $D(x) = \text{base} + \text{amplitude}\cdot\cos(2\pi\sum k_i(x_i - \phi_i) + \theta)$. `amplitude=0` → uniform diffusivity. Torus wrapping via `% 1.0`.
-- **`JosephFourierMaterial`**: diffusivity from a greyscale portrait image; supports Gaussian smoothing and binary mass mask via `threshold`.
-- **`AirplaneMaterial`**: analytic silhouette (body + wing + tail). `interior_diffusivity` = inside shape (historically `max_diffusivity`); `exterior_diffusivity` = background (historically `min_diffusivity`).
-
----
-
-### Training scripts
-
-#### `fpca.py` — Functional PCA
-
-Jointly trains a `NeuralIsometry` + `NeuralField` (mean function):
-1. Mean function minimises MSE to the dataset mean.
-2. Isometry maximises `monte_carlo_captured_energy` of the zero-centred data pulled back to the source domain.
-
-Theoretically proven to converge to the FPCA solution.
-
-#### `reg_cob.py` — Regularizer-based change-of-basis
-
-Minimises a geometric energy $E(Q)$ over the isometry $Q$. Config root: `conf/reg_cob.yaml`.
-
-**Inner loop (each epoch):**
-1. `regularizer.update_coordinates(neural_isometry, pushforward_kwargs)` — no grad; samples fresh quadrature points, pre-computes pullback coords, caches material values / KNN graphs.
-2. `grad_accumulation_steps` micro-steps, each calling `shuffle_model_state` (re-samples the ODE time-span).
-3. Atoms split into exact stratum (high-PMF, deterministic) + MC tail. Gradients accumulated over both.
-4. Optional gradient clipping, then `optim_isometry.step()`.
-
-**`_eval_pushed_atoms`** (`regularizers/base.py`): shared helper that pushes atoms forward. For `EulerianIsometry`, pullback is the identity so `src_coords = tgt_coords` (no extra forward pass). Gradients flow only through the pushforward.
-
-#### `concept_basis.py` — Concept Basis
-
-Trains an isometry so that random sparse linear combinations of pushed-forward atoms resemble a target text concept. This is a generative steering problem, not a diagonalisation. Uses `SDSLoss` (DreamFusion-style Score Distillation Sampling via frozen Stable Diffusion) or `CLIPLoss`. Supports gradient accumulation, optional mean function, and `variation_strength`.
-
----
+Each dataset returns `(coords, vals)` where `coords: (N, d)` and
+`vals: (B, N, C)` — i.e. one coordinate set per batch, multiple function
+values stacked along the batch dimension.
 
 ### Regularizers (`regularizers/`)
 
-All regularizers inherit from `Regularizer` (or `PushforwardRegularizer`). They own a `DomainSampler` and expose `update_coordinates` (no grad, once per epoch) and `compute_energy` (with grad, each micro-step).
+All regularizers inherit from `Regularizer` and expose
+`update_coordinates` (no grad, called once per epoch) and
+`compute_energy` (with grad, called every micro-step).
 
-| Class | Energy | Use case |
+| Class | Energy | Used by |
 |---|---|---|
-| `HeatQuadraticFormRegularizer` | $-\langle Q\phi,\, \tilde{P}_t Q\phi\rangle_\rho$ | Vibrational modes; $\tilde{P}_t$ approximated via `material.diffuse`. Optional `masking_weight` penalises atoms outside material support. |
-| `DirichletEnergyRegularizer` | $\int D\|\nabla(Q\phi)\|^2\,dx$ | Weighted Dirichlet energy via stochastic FD. `multiply_by_d` corrects for $\mathbb{E}[(\nabla f \cdot \delta)^2] = \tfrac{1}{d}\|\nabla f\|^2$. |
-| `TVMaterialRegularizer` | $\sum_{\text{edges}} w_e \|Q\phi(i) - Q\phi(j)\|$ | Sparse TV / 1-Laplacian basis via **faiss** KNN graph (built in `update_coordinates`). Only inside-material edges contribute. |
-| `FouriererRegularizer` | vibration + masking + diversity | Two-channel: ch-0 atoms → interior vibrational modes, ch-1 → exterior. Channel-equalisation prevents collapse. |
-| `NTKRegularizer` | $-\sum\|\nabla_\theta\langle Q^\ast f_\theta,\,\phi_a\rangle\|^2$ | NTK quadratic form; `create_graph=True` lets gradients reach the isometry. NTK model frozen. |
-| `EuclideanGroup` | $\|Q\phi(x) - \phi(Rx - t)\|^2$ | Pushes atoms to satisfy $Q\phi_k(x) = \phi_k(T(x))$ for a fixed rigid transform $T$ (rotation + translation + mirror). Only tested with `EulerianIsometry`. |
+| `NTKRegularizer` | $-\sum_{a}\|\nabla_\theta\langle Q^\ast f_\theta,\,\phi_a\rangle\|^2$ | `ntk.ipynb` |
+| `TaylorGreenVortex` | $\| Q\phi_k - \phi_k\circ T\|^2$, $T$ = RK4-integrated Taylor–Green flow | `volume_preserving.ipynb` (Taylor–Green) |
+| `EuclideanGroup` | same form, $T$ = rigid torus map (rotation + translation + mirror) | `volume_preserving.ipynb` (mirroring) |
+
+`VolumePreserving` is the abstract parent of `TaylorGreenVortex` and
+`EuclideanGroup`.
+
+### Concept losses (`concept.py`)
+
+`ConceptLoss`, `SDSLoss` (DreamFusion-style Score Distillation Sampling),
+`CLIPLoss`. Coefficient priors used to draw random $K$-sparse linear
+combinations: `GaussianCoefficientModel`, `SoftmaxCoefficientModel`,
+`SpikeAndSlabCoefficientModel`.
+
+### Training scripts
+
+#### `fpca.py`
+
+Jointly trains a `NeuralIsometry` and a `NeuralField` (mean function):
+
+1. Mean function minimises MSE to the dataset mean.
+2. Isometry maximises `monte_carlo_captured_energy` of the zero-centred
+   data pulled back to the source domain.
+
+Theoretically converges to the FPCA solution.
+
+#### `reg_cob.py`
+
+Minimises a geometric energy $E(Q)$ over the isometry.
+
+Inner loop (each epoch):
+1. `regularizer.update_coordinates(...)` — no grad; samples fresh
+   quadrature points and caches anything they depend on.
+2. `grad_accumulation_steps` micro-steps, each calling
+   `shuffle_model_state` (re-samples the ODE time-span).
+3. Atoms split into exact stratum (high-PMF, deterministic) + MC tail.
+   Gradients accumulated over both.
+4. Optional gradient clipping, then `optim_isometry.step()`.
+
+#### `concept_basis.py`
+
+Trains an isometry so random sparse linear combinations of
+pushed-forward atoms resemble a target text concept. Uses `SDSLoss`
+(SDS via frozen Stable Diffusion) or `CLIPLoss`. Supports gradient
+accumulation, an optional mean function, and a `variation_strength`
+knob.
 
 ---
 
-### Config layout (`conf/`)
+## Config layout (`conf/`)
 
 ```
 conf/
-  neural_isometry/     — eulerian.yaml, lagrangian.yaml, semi_lagrangian.yaml, …
-  neural_fields/       — atom_shuffling.yaml, fourier_distorted.yaml, …
-  dictionaries/        — fourier_square.yaml, fourier_disk.yaml, …
-  diffeomorphisms/     — for Lagrangian / normalizing-flow isometries
-  domain_samplers/     — square.yaml, disk.yaml
-  energy_estimation_kwargs/ — monte_carlo.yaml, nufft.yaml
-  callbacks/           — visualizations, isometry checks, reconstructions
-  fpca_experiment/     — full experiment overrides for fpca.py
-  concept_experiment/  — full experiment overrides for concept_basis.py
-  reg_cob.yaml         — root config for reg_cob.py
-```
+  neural_isometry/        — eulerian.yaml
+  neural_fields/          — ff.yaml, latent_bilinear_spatiotemporal_field.yaml,
+                            nerf_spatiotemporal_field.yaml
+  dictionaries/           — fourier_1d.yaml, fourier_2d.yaml
+  domain_samplers/        — line_sampler.yaml, square_sampler.yaml
+  function_generator/     — celeba.yaml, dwsnets_mnist.yaml, implicit_zoo_cifar.yaml
+  coefficient_model/      — gaussian.yaml, softmax.yaml, spike_and_slab.yaml
+  energy_estimation_kwargs/ — monte_carlo.yaml
+  hydra/                  — default.yaml
+  wandb/                  — disabled.yaml, enabled.yaml
 
-**Key `eulerian.yaml` parameters:**
-```yaml
-_target_: infidictionary.neural_isometries.EulerianIsometry
-coords_dim: 2
-channels_dim: 1
-rank: 10
-base_acceleration: 1000.
-atom_shuffling_K: 10        # null to disable atom-weighted residual
-n_time_freqs: 256
-kr_hidden_dims: [64, 64]
-atom_selector_hidden_dims: [64, 64]
-gradient_checkpointing: true
-scalar_field_partial:
-  _partial_: true            # EulerianIsometry injects coords_dim, output_dim, rank, time_emb_dim
-```
+  fpca_experiment/        — 1d_fpca, celeba_eulerian, dwsnets_mnist_eulerian,
+                            implicit_zoo_cifar_eulerian
+  ntk_experiment/         — two_moons
+  vortex_experiment/      — taylor_green
+  euclidean_group/        — mirroring
+  concept_experiment/     — sds
 
-**Key `atom_shuffling.yaml` parameters:**
-```yaml
-_target_: infidictionary.networks.NerfSpatioTemporalField
-spatial_hidden_dims: [256, 256, 256]
-activation: {_target_: torch.nn.SiLU, _partial_: true}
-nerf_n_levels: 8
-nerf_n_base: 64
-nerf_freq_min: 1.0
-nerf_freq_max: 64.0
-# Note: rank and time_emb_dim are injected by EulerianIsometry — do not set here
+  fpca.yaml               — root config for fpca.py
+  reg_cob.yaml            — root config for reg_cob.py
+  concept_basis.yaml      — root config for concept_basis.py
 ```
 
 ---
 
-### Notebooks (`notebooks/`)
+## Notebooks (`notebooks/`)
 
-Shared helpers live in `notebooks/notebook_helpers.py`. Import with `sys.path.append('..')` from any sub-notebook:
+The six notebooks are the figure sources for the paper. Each loads a
+saved checkpoint produced by one of the training scripts above:
 
-```python
-from notebook_helpers import field_to_img, to_rgb_image, render, periodic_gaussian_mixture, visualize_generator_U
-```
-
-| Helper | Purpose |
+| Notebook | Script that produced its checkpoint |
 |---|---|
-| `field_to_img(f_N1, N)` | `(N², 1)` tensor → `(N, N)` numpy for `imshow(origin='lower')` |
-| `to_rgb_image(field_N3, N)` | `(N², 3)` tensor → `(N, N, 3)` float, each channel normalised to `[0,1]` |
-| `render(v_img)` | `(H, W, C)` → `(img, cmap, vmin, vmax)` for `ax.imshow`; C=1 uses `RdBu_r`, C>1 normalises RGB |
-| `periodic_gaussian_mixture(coords, specs, weights)` | Mixture of torus-aware anisotropic Gaussians → `(N, 1)` |
-| `visualize_generator_U(isometry, coords_vis, N_vis, timesteps, device)` | `(R+1) × T` figure: rows 0..R-1 show $u_r(t,\cdot)$; row R shows $\exp(K_R - K_R^\top)$ heatmap |
+| `fpca_1d.ipynb` | `fpca.py +fpca_experiment=1d_fpca` |
+| `fpca_celeba.ipynb` | `fpca.py +fpca_experiment=celeba_eulerian` |
+| `inr_fpca.ipynb` | `fpca.py +fpca_experiment={dwsnets_mnist,implicit_zoo_cifar}_eulerian` |
+| `ntk.ipynb` | `reg_cob.py +ntk_experiment=two_moons` |
+| `volume_preserving.ipynb` | `reg_cob.py +vortex_experiment=taylor_green` and `+euclidean_group=mirroring` |
+| `concept_basis.ipynb` | `concept_basis.py +concept_experiment=sds` |
 
-Key notebooks:
-- `notebooks/isometries/eulerian_transform.ipynb` — EulerianIsometry walkthrough (1-channel and 3-channel).
-- `notebooks/material_vibration.ipynb` — vibrational modes and material API.
-- `notebooks/concept_basis.ipynb` — concept basis visualisation from a checkpoint.
-- `notebooks/testing_euclidean_group.ipynb` — EuclideanGroup regularizer sanity checks.
+Shared helpers live in `notebooks/notebook_helpers.py` (`field_to_img`,
+`to_rgb_image`, `render`, `periodic_gaussian_mixture`,
+`visualize_generator_U`, plotting helpers).

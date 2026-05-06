@@ -1,9 +1,0 @@
-_target_: infidictionary.diffeomorphisms.continuous_time.CTRadialFlow
-dimensions: 2
-gamma: 1.0
-use_adjoint: true
-method: dopri5
-rtol: 0.000001
-atol: 0.000001
-start_time: 0.0
-end_time: 1.0

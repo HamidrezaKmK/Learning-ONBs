@@ -1,35 +1,36 @@
 name: infidictionary
 channels:
-  - pytorch
-  - nvidia
   - conda-forge
 dependencies:
   - python=3.12
   - pip
+  # numerical / plotting stack
   - numpy
   - scipy
-  - pytorch
-  - psutil
+  - matplotlib
+  - pillow
   - tqdm
+  - pyyaml
+  # config + experiment tracking
   - hydra-core
+  - omegaconf
   - wandb
+  # notebooks
   - jupyterlab
   - ipykernel
+  - nbformat
+  - nbclient
   - pip:
-      - matplotlib
-      - python-dotenv
-      - matplotlib
-      - torchvision
-      - einops
-      - omegaconf
-      - random_word
-      # formatting
-      - black
-      - isort
-      - nflows
-      - torchdiffeq
-      - pytorch-finufft
-      - cufinufft
-      - scikit-learn
-      - datasets
-      - plotly
+      # PyTorch CUDA 12.8 wheels (works on driver 525+ / CUDA 12.x runtimes).
+      # If your driver is older, swap the index to https://download.pytorch.org/whl/cu118
+      # or .../cpu and drop the +cu128 suffix.
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - torch==2.9.1
+      - torchvision==0.24.1
+      # data + models used by the experiments
+      - datasets             # CelebA-HQ / INR loaders
+      - scikit-learn         # sklearn.datasets.make_moons (notebooks/ntk.ipynb)
+      # concept-basis only (SDS via Stable Diffusion + CLIP)
+      - diffusers
+      - transformers
+      - open-clip-torch

@@ -2,8 +2,8 @@
 # FPCA on the Implicit-Zoo CIFAR-10 SIREN dataset (3-channel RGB).
 #
 # Usage:
-#   python fpca.py +experiment=implicit_zoo_cifar_eulerian
-#   python fpca.py +experiment=implicit_zoo_cifar_eulerian wandb=enabled wandb.run_name=cifar_fpca
+#   python fpca.py +fpca_experiment=implicit_zoo_cifar_eulerian
+#   python fpca.py +fpca_experiment=implicit_zoo_cifar_eulerian wandb=enabled wandb.run_name=cifar_inr_fpca
 #
 # Before running, download and extract the Implicit-Zoo CIFAR-10 data as described in
 #   conf/function_generator/implicit_zoo_cifar.yaml

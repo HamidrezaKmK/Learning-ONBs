@@ -16,5 +16,5 @@ venv/
 *.Rhistory
 .vscode
 outputs/
-scripts/
+dev/
 data/
