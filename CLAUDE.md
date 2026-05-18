@@ -29,7 +29,7 @@ application:
 
 - `fpca.py` — **Functional PCA**. Diagonalises the empirical covariance
   operator of a function dataset.
-- `reg_cob.py` — **Regularizer-based change-of-basis**. Minimises a
+- `reg_cob.py` — **Regularizer-based change-of-basis**. Minimizes a
   geometric energy $E(Q)$. Currently exposed regularizers:
   - `NTKRegularizer` — diagonalise the Neural Tangent Kernel of a frozen
     classifier.
@@ -215,7 +215,7 @@ combinations: `GaussianCoefficientModel`, `SoftmaxCoefficientModel`,
 
 Jointly trains a `NeuralIsometry` and a `NeuralField` (mean function):
 
-1. Mean function minimises MSE to the dataset mean.
+1. Mean function Minimizes MSE to the dataset mean.
 2. Isometry maximises `monte_carlo_captured_energy` of the zero-centred
    data pulled back to the source domain.
 
@@ -223,7 +223,7 @@ Theoretically converges to the FPCA solution.
 
 #### `reg_cob.py`
 
-Minimises a geometric energy $E(Q)$ over the isometry.
+Minimizes a geometric energy $E(Q)$ over the isometry.
 
 Inner loop (each epoch):
 1. `regularizer.update_coordinates(...)` — no grad; samples fresh

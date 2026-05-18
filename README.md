@@ -62,7 +62,7 @@ python fpca.py +fpca_experiment=implicit_zoo_cifar_eulerian
 
 ### Regularizer-based change-of-basis (`reg_cob.py`)
 
-Minimises a geometric energy $E(Q)$ over the isometry.
+Minimizes a geometric energy $E(Q)$ over the isometry.
 
 ```bash
 # Volume-preserving: Taylor–Green vortex flow
