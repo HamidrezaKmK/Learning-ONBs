@@ -1,5 +1,7 @@
 # Learning Orthonormal Bases for Function Spaces
 
+![Figure 1: Overview of Learning Orthonormal Bases](assets/figure1-1.png)
+
 Code for the paper *Learning Orthonormal Bases for Function Spaces*.
 
 We learn an orthogonal change-of-basis $Q_\theta$ in the function space
