@@ -1,0 +1,11 @@
+_target_: infidictionary.networks.NerfNeuralField
+coords_dim: 2
+output_dim: 1
+hidden_dims: [256, 256, 256]
+activation:
+  _target_: torch.nn.SiLU
+  _partial_: true
+nerf_n_levels: 8
+nerf_n_base: 64
+nerf_freq_min: 1.0
+nerf_freq_max: 64.0

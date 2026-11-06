@@ -1,0 +1,7 @@
+_target_: infidictionary.dictionaries.HaarWaveletDictionary
+domain_dim: 1
+num_channels: 1
+scaling_mass: 0.5
+level_decay: 0.5
+synthesis_tail_probability: 1.0e-4
+learn_synthesis: false

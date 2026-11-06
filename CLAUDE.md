@@ -1,292 +1,59 @@
 # CLAUDE.md
 
-Guidance for Claude Code when working in this repository. Mirrors the
-README but adds layout details and the conventions used throughout the
-code.
+Guidance for Claude Code in this repository. This is the lean release: functional PCA only.
+The regularizer (NTK, Taylor–Green, Euclidean group) and concept-basis experiments live on the
+`full-reproducibility` branch.
 
 ## Setup
 
 ```bash
-conda env create -f environment.yml
+conda env create -f environment.yml   # pins torch 2.9.1 cu128 + torchvision 0.24.1
 conda activate infidictionary
 ```
 
-## Project Goal
+Also needs `safetensors` and `huggingface_hub` for the notebooks' pretrained downloads.
 
-The codebase implements **infinite-dimensional isometric learning**:
-learning an orthogonal change-of-basis $Q$ in function space $L^2(\Omega)$
-that maps an initial analytic dictionary (e.g., Fourier) into a new basis
-better suited to a downstream task, while exactly preserving all $L^2$
-inner products.
+## Training
 
-Given an initial orthonormal basis $\{\phi_k\}$, the learned basis is
-$\{Q\phi_k\}$ for a `NeuralIsometry` $Q$. The isometry constraint
-$Q^\ast Q = I$ is enforced by construction via the Cayley map, not as a
-soft penalty.
-
-The three training scripts at the repository root each illustrate one
-application:
-
-- `fpca.py` — **Functional PCA**. Diagonalises the empirical covariance
-  operator of a function dataset.
-- `reg_cob.py` — **Regularizer-based change-of-basis**. Minimizes a
-  geometric energy $E(Q)$. Currently exposed regularizers:
-  - `NTKRegularizer` — diagonalise the Neural Tangent Kernel of a frozen
-    classifier.
-  - `TaylorGreenVortex` — push atoms to be invariant under the
-    Taylor–Green vortex flow.
-  - `EuclideanGroup` — push atoms to be invariant under a fixed rigid
-    transform of the torus (rotation + translation + mirror).
-- `concept_basis.py` — **Concept basis**. Steers a basis so that random
-  sparse linear combinations of pushed-forward atoms render like a target
-  text concept (Score Distillation Sampling via frozen Stable Diffusion,
-  or CLIP cosine similarity).
-
-All scripts use [Hydra](https://hydra.cc/) for config composition and
-[W&B](https://docs.wandb.ai/) for logging (logging is off by default).
-
----
-
-## Running Experiments
+`fpca.py` is the only entrypoint (Hydra, `conf/fpca.yaml`). It jointly learns a mean function
+and a `NeuralIsometry` that maximizes the energy the transformed dictionary captures.
 
 ```bash
-# Functional PCA
-python fpca.py +fpca_experiment=1d_fpca
-python fpca.py +fpca_experiment=celeba_eulerian
+python fpca.py +fpca_experiment=1d_fpca            # also 1d_fpca_haar, 1d_fpca_voronoi
 python fpca.py +fpca_experiment=dwsnets_mnist_eulerian
 python fpca.py +fpca_experiment=implicit_zoo_cifar_eulerian
-
-# Regularizer-based change-of-basis
-python reg_cob.py +ntk_experiment=two_moons \
-    regularizer.ntk_model_weights_path=outputs/ntk/two_moons_step_5000.pt
-python reg_cob.py +vortex_experiment=taylor_green
-python reg_cob.py +euclidean_group=mirroring
-
-# Concept basis (requires a GPU + ~12 GB VRAM for SDS)
-python concept_basis.py +concept_experiment=sds
+python fpca.py +fpca_experiment=celeba_eulerian
 ```
 
-Hydra overrides work inline: append `key=value` to any command. The
-`eval` resolver is registered, so YAML can use `${eval:'expr'}`.
-Checkpoints are saved under `outputs/checkpoints/<run_name>/`. With
-W&B enabled, the W&B run id is embedded as `wandb-<id>` in the run name
-to support resumption:
+Append `key=value` overrides (`seed=1`, `wandb=enabled`, `checkpointing.checkpoint_dir=...`).
+`infidictionary/checkpointing.py` writes a rolling window of `step_N.pt` plus `config.yaml` to
+`<checkpoint_dir>/<run>/`, where `<run>` is `wandb-<id>` with W&B on, otherwise a timestamp.
 
-```bash
-python fpca.py +fpca_experiment=<name> resume_training.enabled=true \
-    resume_training.checkpoint_path=<path>
-```
+INR data is expected at `data/mnist-inrs` and `data/cifar_inrs_dataset` (gitignored; see README).
+CelebA streams from Hugging Face `mattymchen/celeba-hq`; start concurrent CelebA jobs a minute
+apart to avoid an HF datasets cache-lock deadlock.
 
----
+## Layout (`infidictionary/`)
 
-## Architecture
+- `neural_isometries/`: `base.py` (`NeuralIsometry`: `pushforward` / `pullback`),
+  `eulerian.py` (rank-R Cayley flow with a Woodbury solve; `max_gen_norm` caps the generator and
+  is required for the 1-D flows to converge), `channel_orthogonal.py`, `chained.py`.
+- `dictionaries/`: `base.py` (`InfiDictionary`, `orthogonal_synthesis`), `fourier.py`, `haar.py`,
+  `voronoi.py` (grid-only `VoronoiPWC`).
+- `networks/`: NeRF-style fields and the sinusoidal time embedding.
+- `datasets/`: `synthetic.py` (`OneDimDiscontinuousGenerator`), `celeba.py`, `inr.py`
+  (MNIST / CIFAR SIREN zoos sharing `_SirenDataset`).
+- `domain_samplers.py`, `utils.py`, `checkpointing.py`.
 
-### Core abstractions (`infidictionary/`)
+Tensor convention: coords `(N, d)`, logabsdet `(N,)`, field `(B, N, C)`.
 
-#### `NeuralIsometry` (`neural_isometries/base.py`)
+## Notebooks
 
-Abstract `nn.Module`. Two public methods:
-- `pushforward(src_coords, src_logabsdet, src_field)` →
-  `(tgt_coords, tgt_logabsdet, tgt_field)`
-- `pullback(tgt_coords, tgt_logabsdet, tgt_field)` →
-  `(src_coords, src_logabsdet, src_field)`
+`eulerian_transform`, `fpca_1d`, `fpca_celeba`, `inr_fpca`. `notebook_helpers.load_run` loads a
+local run (`CHECKPOINT_DIR` / `CHECKPOINT_FILE`) or, when `CHECKPOINT_DIR` is `None`, the
+published bundle from the Hugging Face repo `Shengdebao/Learning-ONBs`, one subfolder per
+experiment named exactly like the experiment config.
 
-Tensor convention: coords `(N, d)`, logabsdet `(N,)`, field `(B, N, C)`
-where B = number of atoms / functions.
+## Tests
 
-The only concrete subclass kept in this release is `EulerianIsometry`.
-A trivial `IdentityIsometry` is also available for sanity checks.
-
-#### `EulerianIsometry` — Rank-R Cayley parameterisation
-
-The isometry is generated by the ODE $\dot{Q}(t) = \mathcal{K}(t)Q(t)$,
-$Q(0) = I$, with skew-adjoint generator
-$$\mathcal{K}(t) = U(t)\, A(t)\, U(t)^\ast, \qquad A(t) = K_R(t) - K_R(t)^\top.$$
-
-- $U(t, \cdot) \in \mathbb{R}^{N \times R \times C}$ is produced by a
-  `TimeEvolvingField` (e.g. `NerfSpatioTemporalField`); gives $R$ spatial
-  functions, each $C$-dimensional.
-- $K_R(t) \in \mathbb{R}^{R \times R}$ is produced by a small MLP
-  (`kr_mlp`) inside `EulerianIsometry`, fed a sinusoidal time embedding.
-
-Each Euler step applies the Cayley map via a **Woodbury rank-R solve** —
-only an $R \times R$ linear system, independent of grid size $N$:
-
-$$B = \tfrac{1}{2}\Delta t \cdot a \cdot (K_R - K_R^\top), \quad
-  G = U^\ast U \in \mathbb{R}^{R \times R}$$
-$$Qf = f + UB(I_R - GB)^{-1} U^\ast (I + B) f$$
-
-Reversing the sign of $B$ (negating $\Delta t$) gives the exact pullback,
-no separate inversion needed.
-
-`shuffle_model_state(num_steps)` re-samples the ODE time-span `tspan` and
-must be called before every `pushforward`/`pullback`. The training loop
-does this once per micro-step.
-
-#### `TimeEvolvingField` (`networks/base.py`)
-
-Abstract base for $U$-producing networks. The `EulerianIsometry` owns a
-`SinusoidalTimeEmbedding` and passes the pre-computed `t_emb` down.
-Subclasses receive `(t_emb: (N, emb_dim), x: (N, d))` and must return
-`(N, R, C)`.
-
-Concrete subclasses kept:
-- `NerfSpatioTemporalField` — NeRF-style Fourier features + MLP. Default
-  for 1D and most reg_cob runs.
-- `LatentBilinearSpatiotemporalField` — separate spatial / temporal MLPs
-  combined bilinearly through a learned latent. Used when channels_dim>1
-  (CelebA, CIFAR-INRs, concept basis).
-
-#### `InfiDictionary` (`dictionaries/base.py`)
-
-Abstract orthonormal basis on $L^2(\Omega)$, possibly infinite-rank.
-Key methods:
-- `get_atoms(coords, idx)` → `(A, N, C)`: evaluate A atoms at N points.
-- `get_truncated_indices(K)`: deterministic finite sub-dictionary; e.g.
-  for the Fourier basis, all $(2K-1)^d \cdot C$ modes inside the L∞
-  ball $\|k\|_\infty \le K-1$.
-- `get_high_probability_indices(tail_prob)`: high-PMF stratum used by
-  the stratified Monte Carlo estimator.
-- `sample_indices(n)`: MC tail samples weighted by the PMF.
-- `monte_carlo_captured_energy(coords, logabsdet, values, ...)`:
-  stratified estimator (exact stratum + MC tail).
-
-The only concrete dictionary is `FourierDictionary` (see
-`dictionaries/fourier.py`) — tensor-product real Fourier basis on
-$[0,1]^d$. Atom index `(k_1, ..., k_d, c)`: `k_i ≥ 0` →
-$\sqrt{2}\cos(2\pi k_i x_i)$ (constant 1 if $k_i=0$); `k_i < 0` →
-$\sqrt{2}\sin(2\pi |k_i| x_i)$; channel `c` selects the active output
-channel.
-
-Two PMF modes (constructor arg `pmf_mode`, default `"power_law"`):
-
-| Mode | PMF | When to use |
-|---|---|---|
-| `"power_law"` | $P(k,c) \propto (1+\|k\|_2^2)^{-\alpha}$, with deterministic tiebreaker | True infinite-support prior. Needs $\alpha > d/2$ for convergence (default $\alpha=2$). |
-| `"uniform"` | $1/N_{\rm atoms}$ on a finite truncation $\|k\|_\infty \le K-1$, else 0 | Finite ONB; the MC tail in `monte_carlo_captured_energy` is always empty. Pass `truncation=K`. |
-
-#### `DomainSampler` (`domain_samplers.py`)
-
-Samples quadrature coordinates. `stratified=True` + `add_noise=True` →
-stratified-with-noise (used for training). `add_noise=False` → exact
-regular grid (used for visualisation). Concrete subclasses kept:
-`SquareSampler` (`[0,1]^2`) and `LineSegmentSampler` (`[0, length]`).
-
----
-
-### Datasets (`datasets/`)
-
-| Class | Source | Used by |
-|---|---|---|
-| `OneDimDiscontinuousGenerator` | analytic 1D class with a step at `x=0.5` | `fpca_1d.ipynb` |
-| `CelebADataset` | `mattymchen/celeba-hq` via Hugging Face Datasets | `fpca_celeba.ipynb` |
-| `ImplicitZooMNISTDataset` | DWSNets MNIST INR zoo (Dropbox) | `inr_fpca.ipynb` (MNIST) |
-| `ImplicitZooCIFARDataset` | Implicit-Zoo CIFAR-10 INRs (Kaggle) | `inr_fpca.ipynb` (CIFAR) |
-
-Each dataset returns `(coords, vals)` where `coords: (N, d)` and
-`vals: (B, N, C)` — i.e. one coordinate set per batch, multiple function
-values stacked along the batch dimension.
-
-### Regularizers (`regularizers/`)
-
-All regularizers inherit from `Regularizer` and expose
-`update_coordinates` (no grad, called once per epoch) and
-`compute_energy` (with grad, called every micro-step).
-
-| Class | Energy | Used by |
-|---|---|---|
-| `NTKRegularizer` | $-\sum_{a}\|\nabla_\theta\langle Q^\ast f_\theta,\,\phi_a\rangle\|^2$ | `ntk.ipynb` |
-| `TaylorGreenVortex` | $\| Q\phi_k - \phi_k\circ T\|^2$, $T$ = RK4-integrated Taylor–Green flow | `volume_preserving.ipynb` (Taylor–Green) |
-| `EuclideanGroup` | same form, $T$ = rigid torus map (rotation + translation + mirror) | `volume_preserving.ipynb` (mirroring) |
-
-`VolumePreserving` is the abstract parent of `TaylorGreenVortex` and
-`EuclideanGroup`.
-
-### Concept losses (`concept.py`)
-
-`ConceptLoss`, `SDSLoss` (DreamFusion-style Score Distillation Sampling),
-`CLIPLoss`. Coefficient priors used to draw random $K$-sparse linear
-combinations: `GaussianCoefficientModel`, `SoftmaxCoefficientModel`,
-`SpikeAndSlabCoefficientModel`.
-
-### Training scripts
-
-#### `fpca.py`
-
-Jointly trains a `NeuralIsometry` and a `NeuralField` (mean function):
-
-1. Mean function Minimizes MSE to the dataset mean.
-2. Isometry maximises `monte_carlo_captured_energy` of the zero-centred
-   data pulled back to the source domain.
-
-Theoretically converges to the FPCA solution.
-
-#### `reg_cob.py`
-
-Minimizes a geometric energy $E(Q)$ over the isometry.
-
-Inner loop (each epoch):
-1. `regularizer.update_coordinates(...)` — no grad; samples fresh
-   quadrature points and caches anything they depend on.
-2. `grad_accumulation_steps` micro-steps, each calling
-   `shuffle_model_state` (re-samples the ODE time-span).
-3. Atoms split into exact stratum (high-PMF, deterministic) + MC tail.
-   Gradients accumulated over both.
-4. Optional gradient clipping, then `optim_isometry.step()`.
-
-#### `concept_basis.py`
-
-Trains an isometry so random sparse linear combinations of
-pushed-forward atoms resemble a target text concept. Uses `SDSLoss`
-(SDS via frozen Stable Diffusion) or `CLIPLoss`. Supports gradient
-accumulation, an optional mean function, and a `variation_strength`
-knob.
-
----
-
-## Config layout (`conf/`)
-
-```
-conf/
-  neural_isometry/        — eulerian.yaml
-  neural_fields/          — ff.yaml, latent_bilinear_spatiotemporal_field.yaml,
-                            nerf_spatiotemporal_field.yaml
-  dictionaries/           — fourier_1d.yaml, fourier_2d.yaml
-  domain_samplers/        — line_sampler.yaml, square_sampler.yaml
-  function_generator/     — celeba.yaml, dwsnets_mnist.yaml, implicit_zoo_cifar.yaml
-  coefficient_model/      — gaussian.yaml, softmax.yaml, spike_and_slab.yaml
-  energy_estimation_kwargs/ — monte_carlo.yaml
-  hydra/                  — default.yaml
-  wandb/                  — disabled.yaml, enabled.yaml
-
-  fpca_experiment/        — 1d_fpca, celeba_eulerian, dwsnets_mnist_eulerian,
-                            implicit_zoo_cifar_eulerian
-  ntk_experiment/         — two_moons
-  vortex_experiment/      — taylor_green
-  euclidean_group/        — mirroring
-  concept_experiment/     — sds
-
-  fpca.yaml               — root config for fpca.py
-  reg_cob.yaml            — root config for reg_cob.py
-  concept_basis.yaml      — root config for concept_basis.py
-```
-
----
-
-## Notebooks (`notebooks/`)
-
-The six notebooks are the figure sources for the paper. Each loads a
-saved checkpoint produced by one of the training scripts above:
-
-| Notebook | Script that produced its checkpoint |
-|---|---|
-| `fpca_1d.ipynb` | `fpca.py +fpca_experiment=1d_fpca` |
-| `fpca_celeba.ipynb` | `fpca.py +fpca_experiment=celeba_eulerian` |
-| `inr_fpca.ipynb` | `fpca.py +fpca_experiment={dwsnets_mnist,implicit_zoo_cifar}_eulerian` |
-| `ntk.ipynb` | `reg_cob.py +ntk_experiment=two_moons` |
-| `volume_preserving.ipynb` | `reg_cob.py +vortex_experiment=taylor_green` and `+euclidean_group=mirroring` |
-| `concept_basis.ipynb` | `concept_basis.py +concept_experiment=sds` |
-
-Shared helpers live in `notebooks/notebook_helpers.py` (`field_to_img`,
-`to_rgb_image`, `render`, `periodic_gaussian_mixture`,
-`visualize_generator_U`, plotting helpers).
+`pytest tests` (plain pytest, includes a 2-epoch smoke run of each 1-D experiment).

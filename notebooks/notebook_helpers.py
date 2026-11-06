@@ -1,6 +1,6 @@
 """Shared visualization and utility helpers for learning-projections notebooks.
 
-Convention used everywhere: visualisation grids come from
+Convention used everywhere: visualization grids come from
 ``SquareSampler(stratified=True, add_noise=False).sample(N)``, which lays
 coordinates out as ``coords[i*N + j] = (x_i, y_j)`` (i = x-index, j =
 y-index). With this layout, ``field_to_img`` and ``to_rgb_image`` both
@@ -13,10 +13,71 @@ laid out at ``CelebADataset._full_coords`` with y outer, x inner — use
 SquareSampler convention before passing to any of the helpers below.
 """
 
+import json
 import math
+import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import yaml
+from omegaconf import OmegaConf
+
+
+def load_run(checkpoint_dir, checkpoint_file, pretrained_repo, pretrained_name, device):
+    """Return ``(conf, ckpt)`` for a local ``fpca.py`` run or a published checkpoint.
+
+    With ``checkpoint_dir`` set, reads ``config.yaml`` and the checkpoint file
+    from that run directory. With it ``None``, loads the published checkpoint
+    ``pretrained_name`` from ``pretrained_repo`` (a Hugging Face repo id, or a
+    local folder laid out the same way). A published checkpoint is a folder
+    ``<pretrained_name>/`` holding ``config.yaml``, ``model.safetensors`` (state
+    dicts keyed ``neural_isometry.*``, ``mean_function.*``,
+    ``initial_dictionary.*``) and ``metadata.json``. Either way
+    ``ckpt["models"]`` holds the three state dicts, and ``ckpt["source"]`` /
+    ``ckpt["run_name"]`` say where they came from.
+    """
+    if checkpoint_dir is not None:
+        with open(f"{checkpoint_dir}/config.yaml") as f:
+            conf = OmegaConf.create(yaml.safe_load(f))
+        ckpt = torch.load(f"{checkpoint_dir}/{checkpoint_file}", map_location=device, weights_only=False)
+        ckpt["source"] = f"{checkpoint_dir}/{checkpoint_file}"
+        ckpt["run_name"] = os.path.basename(os.path.normpath(checkpoint_dir))
+        return conf, ckpt
+
+    from safetensors.torch import load_file
+
+    if os.path.isdir(pretrained_repo):
+        root = os.path.join(pretrained_repo, pretrained_name)
+    else:
+        from huggingface_hub import snapshot_download
+
+        # Fetch only this experiment's folder from the repo.
+        repo_dir = snapshot_download(repo_id=pretrained_repo, allow_patterns=[f"{pretrained_name}/*"])
+        root = os.path.join(repo_dir, pretrained_name)
+    with open(os.path.join(root, "config.yaml")) as f:
+        conf = OmegaConf.create(yaml.safe_load(f))
+    with open(os.path.join(root, "metadata.json")) as f:
+        metadata = json.load(f)
+    flat = load_file(os.path.join(root, "model.safetensors"), device=str(device))
+    models = {}
+    for key, value in flat.items():
+        name, param = key.split(".", 1)
+        models.setdefault(name, {})[param] = value
+    ckpt = {
+        "models": models,
+        "epoch": metadata.get("epoch", -1),
+        "metric": metadata.get("captured_energy", float("nan")),
+        "source": f"{pretrained_repo}/{pretrained_name}",
+        "run_name": pretrained_name,
+    }
+    return conf, ckpt
+
+
+def _as_numpy(value):
+    """Detach a tensor for plotting, or coerce an array-like value."""
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().numpy()
+    return np.asarray(value)
 
 
 # ── Layout conversion (CelebA yx layout ↔ SquareSampler ij layout) ──────────
@@ -263,7 +324,7 @@ def plot_atom_mosaic(
         ``SquareSampler(stratified=True, add_noise=False).sample(n_vis)``.
       • ``coords`` → hexbin scatter on the supplied ``(N, 2)`` evaluation
         coordinates. Only ``C == 1`` is supported. Used for non-rectangular
-        domains (disk material, NTK over an irregular grid).
+        domains (for example, an NTK over an irregular grid).
 
     This is the **canonical** atom-mosaic helper for all notebooks; please
     reuse it rather than reimplementing per-notebook variants.
@@ -293,7 +354,6 @@ def plot_atom_mosaic(
     for c_idx, c_input in enumerate(c_vals):
         sf = subfigs[c_idx] if nC > 1 else fig
         if nC > 1:
-            ch_label = ["R", "G", "B"][c_input] if C == 3 else f"atom set {c_input}"
             sf.suptitle(f"atom set {c_input}", fontsize=10)
         axes = sf.subplots(nk1, nk2, gridspec_kw={"wspace": 0.03, "hspace": 0.03})
         for ri, k1 in enumerate(k1_rev):
@@ -413,119 +473,6 @@ def scatter_signal(ax, coords, vals, *, title=None, size_c1: float = 80, size_cg
         ax.set_title(title, fontsize=8)
 
 
-# ── Physics helpers ──────────────────────────────────────────────────────────
-
-def periodic_gaussian_mixture(coords, specs, weights=None):
-    """Mixture of anisotropic, periodic (torus-aware) Gaussians.
-
-    coords  : (N, 2) coordinates in [0, 1]²
-    specs   : list of dicts with keys:
-                'center' (x, y), 'angle' (radians), 'sigmas' (sigma_x, sigma_y)
-    weights : list of floats (default: uniform 1.0)
-
-    Returns (N, 1) field values (not normalized, max ≈ 1 per component).
-    """
-    if weights is None:
-        weights = [1.0] * len(specs)
-    result = torch.zeros(coords.shape[0], 1, device=coords.device, dtype=coords.dtype)
-    for spec, w in zip(specs, weights):
-        mu = torch.tensor(spec['center'], device=coords.device, dtype=coords.dtype)
-        theta = spec['angle']
-        sx, sy = spec['sigmas']
-        c, s = math.cos(theta), math.sin(theta)
-        R_mat = torch.tensor([[c, -s], [s, c]], device=coords.device, dtype=coords.dtype)
-        prec  = R_mat @ torch.diag(
-            torch.tensor([1.0 / sx**2, 1.0 / sy**2], device=coords.device, dtype=coords.dtype)
-        ) @ R_mat.T
-        delta = coords - mu
-        delta = delta - torch.round(delta)  # shortest path on torus
-        maha  = (delta @ prec * delta).sum(dim=-1, keepdim=True)
-        result = result + w * torch.exp(-0.5 * maha)
-    return result
-
-
-# ── EulerianIsometry visualisation ──────────────────────────────────────────
-
-def visualize_generator_U(isometry, coords_vis, N_vis: int, timesteps, device, cmap: str = "RdBu_r", trunc: int = 5):
-    """(R+1) × len(timesteps) figure: U columns and exp(K_R − K_Rᵀ).
-
-    Rows 0..R-1 : spatial plot of u_r(t, ·) at each timestep.
-                  C=1  → grayscale cmap imshow + colorbar.
-                  C>1  → RGB imshow (channels globally normalized to [0, 1]).
-    Row R       : R×R heatmap of exp(K_R − K_Rᵀ) — the finite rotation
-                  generated by K_R at each timestep.
-
-    The displayed columns are the **full** generator field
-    ``U(t, x) = function_field(t, x) + Σ_a w_a(t) · φ_a(x)``,
-    i.e. ``isometry._assemble_U(t_emb, coords)`` — the same quantity that
-    drives the Cayley rotation inside ``_run_euler``. Either path may be
-    None, but at least one is always present.
-
-    Parameters
-    ----------
-    isometry   : EulerianIsometry (.rank, .channels_dim, .time_embedding,
-                 ._assemble_U, ._compute_kr)
-    coords_vis : (N_vis², d) tensor on `device`, from a no-noise stratified grid
-                 in **ij-layout** (i.e. `SquareSampler(stratified=True, add_noise=False)`).
-    N_vis      : grid size per dimension
-    timesteps  : 1-D tensor of time values to visualise
-    device     : torch device
-    """
-    R   = min(isometry.rank, trunc)
-    C   = isometry.channels_dim
-    N   = coords_vis.shape[0]
-    n_t = len(timesteps)
-
-    fig, axes = plt.subplots(
-        nrows=R + 1, ncols=n_t,
-        figsize=(4 * n_t, 4 * (R + 1)),
-        gridspec_kw={"hspace": 0.5, "wspace": 0.5},
-    )
-    if n_t == 1:
-        axes = axes[:, None]
-
-    with torch.no_grad():
-        for j, t_val in enumerate(timesteps):
-            t_sc    = float(t_val)
-            t_batch = torch.full((N,), t_sc, device=device, dtype=coords_vis.dtype)
-            t_emb   = isometry.time_embedding(t_batch)            # (N, emb_dim)
-            U       = isometry._assemble_U(t_emb, coords_vis)     # (N, R, C)
-            if U.shape[-2] > R:
-                U = U[:, :R, :]
-
-            t_emb_1 = isometry.time_embedding(t_batch[:1])        # (1, emb_dim)
-            K_R     = isometry._compute_kr(t_emb_1)[0]            # (R, R)
-            O       = torch.matrix_exp(K_R - K_R.T)               # (R, R) orthogonal
-
-            for r in range(R):
-                ax  = axes[r, j]
-                u_r = U[:, r, :]  # (N, C)
-                if C == 1:
-                    im = ax.imshow(
-                        field_to_img(u_r, N_vis),
-                        origin='lower', extent=[0, 1, 0, 1], cmap=cmap,
-                    )
-                    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-                else:
-                    ax.imshow(to_rgb_image(u_r, N_vis), origin='lower', extent=[0, 1, 0, 1])
-                ax.set_title(f'$u_{{{r}}}$,  t={t_sc:.2f}', fontsize=8)
-                ax.set_xlabel('x'); ax.set_ylabel('y')
-                ax.set_aspect('equal')
-
-            ax = axes[R, j]
-            im = ax.imshow(O.cpu().float().numpy(), cmap='RdBu_r', vmin=-1, vmax=1)
-            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            ax.set_title(f'$\\exp(K_R\\!-\\!K_R^\\top)$,  t={t_sc:.2f}', fontsize=8)
-            ax.set_xlabel('col'); ax.set_ylabel('row')
-
-    plt.suptitle(
-        'Rows $0..R\\!-\\!1$: columns of $U(t,\\cdot)$;  '
-        'Row $R$: finite rotation $\\exp(K_R - K_R^\\top)$',
-        fontsize=11,
-    )
-    plt.show()
-
-
 # ── PSNR line chart (mean ± std across signals) ──────────────────────────────
 
 def psnr_matrix(recons_list, ref_cpu):
@@ -609,11 +556,12 @@ def plot_spectral_compactness(
     ref_lines=(0.50, 0.75, 0.90),
     axes=None,
 ):
-    """Two-panel spectral compactness plot: cumulative energy and log residual.
+    """Two-panel spectral compactness plot: captured and residual energy.
 
-    Matches the style of the 1-D FPCA notebook (section 7). Both panels share
-    a log x-axis; the right panel uses a log y-axis so power-law decay appears
-    linear. Optional per-method std bands via ``fill_between``.
+    The left panel shows cumulative captured energy.  The right panel shows
+    the remaining energy, ``1 - captured_energy``, on log--log axes so its
+    decay with the number of atoms is directly visible. Optional per-method
+    std bands via ``fill_between``.
 
     Parameters
     ----------
@@ -647,7 +595,7 @@ def plot_spectral_compactness(
         fig = None
         ax_l, ax_r = axes
 
-    for is_right, ax in [(False, ax_l), (True, ax_r)]:
+    for ax in (ax_l,):
         for m in methods:
             xs    = np.asarray(m["xs"])
             mean  = np.asarray(m["mean"])
@@ -679,13 +627,131 @@ def plot_spectral_compactness(
     ax_l.set_ylabel("captured energy fraction")
     ax_l.set_title("Cumulative captured energy  (log-x)")
 
-    # Right: linear-x view of the same cumulative captured energy
-    ax_r.set_xscale("linear")
-    ax_r.set_ylabel("captured energy fraction")
-    ax_r.set_title("Cumulative captured energy  (linear-x)")
+    # Right: residual energy decays as atoms are added.  A positive floor is
+    # required for log scaling and only affects numerical round-off at zero.
+    for m in methods:
+        xs = np.asarray(m["xs"])
+        mean = np.asarray(m["mean"])
+        std = np.asarray(m["std"]) if m.get("std") is not None else None
+        color = m["color"]
+        marker = m.get("marker")
+        residual = np.clip(1.0 - mean, eps, None)
+        ax_r.plot(xs, residual, color=color, marker=marker, lw=1.5,
+                  ms=5 if marker else 0, label=m["label"])
+        if std is not None:
+            # If captured energy has uncertainty ``std``, the residual has the
+            # same magnitude of uncertainty with the sign reversed.
+            ax_r.fill_between(
+                xs,
+                np.clip(1.0 - (mean + std), eps, None),
+                np.clip(1.0 - (mean - std), eps, None),
+                alpha=0.20, color=color,
+            )
+    ax_r.set_xscale(xscale)
+    ax_r.set_yscale("log")
+    ax_r.set_xlabel(xlabel)
+    ax_r.set_ylabel("residual energy fraction")
+    ax_r.set_title("Residual energy  (log-log)")
+    ax_r.grid(alpha=0.3, which="both")
 
     if title is not None:
         _fig = fig if fig is not None else ax_l.get_figure()
         _fig.suptitle(title, fontsize=11)
 
     return fig, (ax_l, ax_r)
+
+
+# ── Eulerian-isometry tutorial helpers ──────────────────────────────────
+
+def plot_signal_1d(x, values, label: str | None = None, title: str | None = None, ax=None):
+    """Plot a scalar field over a one-dimensional domain."""
+    x_np = _as_numpy(x).squeeze()
+    values_np = _as_numpy(values).squeeze()
+    order = np.argsort(x_np)
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(x_np[order], values_np[order], label=label or "value")
+    ax.set_xlabel("x")
+    ax.grid(alpha=0.3)
+    if label is not None:
+        ax.legend(fontsize=8)
+    if title is not None:
+        ax.set_title(title, fontsize=10)
+    return ax
+
+
+def show_scalar_2d(ax, xy, values, gridsize: int = 30, title: str | None = None,
+                   cmap: str = "viridis", vmin: float | None = None,
+                   vmax: float | None = None):
+    """Render a scalar field on irregular 2-D coordinates."""
+    xy_np = _as_numpy(xy)
+    values_np = _as_numpy(values).reshape(-1)
+    extent = (float(xy_np[:, 0].min()), float(xy_np[:, 0].max()),
+              float(xy_np[:, 1].min()), float(xy_np[:, 1].max()))
+    plot = ax.hexbin(
+        xy_np[:, 0], xy_np[:, 1], C=values_np, gridsize=gridsize,
+        extent=extent, reduce_C_function=np.mean, cmap=cmap, vmin=vmin, vmax=vmax,
+    )
+    ax.set(xlim=extent[:2], ylim=extent[2:], aspect="equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if title is not None:
+        ax.set_title(title, fontsize=9)
+    return plot
+
+
+def visualize_generator_U(
+    isometry,
+    coords_vis,
+    *args,
+    channel: int = 0,
+    trunc: int = 5,
+    gridsize: int = 30,
+    **_ignored,
+):
+    """Visualize the Eulerian generator and its finite orthogonal rotation.
+
+    Accepts the tutorial call shape ``(isometry, coords, timesteps, device)``
+    and the legacy FPCA notebook shape ``(isometry, coords, N_vis, timesteps,
+    device)``.  The latter's grid-size argument is unused for irregular grids.
+    """
+    if len(args) == 2:
+        timesteps, device = args
+    elif len(args) == 3:
+        _, timesteps, device = args
+    else:
+        raise TypeError("expected timesteps and device, optionally preceded by N_vis")
+
+    rank = min(isometry.rank, trunc)
+    selected_channel = min(channel, isometry.channels_dim - 1)
+    n_points = coords_vis.shape[0]
+    fig, axes = plt.subplots(
+        rank + 1, len(timesteps), figsize=(4 * len(timesteps), 4 * (rank + 1)),
+        squeeze=False, gridspec_kw={"hspace": 0.5, "wspace": 0.5},
+    )
+    with torch.no_grad():
+        for column, time_value in enumerate(timesteps):
+            time_batch = torch.full(
+                (n_points,), float(time_value), device=device, dtype=coords_vis.dtype,
+            )
+            embedding = isometry.time_embedding(time_batch)
+            field = isometry.function_field(embedding, coords_vis)[:, :rank]
+            matrix = isometry._compute_kr(embedding[:1])[0]
+            rotation = torch.matrix_exp(matrix - matrix.transpose(-1, -2))
+            for row in range(rank):
+                axis = axes[row, column]
+                values = field[:, row, selected_channel]
+                if coords_vis.shape[-1] == 1:
+                    plot_signal_1d(coords_vis[:, 0], values, ax=axis,
+                                   title=f"u_{row}, channel {selected_channel}, t={float(time_value):.2f}")
+                else:
+                    image = show_scalar_2d(axis, coords_vis, values, gridsize=gridsize,
+                                           title=f"u_{row}, channel {selected_channel}, t={float(time_value):.2f}")
+                    plt.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+            image = axes[rank, column].imshow(
+                rotation.detach().cpu().float().numpy(), cmap="coolwarm", vmin=-1, vmax=1,
+            )
+            plt.colorbar(image, ax=axes[rank, column], fraction=0.046, pad=0.04)
+            axes[rank, column].set_title(f"exp(K - Kᵀ), t={float(time_value):.2f}")
+    fig.suptitle("Generator columns and finite orthogonal rotation", fontsize=11)
+    plt.show()

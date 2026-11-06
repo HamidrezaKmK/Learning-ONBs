@@ -18,12 +18,12 @@ Two concrete classes cover the two formats actually shipped:
 
 ``ImplicitZooCIFARDataset``
     Source: ``archive.zip`` from Kaggle
-    (https://www.kaggle.com/datasets/qimaqi/implicit-zoo-cifar10-inrs).
-    Reads directly from the zip — no extraction needed::
+    (https://www.kaggle.com/datasets/alexanderqi/cifar10-inrs-dataset).
+    The archive must be extracted before use::
 
         cifar_inrs_dataset/{train,eval}/ckpts/<class_id>/<idx>_0000042.ckpt
 
-    Each ``.ckpt`` is a dict ``{'image_idx': int, 'params': {seq.*}}``.
+    Each ``.ckpt`` file is a dict ``{'image_idx': int, 'params': {seq.*}}``.
 
     CIFAR-10 architecture: 2 → 64 → 64 → 3,  SIREN ω₀ = 30.
 
@@ -32,16 +32,22 @@ Both classes share the same ``_eval_siren_batch`` kernel and expose the
 Coordinates are rescaled [0,1]² → [−1,1]² internally before evaluation.
 """
 
-import os
-import io
 import glob
-import zipfile
+import os
+import random
+
 import torch
 from torch import Tensor
 from typing import Optional
 
 from infidictionary.datasets.base import IrregularDataset
 from infidictionary.domain_samplers import SquareSampler
+
+
+def _resolve_device(device: str | torch.device) -> torch.device:
+    if device == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device)
 
 
 # ---------------------------------------------------------------------------
@@ -109,92 +115,41 @@ def _parse_seq_state_dict(sd: dict) -> tuple[list[Tensor], list[Tensor]]:
 
 
 # ---------------------------------------------------------------------------
-# ImplicitZooMNISTDataset
+# Shared base: a stack of SIRENs evaluated at fresh random coordinates
 # ---------------------------------------------------------------------------
 
-class ImplicitZooMNISTDataset(IrregularDataset):
-    """SIREN dataset from the Implicit-Zoo MNIST collection (directory format).
+class _SirenDataset(IrregularDataset):
+    """Loads SIREN checkpoints into stacked ``weights`` / ``biases`` and serves batches.
 
-    Download
-    --------
-    https://www.dropbox.com/sh/56pakaxe58z29mq/AABtWNkRYroLYe_cE3c90DXVa?dl=0
-    → download ``mnist-inrs.zip``, extract to ``data/mnist-inrs/``.
-
-    Pass ``data_dir='data/mnist-inrs'`` and optionally a ``filter_pattern``
-    to select only MNIST or only CIFAR-10 entries (see below).
+    Subclasses only locate the checkpoint files. The files are shuffled with a
+    fixed seed before an optional ``n_inrs`` cut, because they sort by class and
+    a plain prefix would load only the first classes.
     """
 
     def __init__(
         self,
-        data_dir: str,
-        domain_sample_size: int = 28,
-        n_inrs: Optional[int] = None,
-        filter_pattern: str = "mnist_png*",
-        omega_0: float = 30.0,
-        omega: float = 30.0,
-        device: str | torch.device = "cpu",
+        files: list[str],
+        domain_sample_size: int,
+        n_inrs: Optional[int],
+        omega_0: float,
+        omega: float,
+        device: str | torch.device,
     ):
-        """
-        Args:
-            data_dir:           Root of the extracted ``mnist-inrs/`` directory.
-            domain_sample_size: Samples *per dimension*; total coords = ``n²``.
-                                28 → 784 coords, matching MNIST 28×28 resolution.
-            n_inrs:             INRs to load (``None`` = all matching files).
-            filter_pattern:     Glob pattern applied to sub-directory names.
-                                ``'mnist_png*'``    → only MNIST (default).
-                                ``'cifar10_png*'``  → only CIFAR-10.
-                                ``'*'``             → all.
-            omega_0:            First-layer angular frequency (default 30).
-            omega:              Hidden-layer angular frequency (default 30).
-            device:             Torch device.
-        """
         self.domain_sample_size = domain_sample_size
         self.omega_0 = omega_0
         self.omega = omega
-        self.device = torch.device(device)
+        self.device = _resolve_device(device)
         self._sampler = SquareSampler()
 
-        if not os.path.isdir(data_dir):
-            raise FileNotFoundError(
-                f"Directory not found: {data_dir!r}\n"
-                "Download mnist-inrs.zip from:\n"
-                "  https://www.dropbox.com/sh/56pakaxe58z29mq/AABtWNkRYroLYe_cE3c90DXVa?dl=0\n"
-                "and extract it."
-            )
-
-        # Collect model_final.pth files matching the filter
-        pattern = os.path.join(data_dir, filter_pattern, "checkpoints", "model_final.pth")
-        files = sorted(glob.glob(pattern))
-        if not files:
-            raise FileNotFoundError(
-                f"No files matched pattern {pattern!r}. "
-                f"Check data_dir and filter_pattern."
-            )
-
-        # Shuffle before slicing so any n_inrs cut is class-balanced.
-        # Lexicographic sort groups all class-0 files first, so without this
-        # a small n_inrs would only load a single digit class.
-        import random as _rng
-        _rng.Random(0).shuffle(files)
-
+        files = list(files)
+        random.Random(0).shuffle(files)
         if n_inrs is not None:
             files = files[:n_inrs]
-
-        self.weights, self.biases = self._load_files(files)
+        params = [_parse_seq_state_dict(torch.load(f, map_location="cpu", weights_only=False)) for f in files]
+        n_layers = len(params[0][0])
+        self.weights = [torch.stack([w[l] for w, _ in params]).to(self.device) for l in range(n_layers)]
+        self.biases = [torch.stack([b[l] for _, b in params]).to(self.device) for l in range(n_layers)]
         self.n_inrs = self.weights[0].shape[0]
-
-    def _load_files(self, files: list[str]) -> tuple[list[Tensor], list[Tensor]]:
-        all_ws: list[list[Tensor]] = []
-        all_bs: list[list[Tensor]] = []
-        for path in files:
-            sd = torch.load(path, map_location="cpu", weights_only=False)
-            ws, bs = _parse_seq_state_dict(sd)
-            all_ws.append(ws)
-            all_bs.append(bs)
-        n_layers = len(all_ws[0])
-        stacked_w = [torch.stack([all_ws[i][l] for i in range(len(files))]).to(self.device) for l in range(n_layers)]
-        stacked_b = [torch.stack([all_bs[i][l] for i in range(len(files))]).to(self.device) for l in range(n_layers)]
-        return stacked_w, stacked_b
 
     def reset_buffer(self) -> None:
         self._buffer = torch.randperm(self.n_inrs, device=self.device)
@@ -217,9 +172,6 @@ class ImplicitZooMNISTDataset(IrregularDataset):
         else:
             idx = torch.randint(self.n_inrs, (batch_size,), device=self.device)
 
-        w_batch = [W[idx] for W in self.weights]
-        b_batch = [b[idx] for b in self.biases]
-
         # SIRENs are trained with pixel-row order: x left→right, y top→bottom.
         # Our coords are in [0,1]² with y=0 at the bottom (mathematical convention),
         # so we flip y when mapping to the SIREN's native [-1,1]² range.
@@ -228,127 +180,95 @@ class ImplicitZooMNISTDataset(IrregularDataset):
             1.0 - 2.0 * coords[:, 1],   # y: [0,1] → [1,-1]  (flip)
         ], dim=-1)
         with torch.no_grad():
-            values = _eval_siren_batch(siren_coords, w_batch, b_batch, self.omega_0, self.omega)
-
+            values = _eval_siren_batch(
+                siren_coords,
+                [W[idx] for W in self.weights],
+                [b[idx] for b in self.biases],
+                self.omega_0,
+                self.omega,
+            )
         return coords, values
+
+
+# ---------------------------------------------------------------------------
+# ImplicitZooMNISTDataset
+# ---------------------------------------------------------------------------
+
+class ImplicitZooMNISTDataset(_SirenDataset):
+    """SIREN dataset from the Implicit-Zoo MNIST collection (directory format).
+
+    Download ``mnist-inrs.zip`` (inside the DWSNets Dropbox bundle,
+    https://www.dropbox.com/sh/56pakaxe58z29mq/AABtWNkRYroLYe_cE3c90DXVa?dl=0)
+    and extract it to ``data/mnist-inrs/``.
+
+    Args:
+        data_dir:           Root of the extracted ``mnist-inrs/`` directory.
+        domain_sample_size: Samples *per dimension*; total coords = ``n²``.
+        n_inrs:             INRs to load (``None`` = all matching files).
+        filter_pattern:     Glob over sub-directory names: ``'mnist_png*'`` (MNIST,
+                            default), ``'cifar10_png*'`` (CIFAR-10) or ``'*'``.
+        omega_0, omega:     First- and hidden-layer SIREN frequencies.
+        device:             Torch device; ``'auto'`` picks CUDA when available.
+    """
+
+    def __init__(
+        self,
+        data_dir: str,
+        domain_sample_size: int = 28,
+        n_inrs: Optional[int] = None,
+        filter_pattern: str = "mnist_png*",
+        omega_0: float = 30.0,
+        omega: float = 30.0,
+        device: str | torch.device = "auto",
+    ):
+        if not os.path.isdir(data_dir):
+            raise FileNotFoundError(
+                f"Directory not found: {data_dir!r}. Download mnist-inrs.zip from "
+                "https://www.dropbox.com/sh/56pakaxe58z29mq/AABtWNkRYroLYe_cE3c90DXVa?dl=0 "
+                "and extract it."
+            )
+        pattern = os.path.join(data_dir, filter_pattern, "checkpoints", "model_final.pth")
+        files = sorted(glob.glob(pattern))
+        if not files:
+            raise FileNotFoundError(f"No files matched {pattern!r}. Check data_dir and filter_pattern.")
+        super().__init__(files, domain_sample_size, n_inrs, omega_0, omega, device)
 
 
 # ---------------------------------------------------------------------------
 # ImplicitZooCIFARDataset
 # ---------------------------------------------------------------------------
 
-class ImplicitZooCIFARDataset(IrregularDataset):
-    """SIREN dataset from the Implicit-Zoo CIFAR-10 collection (zip format).
+class ImplicitZooCIFARDataset(_SirenDataset):
+    """SIREN dataset from the Implicit-Zoo CIFAR-10 collection.
 
-    Reads directly from the zip archive — no prior extraction needed.
+    Download ``archive.zip`` from
+    https://www.kaggle.com/datasets/alexanderqi/cifar10-inrs-dataset and
+    extract it into ``data/`` so that ``data/cifar_inrs_dataset/`` exists.
 
-    Download
-    --------
-    https://www.kaggle.com/datasets/qimaqi/implicit-zoo-cifar10-inrs
-    → download ``archive.zip``, keep it as-is (pass its path to ``zip_path``).
-
-    Each ``.ckpt`` entry inside the zip is a dict::
-
-        {'image_idx': int, 'params': {'seq.0.weight': ..., ...}}
-
-    CIFAR-10 architecture: 2 → 64 → 64 → 3,  ω₀ = 30.
+    Args:
+        extracted_dir:      Root of the extracted ``cifar_inrs_dataset/`` tree.
+        split:              ``'train'`` (50 000) or ``'eval'`` (10 000).
+        domain_sample_size: Samples *per dimension*; total coords = ``n²``.
+        n_inrs:             INRs to load (``None`` = all in the chosen split).
+        omega_0, omega:     First- and hidden-layer SIREN frequencies.
+        device:             Torch device; ``'auto'`` picks CUDA when available.
     """
 
     def __init__(
         self,
-        zip_path: str,
+        extracted_dir: str,
         split: str = "train",
         domain_sample_size: int = 32,
         n_inrs: Optional[int] = None,
         omega_0: float = 30.0,
         omega: float = 30.0,
-        device: str | torch.device = "cpu",
+        device: str | torch.device = "auto",
     ):
-        """
-        Args:
-            zip_path:           Path to ``archive.zip`` (Kaggle download).
-            split:              ``'train'`` (50 000) or ``'eval'`` (10 000).
-            domain_sample_size: Samples *per dimension*; total coords = ``n²``.
-                                32 → 1024 coords, matching CIFAR-10 32×32.
-            n_inrs:             INRs to load (``None`` = all in the chosen split).
-            omega_0:            First-layer angular frequency (default 30).
-            omega:              Hidden-layer angular frequency (default 30).
-            device:             Torch device.
-        """
-        self.domain_sample_size = domain_sample_size
-        self.omega_0 = omega_0
-        self.omega = omega
-        self.device = torch.device(device)
-        self._sampler = SquareSampler()
-
-        if not os.path.isfile(zip_path):
+        files = sorted(glob.glob(os.path.join(extracted_dir, split, "ckpts", "*", "*.ckpt")))
+        if not files:
             raise FileNotFoundError(
-                f"Zip archive not found: {zip_path!r}\n"
-                "Download from https://www.kaggle.com/datasets/qimaqi/implicit-zoo-cifar10-inrs"
+                "No CIFAR INR checkpoints found under "
+                f"{os.path.join(extracted_dir, split, 'ckpts')!r}. Download and extract the archive from "
+                "https://www.kaggle.com/datasets/alexanderqi/cifar10-inrs-dataset"
             )
-
-        self.weights, self.biases = self._load_from_zip(zip_path, split, n_inrs)
-        self.n_inrs = self.weights[0].shape[0]
-
-    def _load_from_zip(
-        self, zip_path: str, split: str, n_inrs: Optional[int]
-    ) -> tuple[list[Tensor], list[Tensor]]:
-        prefix = f"cifar_inrs_dataset/{split}/ckpts/"
-        with zipfile.ZipFile(zip_path) as zf:
-            ckpt_names = sorted(n for n in zf.namelist() if n.startswith(prefix) and n.endswith(".ckpt"))
-            # Shuffle before slicing: zip entries sort by class directory, so any
-            # n_inrs cut would otherwise contain only the first class (airplanes).
-            import random as _rng
-            _rng.Random(0).shuffle(ckpt_names)
-            if n_inrs is not None:
-                ckpt_names = ckpt_names[:n_inrs]
-
-            all_ws: list[list[Tensor]] = []
-            all_bs: list[list[Tensor]] = []
-            for name in ckpt_names:
-                with zf.open(name) as f:
-                    obj = torch.load(io.BytesIO(f.read()), map_location="cpu", weights_only=False)
-                ws, bs = _parse_seq_state_dict(obj)
-                all_ws.append(ws)
-                all_bs.append(bs)
-
-        n_layers = len(all_ws[0])
-        n = len(ckpt_names)
-        stacked_w = [torch.stack([all_ws[i][l] for i in range(n)]).to(self.device) for l in range(n_layers)]
-        stacked_b = [torch.stack([all_bs[i][l] for i in range(n)]).to(self.device) for l in range(n_layers)]
-        return stacked_w, stacked_b
-
-    def reset_buffer(self) -> None:
-        self._buffer = torch.randperm(self.n_inrs, device=self.device)
-        self._buffer_ptr = 0
-
-    def get_batch(self, batch_size: int) -> tuple[Tensor, Tensor]:
-        """Return ``batch_size`` SIRENs evaluated at fresh random coordinates.
-
-        Returns:
-            coords: (N, 2)    in [0, 1]².
-            values: (B, N, 3) RGB values.
-        """
-        coords = self._sampler.sample(self.domain_sample_size).to(self.device)
-
-        if hasattr(self, "_buffer"):
-            if self._buffer_ptr + batch_size > self.n_inrs:
-                self.reset_buffer()
-            idx = self._buffer[self._buffer_ptr : self._buffer_ptr + batch_size]
-            self._buffer_ptr += batch_size
-        else:
-            idx = torch.randint(self.n_inrs, (batch_size,), device=self.device)
-
-        w_batch = [W[idx] for W in self.weights]
-        b_batch = [b[idx] for b in self.biases]
-
-        # Same flip as ImplicitZooMNISTDataset: y top→bottom in SIREN convention.
-        siren_coords = torch.stack([
-            2.0 * coords[:, 0] - 1.0,   # x: [0,1] → [-1,1]
-            1.0 - 2.0 * coords[:, 1],   # y: [0,1] → [1,-1]  (flip)
-        ], dim=-1)
-        with torch.no_grad():
-            values = _eval_siren_batch(siren_coords, w_batch, b_batch, self.omega_0, self.omega)
-
-        return coords, values
-
+        super().__init__(files, domain_sample_size, n_inrs, omega_0, omega, device)

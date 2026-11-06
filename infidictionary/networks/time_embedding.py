@@ -1,17 +1,10 @@
-import torch
-from torch import nn
-from abc import ABC, abstractmethod
 import math
 
-
-class TimeEmbedding(nn.Module, ABC):
-    @property
-    @abstractmethod
-    def out_dim(self) -> int:
-        raise NotImplementedError("Subclasses must implement this method")
+import torch
+from torch import nn
 
 
-class SinusoidalTimeEmbedding(TimeEmbedding):
+class SinusoidalTimeEmbedding(nn.Module):
     """
     Scalar t  ->  [sin(w_k t), cos(w_k t)]_k  (Fourier features)
     Similar in spirit to what diffusion models use.

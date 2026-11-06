@@ -1,4 +1,0 @@
-_target_: infidictionary.concept.GaussianCoefficientModel
-coefficient_decay: 0.5
-truncation: 1
-_partial_: true

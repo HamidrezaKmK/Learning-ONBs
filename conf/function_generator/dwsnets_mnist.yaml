@@ -11,4 +11,4 @@ domain_sample_size: 28
 n_inrs: null        # null = all 60 000 training INRs; set a number to limit
 omega_0: 30.0
 omega: 30.0
-device: cpu
+device: auto  # CUDA when available; SIREN evaluation dominates step time on CPU

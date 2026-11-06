@@ -33,7 +33,6 @@ class CelebADataset(IrregularDataset):
         n_drop_draws: int = 1,
         dataset_name: str = "mattymchen/celeba-hq",
         device: str | torch.device = "cpu",
-        grayscale: bool = False,
     ):
         if not 0.0 <= drop_fraction < 1.0:
             raise ValueError("drop_fraction must be in [0, 1)")
@@ -44,8 +43,7 @@ class CelebADataset(IrregularDataset):
         self.n_images = n_images
         self.drop_fraction = drop_fraction
         self.n_drop_draws = n_drop_draws
-        self.grayscale = grayscale
-        self.channels = 1 if grayscale else 3
+        self.channels = 3
         self.device = torch.device(device)
 
         # Full pixel-grid coordinates in [0, 1]²  — (N, 2)
@@ -78,16 +76,10 @@ class CelebADataset(IrregularDataset):
         # Pre-load images from the streaming HuggingFace dataset
         from datasets import load_dataset
 
-        tfs = [
-            transforms.Resize(
-                (H, W), interpolation=transforms.InterpolationMode.BICUBIC
-            ),
-        ]
-        if grayscale:
-            # ITU-R BT.601 luminance: 0.299 R + 0.587 G + 0.114 B
-            tfs.append(transforms.Grayscale(num_output_channels=1))
-        tfs.append(transforms.ToTensor())  # -> (C, H, W) float32 in [0, 1]
-        to_tensor = transforms.Compose(tfs)
+        to_tensor = transforms.Compose([
+            transforms.Resize((H, W), interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.ToTensor(),  # -> (3, H, W) float32 in [0, 1]
+        ])
 
         ds = load_dataset(dataset_name, split="train", streaming=True)
         ds = ds.shuffle(seed=42, buffer_size=10_000)
@@ -95,7 +87,7 @@ class CelebADataset(IrregularDataset):
         signals = []
         for _ in range(n_images):
             img = next(it)["image"]
-            t = to_tensor(img)              # (C, H, W) — C=1 grayscale, C=3 RGB
+            t = to_tensor(img)              # (3, H, W)
             t = t.permute(1, 2, 0)         # (H, W, C)
             t = t.flip(0)                  # flip vertically so image is upright
             signals.append(t.reshape(N, self.channels))
@@ -116,7 +108,7 @@ class CelebADataset(IrregularDataset):
 
         Returns:
             coords : (N', 2)    — pixel coordinates for the selected pattern
-            images : (B, N', C) — signals at those coordinates (C=1 grayscale, 3 RGB)
+            images : (B, N', 3) — RGB signals at those coordinates
         """
         # Pick one drop pattern uniformly at random
         draw = int(torch.randint(self.n_drop_draws, (1,)).item())
@@ -146,7 +138,7 @@ class CelebADataset(IrregularDataset):
 
         Returns:
             coords : (N', 2)  sparse pixel coordinates for the selected pattern
-            vals   : (N', C)  values at those coords (C=1 grayscale, 3 RGB)
+            vals   : (N', 3)  RGB values at those coords
         """
         img_idx  = (seed // self.n_drop_draws) % self.n_images
         draw_idx = seed % self.n_drop_draws

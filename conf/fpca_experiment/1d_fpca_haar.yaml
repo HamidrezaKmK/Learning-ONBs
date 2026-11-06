@@ -1,0 +1,61 @@
+# @package _global_
+#
+# Functional PCA on a 1-D synthetic dataset of sine + ramp functions.
+#
+#     f(x) = sin(2π k x) + 2x          for x ≤ 0.5
+#     f(x) = sin(2π k (1-x)) - 2(1-x)  for x > 0.5
+#     k ~ shifted Geometric(p) on {1, 2, 3, ...}
+#
+# The function jumps from +1 to -1 at x=0.5. This variant uses a
+# Haar wavelet dictionary, whose compact support localizes that discontinuity
+# instead of ringing around it.
+#
+# Usage:
+#   python fpca.py +fpca_experiment=1d_fpca_haar
+#   python fpca.py +fpca_experiment=1d_fpca_haar wandb=enabled wandb.run_name=1d_haar
+
+defaults:
+  - /neural_isometry@neural_isometry: eulerian
+  - override /dictionaries@initial_dictionary: haar_1d
+  - _self_
+
+function_generator:
+  _target_: infidictionary.datasets.OneDimDiscontinuousGenerator
+  domain_sample_size: 128
+  p: 0.5
+  n_functions: 4096
+  seed: 42
+  random_sign: true
+
+mean_function:
+  coords_dim: 1
+  output_dim: 1
+
+neural_isometry:
+  coords_dim: 1
+  channels_dim: 1
+  rank: 30
+  base_acceleration: 10.
+
+model_state_kwargs:
+  num_steps: 20
+
+n_epochs: 4000
+batch_size: 16
+grad_accumulation_steps: 4
+max_grad_norm: 1.0
+
+energy_estimation_kwargs:
+  tail_probability: 0.001
+  num_tail_samples: 16
+
+checkpointing:
+  checkpoint_dir: outputs/checkpoints
+  checkpoint_every_n_steps: 100
+  checkpoint_window_size: 3
+
+wandb:
+  project: BasisLearning-FPCA
+  tags:
+    dataset: oned_tent_sine
+    basis: haar

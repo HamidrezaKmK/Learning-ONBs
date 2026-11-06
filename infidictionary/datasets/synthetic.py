@@ -1,47 +1,12 @@
-import torch
 import math
 
-from abc import ABC, abstractmethod
+import torch
 
 from infidictionary.datasets.base import IrregularDataset
-from infidictionary.domain_samplers import DomainSampler, LineSegmentSampler
+from infidictionary.domain_samplers import SquareSampler
 
 
-class FunctionClassGenerator(IrregularDataset, ABC):
-
-    def __init__(
-        self,
-        domain_sampler: DomainSampler,
-        domain_sample_size: int,
-        n_functions: int = 1000,
-    ):
-        self.domain_sampler = domain_sampler
-        self.domain_sample_size = domain_sample_size
-        self.n_functions = n_functions
-
-    @abstractmethod
-    def _eval(self, coords: torch.Tensor, seed: int) -> torch.Tensor:
-        raise NotImplementedError("FunctionClassGenerator is an abstract base class.")
-
-    def __call__(self, seed: int) -> tuple[torch.Tensor, torch.Tensor]:
-        """Sample coordinates and evaluate the function at the given seed.
-
-        Returns:
-            coords: (N, d) sampled coordinates
-            vals:   (N, C) function values at those coordinates
-        """
-        coords = self.domain_sampler.sample(self.domain_sample_size)
-        vals = self._eval(coords, seed)
-        return coords, vals
-
-    def get_batch(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
-        seeds = torch.randint(0, self.n_functions, (batch_size,))
-        coords = self.domain_sampler.sample(self.domain_sample_size)
-        all_vals = [self._eval(coords, seed.item()) for seed in seeds]
-        return coords, torch.stack(all_vals, dim=0)
-
-
-class OneDimDiscontinuousGenerator(FunctionClassGenerator):
+class OneDimDiscontinuousGenerator(IrregularDataset):
     """1D toy class with a jump discontinuity at x = 0.5.
 
         f(x) = ε · [ sin(2π k x)     + 2x     ]    for x ≤ 0.5
@@ -67,8 +32,8 @@ class OneDimDiscontinuousGenerator(FunctionClassGenerator):
         p:                  geometric distribution parameter.
         n_functions:        seed range for randomness across calls.
         seed:               global rng seed offset.
-        stratified:         passed to LineSegmentSampler.
-        add_noise:          passed to LineSegmentSampler.
+        stratified:         passed to SquareSampler.
+        add_noise:          passed to SquareSampler.
         random_sign:        if True, multiply each draw by ε ∈ {-1, +1}
                             (i.i.d. coin flip) so the dataset has zero mean.
     """
@@ -83,10 +48,9 @@ class OneDimDiscontinuousGenerator(FunctionClassGenerator):
         add_noise: bool = True,
         random_sign: bool = False,
     ):
-        domain_sampler = LineSegmentSampler(
-            stratified=stratified, add_noise=add_noise, length=1.0,
-        )
-        super().__init__(domain_sampler, domain_sample_size, n_functions)
+        self.domain_sampler = SquareSampler(domain_dim=1, stratified=stratified, add_noise=add_noise)
+        self.domain_sample_size = domain_sample_size
+        self.n_functions = n_functions
         if not (0.0 < p < 1.0):
             raise ValueError(f"p must be in (0, 1); got {p}")
         self.p = float(p)
@@ -119,3 +83,8 @@ class OneDimDiscontinuousGenerator(FunctionClassGenerator):
             eps = 1.0 if torch.rand((1,), generator=sgn_rng).item() < 0.5 else -1.0
             f = eps * f
         return f.unsqueeze(-1)                                              # (N, 1)
+
+    def get_batch(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+        seeds = torch.randint(0, self.n_functions, (batch_size,))
+        coords = self.domain_sampler.sample(self.domain_sample_size)
+        return coords, torch.stack([self._eval(coords, seed.item()) for seed in seeds], dim=0)

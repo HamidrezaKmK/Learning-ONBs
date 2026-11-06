@@ -1,9 +1,19 @@
 # @package _global_
+#
+# Functional PCA on CelebA-HQ faces at 64x64, treated as functions on [0,1]^2
+# sampled at irregular coordinates rather than as pixel grids. Uses a 3-channel
+# Fourier dictionary under an Eulerian isometry.
+#
+# The dataset streams from HuggingFace (mattymchen/celeba-hq) on first use, so
+# no manual download step is required.
+#
+# Usage:
+#   python fpca.py +fpca_experiment=celeba_eulerian
+#   python fpca.py +fpca_experiment=celeba_eulerian wandb=enabled wandb.run_name=celeba_fpca
+
 defaults:
-  - /domain_samplers@domain_sampler: square_sampler   # used by callbacks
   - /function_generator@function_generator: celeba
   - /neural_isometry@neural_isometry: eulerian
-  - override /neural_fields@neural_isometry.scalar_field_partial: latent_bilinear_spatiotemporal_field
   - _self_
 
 
@@ -19,17 +29,14 @@ function_generator:
 neural_isometry:
   channels_dim: 3
   # scalar_field_partial: null
-  rank: 50
-  base_acceleration: 1000.
-  atom_shuffling_K: 6 # important to think about
-  use_power_law: True # does not matter though
+  rank: 10
+  base_acceleration: 10.
 
 # Fourier dictionary: 3 output channels (R,G,B).  Atoms are indexed by
 # (k_1, k_2, c) — scalar spatial function phi_k active only in channel c.
 initial_dictionary:
   num_channels: 3
   steepness: 1.01
-  tiebreak_eps: 0.1
 
 # Mean function outputs one value per RGB channel
 mean_function:
@@ -45,12 +52,13 @@ checkpointing:
   checkpoint_every_n_steps: 20
 
 
-tail_probability: 0.00001 # 0.011
-num_tail_samples: 32 # 0
-n_epochs: 3000
+energy_estimation_kwargs:
+  tail_probability: 0.00001
+  num_tail_samples: 32
+n_epochs: 6000
 n_epochs_mean_function: null  # freeze mean function after this many epochs (null = never)
 batch_size: 16
-grad_accumulation_steps: 8
+grad_accumulation_steps: 32
 max_grad_norm: 1.0
 
 wandb:

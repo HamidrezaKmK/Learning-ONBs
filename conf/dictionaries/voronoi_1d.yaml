@@ -1,0 +1,7 @@
+# Uniform 10-block piecewise-constant basis on [0, 1]. The dictionary builds
+# unit-norm cell indicators and uses its default harmonic atom prior.
+_target_: infidictionary.dictionaries.VoronoiPWC
+resolution: 10
+dimension: 1
+num_channels: 1
+learn_synthesis: false

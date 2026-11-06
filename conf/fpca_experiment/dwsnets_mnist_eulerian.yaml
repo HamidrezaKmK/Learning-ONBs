@@ -2,33 +2,42 @@
 # FPCA on the DWSNets MNIST SIREN dataset.
 #
 # Usage:
-#   python fpca.py +experiment=dwsnets_mnist_eulerian
-#   python fpca.py +experiment=dwsnets_mnist_eulerian wandb=enabled wandb.run_name=dwsnets_mnist
+#   python fpca.py +fpca_experiment=dwsnets_mnist_eulerian
+#   python fpca.py +fpca_experiment=dwsnets_mnist_eulerian wandb=enabled wandb.run_name=dwsnets_mnist
 #
 # Before running, download and extract mnist-inrs.zip as described in
 #   conf/function_generator/dwsnets_mnist.yaml
 defaults:
-  - /domain_samplers@domain_sampler: square_sampler
   - /function_generator@function_generator: dwsnets_mnist
   - /neural_isometry@neural_isometry: eulerian
   - _self_
 
 function_generator:
   n_inrs: 1024
-  domain_sample_size: 64
+  domain_sample_size: 128
+
+# The INR FPCA notebook instantiates this directly for held-out diagnostics.
+ood_function_generator:
+  _target_: infidictionary.datasets.ImplicitZooMNISTDataset
+  data_dir: data/mnist-inrs
+  filter_pattern: "mnist_png_testing*"
+  domain_sample_size: 128
+  n_inrs: 200
+  omega_0: 30.0
+  omega: 30.0
+  device: auto  # CUDA when available; SIREN evaluation dominates step time on CPU
+ood_label: "MNIST test split"
 
 # ── Isometry ──────────────────────────────────────────────────────────────────
 neural_isometry:
   channels_dim: 1        # grayscale: 1 output channel
   rank: 20
-  base_acceleration: 1000.
-  atom_shuffling_K: 10
+  base_acceleration: 10.
 
 # ── Fourier dictionary: 1 channel ─────────────────────────────────────────────
 initial_dictionary:
   num_channels: 1
   steepness: 2.0
-  tiebreak_eps: 1.0e-3
 
 # ── Mean function: scalar output ──────────────────────────────────────────────
 mean_function:
@@ -39,11 +48,11 @@ model_state_kwargs:
   num_steps: 20
 
 pullback_pushforward_kwargs:
-  start_time: 0.0
-  end_time: 1.0
+  rot_start_time: 0.0
+  rot_end_time: 1.0
 
 # ── Training ──────────────────────────────────────────────────────────────────
-n_epochs: 10000
+n_epochs: 1000
 n_epochs_mean_function: null
 batch_size: 32
 grad_accumulation_steps: 16
@@ -67,7 +76,7 @@ energy_estimation_kwargs:
 # ── Checkpointing ─────────────────────────────────────────────────────────────
 checkpointing:
   checkpoint_dir: outputs/checkpoints
-  checkpoint_every_n_steps: 200
+  checkpoint_every_n_steps: 20
   checkpoint_window_size: 3
 
 # ── W&B tags ──────────────────────────────────────────────────────────────────

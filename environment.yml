@@ -18,8 +18,7 @@ dependencies:
   # notebooks
   - jupyterlab
   - ipykernel
-  - nbformat
-  - nbclient
+  - matplotlib-inline
   - pip:
       # PyTorch CUDA 12.8 wheels (works on driver 525+ / CUDA 12.x runtimes).
       # If your driver is older, swap the index to https://download.pytorch.org/whl/cu118
@@ -28,10 +27,9 @@ dependencies:
       - torch==2.9.1
       - torchvision==0.24.1
       # data + models used by the experiments
-      - datasets             # CelebA-HQ / INR loaders
-      - scikit-learn         # sklearn.datasets.make_moons (notebooks/ntk.ipynb)
-      # concept-basis only (SDS via Stable Diffusion + CLIP)
-      - diffusers
-      - transformers
-      - open-clip-torch
-      - accelerate
+      - datasets             # CelebA-HQ loader
+      # notebooks: download the published checkpoints
+      - safetensors
+      - huggingface_hub
+      # testing
+      - pytest

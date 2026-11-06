@@ -1,5 +1,0 @@
-_target_: infidictionary.domain_samplers.SquareSampler
-stratified: True
-add_noise: True
-height: 1.
-width: 1.

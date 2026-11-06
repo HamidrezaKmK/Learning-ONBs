@@ -1,5 +1,5 @@
 defaults:
-  - neural_fields@mean_function: ff
+  - neural_fields@mean_function: nerf_field
   - hydra: default
   - wandb: disabled # set to enabled for wandb logging
   - /energy_estimation_kwargs@energy_estimation_kwargs: monte_carlo
@@ -12,7 +12,7 @@ mean_function_optimizer_callable:
   _target_: torch.optim.Adam
   lr: 0.001
   _partial_: true
-mean_function_schedular_callable: null
+mean_function_scheduler_callable: null
 
 isometry_optimizer_callable:
   _target_: torch.optim.Adam
@@ -22,8 +22,8 @@ isometry_scheduler_callable: null
 
 
 pullback_pushforward_kwargs:
-  start_time: 0.0
-  end_time: 1.0
+  rot_start_time: 0.0
+  rot_end_time: 1.0
 
 wandb:
   tags:
@@ -31,6 +31,7 @@ wandb:
     task: reconstruction
 
 # training hyperparameters
+seed: 0
 n_epochs: 500000
 n_epochs_mean_function: null  # freeze mean function after this many epochs (null = never)
 batch_size: 16
@@ -43,6 +44,5 @@ resume_training:
 
 checkpointing:
   checkpoint_dir: outputs/checkpoints  # relative to Hydra output dir
-  checkpoint_every_n_steps: 1000  # optimizer steps between periodic saves
+  checkpoint_every_n_steps: 100  # optimizer steps between periodic saves
   checkpoint_window_size: 3       # number of periodic checkpoints to keep
-
