@@ -7,7 +7,7 @@
 > code, optimized for understandability, and it omits some experiments. For full reproducibility of
 > the paper's results, use the
 > [`full-reproducibility` branch](https://github.com/HamidrezaKmK/Learning-ONBs/tree/full-reproducibility),
-> which has the complete setup, including the NTK experiments.
+> which has the complete setup, an older implementation of the isometry, and all of the additional experiments of the paper.
 
 Given a dictionary $\lbrace \phi_1, \phi_2, \ldots \rbrace$ on a domain $\Omega$ with Gram matrix
 
@@ -31,10 +31,12 @@ integrated with Cayley steps so that inner products are preserved exactly
 optional learned orthogonal synthesis fits the global structure quickly, and the flow refines the
 details (see the [1-D FPCA notebook](./notebooks/fpca_1d.ipynb)).
 
-The main application is **functional PCA**: jointly learn a mean function and an isometry that
-maximizes the energy captured by the transformed dictionary, for stochastic processes, images and
-collections of INRs, without fixing a discretization. The
-[Eulerian transform tutorial](notebooks/eulerian_transform.ipynb) shows the transform on its own.
+The main application included here is **functional PCA**, or the KLT expansion, where we jointly learn 
+a mean function and an isometry that maximizes the energy captured by the transformed dictionary, 
+for stochastic processes, images and collections of INRs, without fixing a discretization. 
+
+To play with the architecture itself, look at the [Eulerian transform tutorial](notebooks/eulerian_transform.ipynb) notebook,
+and to see the source code, see [`infidictionary/neural_isometries/eulerian.py`](infidictionary/neural_isometries/eulerian.py).
 
 ## Setup
 
@@ -43,8 +45,7 @@ conda env create -f environment.yml
 conda activate infidictionary
 ```
 
-The 1-D experiments generate their data and CelebA downloads itself. The INR experiments need
-data in `data/`:
+You would also need to download and setup a few INR zoo datets that will live in `data/`:
 
 - **MNIST INRs:** `mnist-inrs.zip` is only available inside the 31.6 GB
   [DWSNets Dropbox bundle](https://www.dropbox.com/sh/56pakaxe58z29mq/AABtWNkRYroLYe_cE3c90DXVa?dl=0).
@@ -80,10 +81,10 @@ By default each notebook downloads our trained checkpoint. To analyze your own r
 
 ## Pretrained checkpoints
 
-Our trained checkpoints are on Hugging Face at
+For convenience, we have provided our pretrained checkpoints on Hugging Face at
 [`Shengdebao/Learning-ONBs`](https://huggingface.co/Shengdebao/Learning-ONBs), one folder per
 experiment. The notebooks download the matching one automatically, so you can see the results
-without training.
+without training. That said, you can always choose to train your own model.
 
 ## Tests
 
