@@ -2,8 +2,12 @@
 
 ![Overview of learning orthonormal bases](assets/figure1-1.png)
 
-> **Official implementation** of [*Learning Orthonormal Bases for Function Spaces*](https://arxiv.org/abs/2605.19959)
-> (NeurIPS 2026), provided by the authors of the paper.
+> **Official lean implementation** of [*Learning Orthonormal Bases for Function Spaces*](https://arxiv.org/abs/2605.19959)
+> (NeurIPS 2026), provided by the authors of the paper. This branch is a refactored version of the
+> code, optimized for understandability, and it omits some experiments. For full reproducibility of
+> the paper's results, use the
+> [`full-reproducibility` branch](https://github.com/HamidrezaKmK/Learning-ONBs/tree/full-reproducibility),
+> which has the complete setup, including the NTK experiments.
 
 Given a dictionary $\lbrace \phi_1, \phi_2, \ldots \rbrace$ on a domain $\Omega$ with Gram matrix
 
@@ -31,11 +35,6 @@ The main application is **functional PCA**: jointly learn a mean function and an
 maximizes the energy captured by the transformed dictionary, for stochastic processes, images and
 collections of INRs, without fixing a discretization. The
 [Eulerian transform tutorial](notebooks/eulerian_transform.ipynb) shows the transform on its own.
-
-> **Lean release.** This is a lean release of the code, optimized for understandability, and it
-> omits some experiments. For full reproducibility of the paper's results, use the
-> [`full-reproducibility` branch](https://github.com/HamidrezaKmK/Learning-ONBs/tree/full-reproducibility),
-> which has the complete setup, including the NTK experiments.
 
 ## Setup
 
