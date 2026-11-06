@@ -32,9 +32,10 @@ maximizes the energy captured by the transformed dictionary, for stochastic proc
 collections of INRs, without fixing a discretization. The
 [Eulerian transform tutorial](notebooks/eulerian_transform.ipynb) shows the transform on its own.
 
-> **Scope.** This is a lean, refactored implementation and omits some experiments. The
-> [`full-reproducibility` branch](https://github.com/HamidrezaKmK/Learning-ONBs/tree/full-reproducibility)
-> has the complete setup, including the NTK experiments.
+> **Lean release.** This is a lean release of the code, optimized for understandability, and it
+> omits some experiments. For full reproducibility of the paper's results, use the
+> [`full-reproducibility` branch](https://github.com/HamidrezaKmK/Learning-ONBs/tree/full-reproducibility),
+> which has the complete setup, including the NTK experiments.
 
 ## Setup
 
