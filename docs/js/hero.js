@@ -135,6 +135,7 @@
     const DIM = 0.28, SYN = 0.5;
 
     function render(t) {
+      t = ((t % TOTAL) + TOTAL) % TOTAL || 0;
       const li = Math.min(Math.floor(t / LEG_T), legs.length);       // legs.length = end phase
       const lt = t - li * LEG_T;
       legs.forEach((L, j) => {
@@ -191,7 +192,8 @@
     const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     let t = 0, last = 0, raf = 0, playing = !reduced, visible = true;
     function tick(now) {
-      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      // the first frame's timestamp can be earlier than performance.now() at the request: never step backwards
+      const dt = clamp((now - last) / 1000, 0, 0.05); last = now;
       t = (t + dt) % TOTAL;
       render(t);
       showPos();

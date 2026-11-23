@@ -633,7 +633,7 @@
     const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const emit = () => { const [s, u] = stageAt(T); listeners.forEach(f => f({ stage: s, progress: u, T, playing, stages: STAGES })); };
     function frame(now) {
-      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;   // never step backwards
       T = Math.min(target, T + dt);
       render(T); emit();
       if (T >= target - 1e-6) { playing = false; raf = 0; emit(); return; }
