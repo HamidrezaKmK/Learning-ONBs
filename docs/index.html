@@ -10,9 +10,13 @@
 <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
 <script defer src="js/anim.js"></script>
 <script defer src="js/page.js"></script>
+<script defer src="js/charts.js"></script>
+<script defer src="js/experiments.js"></script>
+<script defer src="js/hero.js"></script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -30,10 +34,68 @@
     <a href="https://github.com/HamidrezaKmK/Learning-ONBs">Code</a>
     <a href="#bibtex">BibTeX</a>
   </nav>
-  <p class="tldr">A neural network that parameterizes an infinite sequence of orthonormal functions as the end of a path of rotations, exactly orthonormal at every step and defined at every point of the domain.</p>
 </header>
 
 <main>
+  <section id="summary" class="sec">
+    <h2 class="sec-h">Summary</h2>
+    <div class="tldr-grid">
+      <div class="tldr-text">
+        <p class="lead"><b class="tldr-tag">TL;DR</b> Orthonormal bases such as Fourier series or wavelets are fixed: they do not adapt to the data or the problem.
+          We parameterize an <em>infinite, continuous and exactly orthonormal</em> basis with a neural network, as the
+          endpoint of a learned path of rotations that starts at a reference basis such as Fourier, and optimize it by gradient descent
+          for the task at hand.</p>
+        <p class="tldr-note">Every point of the sphere $\mathrm{SO}(\infty)$ is a whole orthonormal basis. Starting from the same 2-D Fourier basis,
+          three parameter settings $\theta_1,\theta_3,\theta_2$ of one architecture trace three paths: to the principal functions of 1-D signals,
+          of MNIST digits, and the eigenfaces of CelebA. The animation is computed from our trained checkpoints: every card is a real basis function,
+          shown step by step along the learned path from the Fourier basis to the learned one.</p>
+      </div>
+      <div class="apps-wrap">
+        <figure class="apps" aria-label="Animation on the sphere SO(infinity): starting from a Fourier basis, the learned paths theta_1, theta_3 and theta_2 turn it into the principal functions of 1-D signals, the principal functions of MNIST and the eigenfaces of CelebA">
+          <div class="apps-svg"></div>
+          <div class="apps-l" data-role="start-label" style="left:52.5%;top:6.3%;color:#3f454b">1-D Fourier basis</div>
+          <div class="apps-l" data-role="end-fpca1d" style="left:14.3%;top:92.2%;color:#2f5d8a">PCA: 1-D signals</div>
+          <div class="apps-l" style="left:50%;top:98.2%;color:#750014">PCA: eigenfaces</div>
+          <div class="apps-l" style="left:84.3%;top:89.5%;color:#5f8a2e">PCA: MNIST</div>
+          <div class="apps-t" style="left:17.1%;top:54.2%;color:#2f5d8a">$\theta_1$</div>
+          <div class="apps-t" style="left:44.5%;top:65.7%;color:#750014">$\theta_2$</div>
+          <div class="apps-t" style="left:83.3%;top:56.4%;color:#5f8a2e">$\theta_3$</div>
+          <div class="apps-t apps-so" style="left:22.9%;top:31.1%">$\mathrm{SO}(\infty)$</div>
+        </figure>
+        <div class="apps-bar">
+          <button class="ic apps-play" type="button" data-state="pause" aria-label="Pause animation"><svg viewBox="0 0 24 24"><path class="p" d="M8 5.5v13l10.5-6.5z"/><path class="z" d="M8 5v14M16 5v14"/></svg></button>
+          <div class="apps-scrub"><input type="range" min="0" max="1000" step="1" value="0" aria-label="Animation position"><div class="apps-ticks"></div></div>
+        </div>
+        <div class="apps-status" aria-live="off"></div>
+      </div>
+    </div>
+
+    <h3 class="sub-h">Why learn a basis?</h3>
+    <div class="cards">
+      <div class="card"><h4>Fixed bases do not adapt</h4>
+        <p>Fourier or wavelets are the same for every problem. On real data the energy spreads over many coefficients, and at
+          discontinuities Fourier rings (the Gibbs phenomenon), so truncation is wasteful.</p></div>
+      <div class="card"><h4>Grid methods inherit the grid</h4>
+        <p>Classical PCA and eigensolvers discretize the problem first. The result is a finite set of vectors on that grid, limited
+          by its resolution (the Nyquist limit), and has to be interpolated to be used anywhere else.</p></div>
+      <div class="card"><h4>Neural eigensolvers stay finite</h4>
+        <p>Existing neural approaches learn continuous functions but usually only a handful of them, and need explicit orthogonalization
+          or penalties to keep them orthonormal.</p></div>
+    </div>
+    <div class="answer">
+      <p><b>Our approach.</b> Every orthonormal basis is a rotation $Q$ of a reference one, and every rotation is the end of a path
+        $\tfrac{d}{dt}Q=K_\theta(t)\,Q$ driven by a skew-adjoint generator. We model $K_\theta$ with a neural network of finite rank and
+        integrate with Cayley steps. The result is</p>
+      <ul>
+        <li><b>exactly orthonormal</b> for every value of the weights, with no constraint to enforce;</li>
+        <li><b>infinite and continuous</b>: every basis function can be evaluated at any point, at any resolution;</li>
+        <li><b>expressive</b>: we prove that even rank-2 generators reach a dense set of rotations (those $e^{K}$ with Hilbert–Schmidt $K$).</li>
+      </ul>
+    </div>
+  </section>
+
+  <h2 id="method" class="sec-h">Method</h2>
+  <p class="sec-intro">The animation walks through the construction step by step. Press play, or use ← and → to move between keyframes; the math for each keyframe appears below it.</p>
   <section id="player" class="player">
     <div class="stage" tabindex="0" aria-label="Animation; space plays, arrow keys step between keyframes">
       <svg viewBox="0 0 1280 720" role="img" aria-label="The method as an animation"></svg>
@@ -48,6 +110,44 @@
   </section>
 
   <article id="discussion" class="discussion"></article>
+
+  <section id="experiments" class="sec">
+    <h2 class="sec-h">Experiments</h2>
+    <p class="sec-intro">The same architecture, starting from the Fourier basis, adapts to three kinds of task: PCA, operator eigenproblems and dynamics. The figures are interactive: hover the charts for values, and use the controls to step through settings.</p>
+
+    <div class="exp">
+      <h3 class="sub-h"><span class="tag">PCA</span> Functional PCA on 1-D signals with a discontinuity</h3>
+      <p>Signals are random sines with a jump at $x=0.5$, which is hard for Fourier. We learn the principal functions of this
+        distribution (its Karhunen–Loève basis). The learned basis beats finite, grid-based PCA from about 10 basis functions on,
+        and has no Nyquist floor. With about 100 functions its reconstruction error is <b>an order of magnitude lower</b> than Fourier's.</p>
+      <div class="fig-native" data-fig="fpca1d"></div>
+    </div>
+
+    <div class="exp">
+      <h3 class="sub-h"><span class="tag">PCA</span> Eigen-digits and eigenfaces, without a grid</h3>
+      <p>For MNIST stored as implicit neural representations (each digit is a SIREN network), the data itself has no grid; for CelebA we
+        use quadrature on a 64×64 grid. The Fourier basis turns into principal functions of each dataset, and the first few learned functions
+        capture far more of the signal energy than the same number of Fourier functions.</p>
+      <div class="fig-native" data-fig="fpca2d"></div>
+    </div>
+
+    <div class="exp">
+      <h3 class="sub-h"><span class="tag">Eigenproblems</span> Diagonalizing a neural tangent kernel</h3>
+      <p>Beyond PCA, the same objective diagonalizes other linear operators. Here we track the eigenfunctions of the NTK of a two-moons
+        classifier during training. A grid eigensolver gets the global structure but pixelates; the learned basis recovers the same
+        leading eigenfunctions and also resolves the fine detail at the decision boundary.</p>
+      <div class="fig-native" data-fig="ntk"></div>
+    </div>
+
+    <div class="exp">
+      <h3 class="sub-h"><span class="tag">Dynamics</span> An energy-preserving Koopman operator for a fluid</h3>
+      <p>For volume-preserving flows the Koopman operator $f\mapsto f\circ\Psi$ is orthogonal, so it matches our parameterization. We fit
+        $Q_\theta$ to one time step of a Taylor–Green vortex and roll it out. The rollout is noisier than the Runge–Kutta transports, but
+        it <b>conserves $L^2$ energy exactly</b>, while RK1, RK2 and RK4 drift (RK2 gains 28% and RK4 loses 6% by $t=4$).</p>
+      <div class="fig-native" data-fig="koopman"></div>
+    </div>
+
+  </section>
 
   <section id="bibtex" class="bib">
     <h2>BibTeX</h2>

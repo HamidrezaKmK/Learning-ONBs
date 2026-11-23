@@ -121,6 +121,11 @@
   const norm3 = v => { const n = Math.hypot(v[0], v[1], v[2]); return [v[0] / n, v[1] / n, v[2] / n]; };
   const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
   const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  // a square of half side `half` in the plane tangent to the sphere at rel, projected like the sphere
+  function tangentPatch(rel, half) {
+    const n = lift(rel), u = norm3(cross([0, 1, 0], n)), v = cross(n, u);
+    return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => sproj([0, 1, 2].map(q => n[q] + half * (a * u[q] + b * v[q]))));
+  }
   function spherePath(rel, n = 16) {
     const P = rel.map(lift), Pp = [P[0], ...P, P[P.length - 1]], out = [];
     for (let i = 1; i < Pp.length - 2; i++) {
@@ -247,8 +252,6 @@
     svg = root.querySelector('svg');
     labelLayer = root.querySelector('.labels');
     const defs = el('defs', {}, svg);
-    const blur = el('filter', { id: 'b4s-blur', x: '-5%', y: '-5%', width: '110%', height: '110%' }, defs);
-    el('feGaussianBlur', { stdDeviation: 5 }, blur);
     const clip = el('clipPath', { id: 'b4s-clip' }, defs);
     el('circle', { cx: SC[0], cy: SC[1], r: R }, clip);
     const lit = el('radialGradient', { id: 'b4s-lit', cx: '0.36', cy: '0.3', r: '0.78' }, defs);
@@ -267,15 +270,21 @@
     el('ellipse', { cx: SC[0], cy: SC[1] + R + 26, rx: R * 0.82, ry: 22, fill: 'url(#b4s-shadow)' }, S.world);
     const shade = el('g', { 'clip-path': 'url(#b4s-clip)' }, S.world);
     el('circle', { cx: SC[0], cy: SC[1], r: R, fill: HIGHC }, shade);
-    const cells = el('g', { filter: 'url(#b4s-blur)' }, shade);
-    const STEP = 12;
-    for (let py = SC[1] - R - STEP; py < SC[1] + R + STEP; py += STEP) {
-      for (let px = SC[0] - R - STEP; px < SC[0] + R + STEP; px += STEP) {
-        const X = (px + STEP / 2 - SC[0]) / R, Y = (SC[1] - (py + STEP / 2)) / R;
-        if (X * X + Y * Y > 1.05) continue;
-        el('rect', { x: px, y: py, width: STEP + 0.6, height: STEP + 0.6, fill: lossCol(lossAt(liftN(X, Y))) }, cells);
-      }
+    // loss shading: one colour per 12-unit cell, painted once into a tiny canvas and smoothed by bilinear upscaling,
+    // then shown as a single image (cheap to zoom; an SVG blur filter over many cells stalls phones during the zoom)
+    const STEP = 12, x0 = SC[0] - R - STEP, y0 = SC[1] - R - STEP, NC = Math.ceil((2 * R + 2 * STEP) / STEP);
+    const small = document.createElement('canvas'); small.width = small.height = NC;
+    const sctx = small.getContext('2d'), px = sctx.createImageData(NC, NC);
+    for (let j = 0; j < NC; j++) for (let i = 0; i < NC; i++) {
+      const X = (x0 + (i + 0.5) * STEP - SC[0]) / R, Y = (SC[1] - (y0 + (j + 0.5) * STEP)) / R;
+      const hex = X * X + Y * Y > 1.05 ? HIGHC : lossCol(lossAt(liftN(X, Y))), v = parseInt(hex.slice(1), 16), o = 4 * (j * NC + i);
+      px.data[o] = v >> 16; px.data[o + 1] = (v >> 8) & 255; px.data[o + 2] = v & 255; px.data[o + 3] = 255;
     }
+    sctx.putImageData(px, 0, 0);
+    const big = document.createElement('canvas'); big.width = big.height = NC * 8;
+    const bctx = big.getContext('2d'); bctx.imageSmoothingEnabled = true; bctx.imageSmoothingQuality = 'high';
+    bctx.drawImage(small, 0, 0, NC * 8, NC * 8);
+    el('image', { href: big.toDataURL('image/png'), x: x0, y: y0, width: NC * STEP, height: NC * STEP, preserveAspectRatio: 'none' }, shade);
     el('circle', { cx: SC[0], cy: SC[1], r: R, fill: 'url(#b4s-lit)' }, shade);
     // graticule (front only, faint)
     const grat = el('g', { fill: 'none', stroke: '#ffffff', 'stroke-opacity': 0.7, 'stroke-width': 1 }, S.world);
@@ -323,6 +332,11 @@
     el('rect', { x: 880, y: 108, width: 220, height: 12, rx: 6, fill: 'url(#b4s-legend)', stroke: C.line }, S.legend);
     S.connX = el('line', { stroke: C.silver, 'stroke-width': 1.4, 'stroke-dasharray': '4 4' }, svg);
     S.stR = Stack(svg); S.stF = Stack(svg); S.stX = Stack(svg); S.stRide = Stack(svg); S.stT = Stack(svg);
+
+    // tangent space at the zoomed point: a patch of T_Q SO(inf) on the sphere that the zoom opens into the panel's backdrop
+    S.tpatch = tangentPatch(REL[0], 0.14);
+    S.tplane = el('polygon', { fill: '#f4f1f6', stroke: C.violet, 'stroke-opacity': 0.5, 'stroke-width': 1.6, 'stroke-linejoin': 'round' }, svg);
+    S.tdot = el('circle', { r: 5, fill: C.violet }, svg);
 
     // zoomed panel: one step
     S.panel = el('g', {}, svg);
@@ -398,6 +412,7 @@
     L.ek = [0, 1, 2, 3].map(k => label('$e_' + (k + 1) + '^t$', { size: 17, color: FCOL[k] }));
     L.en = [0, 1, 2, 3].map(k => label('$e_' + (k + 1) + '^{t+\\Delta t}$', { size: 17, color: FCOL[k] }));
     L.dt = label('$\\Delta t$', { size: 16, color: C.muted });
+    L.tan = label('tangent space $T_{Q(t)}\\,\\mathrm{SO}(\\infty)$', { size: 15, color: C.violet, anchor: 'r' });
     L.frA = label('frame at $t$', { size: 17, color: C.slate });
     L.frB = label('frame at $t+\\Delta t$', { size: 17, color: C.violet });
     L.frOp = label('one operator for every $e_k$', { size: 15, color: C.muted });
@@ -468,6 +483,7 @@
     if (st === 5) { worldOp = seg(u, 0, 0.3); zoom = 1 - seg(u, 0, 0.32); }
     if (st === 6) worldOp = 1;
     set(S.world, { opacity: worldOp.toFixed(3), transform: zoom > 0 ? zoomT(S.pS, zoom) : '' });
+    S.world.style.display = worldOp < 0.005 ? 'none' : '';   // skip drawing the sphere while it is invisible
     S.levels.setAttribute('opacity', st === 0 ? seg(u, 0.1, 0.4) : 1);
     const legOp = st === 0 ? seg(u, 0.15, 0.4) : st === 1 ? 1 : st === 6 ? 0 : 0;
     S.legend.setAttribute('opacity', legOp);
@@ -500,6 +516,21 @@
     set(S.path, { points: pp, opacity: pathOp }); set(S.pathGlow, { points: pp, opacity: pathOp });
     put('ode', 1010, 300, st === 1 ? seg(u, 0.55, 0.75) : 0);
     put('ode2', 1010, 352, st === 1 ? seg(u, 0.7, 0.9) : 0);
+
+    // ---- tangent space: the patch at the start of the path zooms with the world, then opens into the panel ----
+    let tOp = 0, tm = 0;
+    if (st === 2) { tOp = seg(u, 0, 0.12); tm = seg(u, 0.3, 0.55); }
+    if (st === 3 || st === 4) { tOp = 1; tm = 1; }
+    if (st === 5) { tOp = 1 - seg(u, 0.28, 0.42); tm = 1 - seg(u, 0, 0.22); }
+    if (tOp > 0.005) {
+      const zs = Math.pow(ZOOM, zoom), zx = lerp(S.pS[0], CEN[0], zoom), zy = lerp(S.pS[1], CEN[1], zoom);
+      const scr = p => [zx + zs * (p[0] - S.pS[0]), zy + zs * (p[1] - S.pS[1])];
+      const RECT = [[40, 702], [1240, 702], [1240, 18], [40, 18]];
+      const Q = S.tpatch.map((p, i) => { const a = scr(p); return [lerp(a[0], RECT[i][0], tm), lerp(a[1], RECT[i][1], tm)]; });
+      set(S.tplane, { points: ptsStr(Q), opacity: tOp.toFixed(3), 'stroke-opacity': (0.5 * (1 - tm) + 0.15 * tm).toFixed(3) });
+      const d = scr(S.pS); set(S.tdot, { cx: fmt(d[0]), cy: fmt(d[1]), opacity: (tOp * (1 - tm)).toFixed(3) });
+    } else { S.tplane.setAttribute('opacity', 0); S.tdot.setAttribute('opacity', 0); }
+    put('tan', 1228, 686, tOp * seg(tm, 0.85, 1));
 
     // ---- zoomed panel ----
     const panelOp = st === 2 ? seg(u, 0.38, 0.55) : st === 3 ? 1 : st === 4 ? 1 - seg(u, 0, 0.2) : 0;

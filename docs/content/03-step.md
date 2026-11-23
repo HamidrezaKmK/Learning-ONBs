@@ -4,6 +4,8 @@ Over a short interval the generator is nearly constant, so
 
 $$Q(t+\Delta t)\approx\exp\!\big(\Delta t\,K_\theta(t)\big)\,Q(t).$$
 
+The animation zooms into the tangent space $T_{Q(t)}\mathrm{SO}(\infty)=\{K\,Q(t):K^*=-K\}$: the path's velocity there is $K_\theta(t)\,Q(t)$, and $\exp$ carries a short step in it back onto $\mathrm{SO}(\infty)$.
+
 Write $\alpha=\alpha_\theta^t$, $\beta=\beta_\theta^t$, and take them orthonormal first. Then
 
 $$K\alpha=-\beta,\qquad K\beta=\alpha,\qquad Kf=0\ \text{ for } f\perp\mathrm{span}\{\alpha,\beta\}.$$

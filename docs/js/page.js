@@ -66,8 +66,28 @@
     });
     const stage = root.querySelector('.stage');
     new ResizeObserver(() => stage.style.setProperty('--u', (stage.clientWidth / 1280) + 'px')).observe(stage);
+    const seek = /seek=([\d.]+)/.exec(location.hash);   // testing: #seek=<seconds> jumps the method animation there
+    if (seek) { P.seek(+seek[1]); root.scrollIntoView(); return; }
     P.play();   // play up to the first keyframe
   }
 
-  load().then(init);
+  // typeset $...$ in the static sections (TL;DR, method intro, experiments)
+  function typesetStatic() {
+    if (!window.renderMathInElement) return;
+    document.querySelectorAll('.sec, .sec-intro').forEach(el => renderMathInElement(el, {
+      delimiters: [{ left: '$$', right: '$$', display: true }, { left: '$', right: '$', display: false }],
+      throwOnError: false,
+    }));
+  }
+
+  // inline SVG figures (an <img> SVG cannot load the tile images it references)
+  document.querySelectorAll('[data-src]').forEach(el => {
+    fetch(el.dataset.src).then(r => r.text()).then(t => {
+      el.innerHTML = t;
+      const svg = el.querySelector('svg');
+      if (svg) { svg.setAttribute('role', 'img'); svg.setAttribute('aria-hidden', 'true'); }
+    });
+  });
+
+  load().then(() => { typesetStatic(); init(); });
 })();
