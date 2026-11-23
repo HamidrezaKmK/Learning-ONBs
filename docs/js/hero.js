@@ -161,7 +161,6 @@
           u = ease(b);
           tOp = ease(a) * (1 - ease(c));
           const h = L.path.at(u);
-          if (h.back) tOp *= 0.45;
           // frame position: the rotation exp(sL) over the first SYN of the trip, then one Cayley step after another
           const ns = lg.n_synth;
           // s moves slowly at first (the cards change fastest near s = 0), then speeds up: s = r^1.7
