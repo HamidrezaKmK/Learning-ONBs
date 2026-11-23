@@ -9,7 +9,7 @@ body { margin: 0; background: #fff; color: var(--ink); font: 17px/1.6 var(--sans
 a { color: var(--red); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-.hero { max-width: 980px; margin: 0 auto; padding: 56px 24px 20px; text-align: center; }
+.hero { max-width: 1180px; margin: 0 auto; padding: 56px 24px 20px; text-align: center; }
 .hero h1 { font-size: clamp(30px, 4.4vw, 46px); line-height: 1.12; letter-spacing: -0.02em; margin: 0 0 14px; color: var(--red); font-weight: 700; }
 .authors { margin: 0; font-size: 19px; }
 .affil { margin: 2px 0 14px; color: var(--muted); }
@@ -192,3 +192,6 @@ footer { text-align: center; color: var(--silver); padding: 50px 0 40px; font-si
 .apps-ticks { position: absolute; left: 0; right: 0; top: 50%; height: 0; pointer-events: none; }
 .apps-ticks span { position: absolute; top: 7px; width: 3px; height: 8px; border-radius: 2px; transform: translateX(-50%); opacity: .8; }
 .apps-status { min-height: 18px; margin: -2px 0 0 46px; font: 600 13px var(--sans); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* title on one line from tablet width up: font scales with the window so it always fits */
+@media (min-width: 760px) { .hero h1 { white-space: nowrap; font-size: min(46px, 3.35vw); } }
