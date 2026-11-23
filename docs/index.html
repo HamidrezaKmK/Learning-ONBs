@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Learning Orthonormal Bases for Function Spaces</title>
+<meta name="description" content="A neural parameterization of infinite orthonormal bases as paths of rotations in function space.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script defer src="js/anim.js"></script>
+<script defer src="js/page.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="hero">
+  <h1>Learning Orthonormal Bases for Function Spaces</h1>
+  <p class="authors">Hamidreza Kamkari, Sina Nabizadeh, Justin Solomon</p>
+  <p class="affil">MIT CSAIL · NeurIPS 2026</p>
+  <div class="logos">
+    <a href="https://neurips.cc/Conferences/2026" title="NeurIPS 2026"><img src="logos/neurips.svg" alt="NeurIPS 2026" class="neurips"></a>
+    <a href="https://www.mit.edu/" title="MIT"><img src="logos/mit.svg" alt="MIT" class="mit"></a>
+    <a href="https://www.csail.mit.edu/" title="MIT CSAIL"><img src="logos/csail.svg" alt="MIT CSAIL" class="csail"></a>
+  </div>
+  <nav class="links">
+    <a href="https://arxiv.org/abs/2605.19959">Paper</a>
+    <a href="https://github.com/HamidrezaKmK/Learning-ONBs">Code</a>
+    <a href="#bibtex">BibTeX</a>
+  </nav>
+  <p class="tldr">A neural network that parameterizes an infinite sequence of orthonormal functions as the end of a path of rotations, exactly orthonormal at every step and defined at every point of the domain.</p>
+</header>
+
+<main>
+  <section id="player" class="player">
+    <div class="stage" tabindex="0" aria-label="Animation; space plays, arrow keys step between keyframes">
+      <svg viewBox="0 0 1280 720" role="img" aria-label="The method as an animation"></svg>
+      <div class="labels"></div>
+    </div>
+    <div class="controls">
+      <button id="prev" class="ic" aria-label="Previous keyframe"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+      <button id="play" class="ic" data-state="play" aria-label="Play"><svg viewBox="0 0 24 24"><path class="p" d="M8 5.5v13l10.5-6.5z"/><path class="z" d="M8 5v14M16 5v14"/><path class="r" d="M5 12a7 7 0 1 0 2-5M5 4v4h4"/></svg></button>
+      <button id="next" class="ic" aria-label="Next keyframe"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+      <div id="chapters" class="chapters"></div>
+    </div>
+  </section>
+
+  <article id="discussion" class="discussion"></article>
+
+  <section id="bibtex" class="bib">
+    <h2>BibTeX</h2>
+<pre>@inproceedings{kamkari2026learning,
+  title     = {Learning Orthonormal Bases for Function Spaces},
+  author    = {Kamkari, Hamidreza and Nabizadeh, Sina and Solomon, Justin},
+  booktitle = {Advances in Neural Information Processing Systems},
+  year      = {2026}
+}</pre>
+  </section>
+</main>
+<footer>MIT CSAIL</footer>
+</body>
+</html>
