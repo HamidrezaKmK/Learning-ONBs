@@ -28,6 +28,9 @@
     svg.setAttribute('aria-hidden', 'true');
     const defs = svg.querySelector('defs') || el('defs', {}, svg);
     const U = G.U, V = G.V, OFF = G.OFF;
+    // top layer, above the HTML labels: the moving stack and its marker are drawn here
+    const top = el('svg', { viewBox: svg.getAttribute('viewBox'), class: 'apps-top', 'aria-hidden': 'true' });
+    root.appendChild(top);
 
     // ---------- a stack of 4 cards; anchor = bottom-left corner of the front card ----------
     // card drawn in front, per leg (default: the first card). MNIST: the constant atom, which the flow turns into a clear "0"
@@ -39,8 +42,8 @@
       const slots = []; order.forEach((k, i) => { slots[k] = i; });
       return slots;
     }
-    function Stack(leg, edge, frame0) {
-      const g = el('g', {}, svg);
+    function Stack(leg, edge, frame0, parent) {
+      const g = el('g', {}, parent || svg);
       const n = 4, cards = [];
       for (let i = 0; i < 3; i++) {
         const t = n + 0.35 + 0.55 * i;
@@ -118,9 +121,9 @@
       return { leg, path, trail,
                top: Stack(leg, '#3f454b', 0),
                end: Stack(leg, leg.color, leg.n_frames - 1),
-               trav: Stack(leg, leg.color, 0) };
+               trav: Stack(leg, leg.color, 0, top) };
     });
-    const head = el('circle', { r: 13, fill: '#ffffff', 'stroke-width': 6, opacity: 0 }, svg);
+    const head = el('circle', { r: 13, fill: '#ffffff', 'stroke-width': 6, opacity: 0 }, top);
     // HTML labels
     const startLabel = root.querySelector('[data-role="start-label"]');
     const status = root.parentElement.querySelector('.apps-status');
