@@ -286,18 +286,6 @@
     bctx.drawImage(small, 0, 0, NC * 8, NC * 8);
     el('image', { href: big.toDataURL('image/png'), x: x0, y: y0, width: NC * STEP, height: NC * STEP, preserveAspectRatio: 'none' }, shade);
     el('circle', { cx: SC[0], cy: SC[1], r: R, fill: 'url(#b4s-lit)' }, shade);
-    // graticule (front only, faint)
-    const grat = el('g', { fill: 'none', stroke: '#ffffff', 'stroke-opacity': 0.7, 'stroke-width': 1 }, S.world);
-    for (const lat of [-0.5, 0, 0.5]) {
-      const P = [];
-      for (let i = 0; i <= 120; i++) { const a = i / 120 * 2 * Math.PI, c = Math.cos(lat); P.push(sproj([c * Math.cos(a), Math.sin(lat), c * Math.sin(a)])); }
-      el('path', { d: frontPath(P) }, grat);
-    }
-    for (const lon of [-1.0, 0, 1.0]) {
-      const P = [];
-      for (let i = 0; i <= 120; i++) { const a = -Math.PI / 2 + i / 120 * Math.PI; P.push(sproj([Math.cos(a) * Math.sin(lon), Math.sin(a), Math.cos(a) * Math.cos(lon)])); }
-      el('path', { d: frontPath(P) }, grat);
-    }
     el('circle', { cx: SC[0], cy: SC[1], r: R, fill: 'none', stroke: C.silver, 'stroke-width': 1.6 }, S.world);
     // level sets of the (schematic) loss
     S.levels = el('g', { fill: 'none' }, S.world);
